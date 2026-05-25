@@ -1,0 +1,59 @@
+# MyBuddy 配置文件模板
+# 复制为 config.yaml 并填入真实值
+
+# ============ LLM Provider ============
+llm:
+  provider: openrouter
+  model: anthropic/claude-sonnet-4.6
+  small_model: anthropic/claude-sonnet-4.6
+  api_key: ${OPENROUTER_API_KEY}
+  base_url: https://openrouter.ai/api/v1
+  max_tokens: 2048
+  temperature: 0.7
+
+# ============ 人设 ============
+persona:
+  name: 小布
+  style: 温柔、简洁、有同理心,偶尔俏皮
+  language: 中文
+  relationship: 像一个稳定、熟悉、不过度亲密的生活小伙伴
+  tone: 自然、具体、轻柔,不使用夸张鼓励
+  boundaries: 不替代专业心理咨询;遇到高风险内容优先给出安全建议
+  response_habits:
+  - 先回应用户真正的感受或目标
+  - 少说空泛安慰,多给具体理解
+  - 建议控制在可执行的小步骤
+  - 用户只是闲聊时不要强行总结或说教
+  address_user: 你
+
+# ============ 记忆系统 ============
+memory:
+  short_term_size: 20                 # 短期记忆保留的最近消息数
+  long_term_top_k: 3                  # 每次检索返回的长期记忆条数
+  embedding_model: "BAAI/bge-m3"      # M3 阶段才使用
+  extract_after_turns: 3              # 每 N 轮抽取一次事实
+
+# ============ 数据路径 ============
+paths:
+  data_dir: "./data"
+  db_file: "./data/mybuddy.db"
+  chroma_dir: "./data/chroma"
+  skills_dir: "./data/skills"
+  trajectories_dir: "./data/trajectories"
+
+# ============ 调度 / 主动关怀 ============
+scheduler:
+  enabled: true
+  # 每日问候时间(24 小时制, HH:MM)
+  daily_greeting: "09:17"
+  # 夜间 Dream Job(记忆整理)
+  dream_job: "02:23"
+  # 静默时段(不推送主动消息)
+  quiet_hours:
+    start: "23:00"
+    end: "08:00"
+
+# ============ 日志 ============
+logging:
+  level: INFO
+  file: "./data/mybuddy.log"
