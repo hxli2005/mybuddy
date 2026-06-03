@@ -34,3 +34,5 @@ htmlcov/
 .ruff_cache/
 .mypy_cache/
 *.tsbuildinfo
+
+config.yaml
