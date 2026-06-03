@@ -144,6 +144,63 @@ class UserProfile:
 
             return True
 
+    def update_claim(
+        self,
+        claim_id: int,
+        *,
+        claim: str | None = None,
+        confidence: float | None = None,
+    ) -> dict[str, Any] | None:
+        """更新一条动态命题的正文或置信度,返回更新后的命题。"""
+        clean_claim = claim.strip() if claim is not None else None
+        if claim is not None and not clean_claim:
+            return None
+
+        with session_scope(self._engine) as s:
+            pc = s.query(ProfileClaim).filter_by(id=claim_id).one_or_none()
+            if pc is None:
+                return None
+
+            if clean_claim is not None:
+                pc.claim = clean_claim
+            if confidence is not None:
+                pc.confidence = max(0.0, min(1.0, float(confidence)))
+            pc.updated_at = utcnow()
+
+            evidence_ids = json.loads(pc.evidence_ids_json or "[]")
+            payload = {
+                "sql_id": pc.id,
+                "claim": pc.claim,
+                "confidence": pc.confidence,
+                "evidence_ids": evidence_ids,
+                "updated_at": pc.updated_at.isoformat() if pc.updated_at else None,
+            }
+
+            if self._ltm is not None:
+                self._ltm.update(
+                    self._claim_archive_id(claim_id),
+                    content=pc.claim,
+                    metadata={
+                        "type": "claim",
+                        "sql_id": claim_id,
+                        "confidence": pc.confidence,
+                        "evidence_ids": pc.evidence_ids_json or "[]",
+                    },
+                )
+
+            return payload
+
+    def delete_claim(self, claim_id: int) -> bool:
+        """删除动态命题,并同步删除档案层索引。"""
+        with session_scope(self._engine) as s:
+            pc = s.query(ProfileClaim).filter_by(id=claim_id).one_or_none()
+            if pc is None:
+                return False
+            if self._ltm is not None:
+                self._ltm.delete(self._claim_archive_id(claim_id))
+            s.delete(pc)
+            return True
+
     def search_claims(
         self,
         query: str,

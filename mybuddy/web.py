@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import unquote
 
-from mybuddy.api import AppState
+from mybuddy.api import AppState, _frontend_index_path
 
 
 class DemoServer(ThreadingHTTPServer):
@@ -30,11 +30,13 @@ class DemoHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802
         try:
             if self.path == "/":
-                self._send_file(self.server.frontend_dir / "index.html")
+                self._send_file(_frontend_index_path(self.server.frontend_dir))
                 return
             if self.path.startswith("/static/"):
                 name = unquote(self.path.removeprefix("/static/"))
-                self._send_file(self.server.frontend_dir / name)
+                dist_path = self.server.frontend_dir / "dist" / name
+                legacy_path = self.server.frontend_dir / name
+                self._send_file(dist_path if dist_path.exists() else legacy_path)
                 return
             if self.path == "/api/status":
                 self._send_json(self.server.state.status_payload())
@@ -53,6 +55,9 @@ class DemoHandler(BaseHTTPRequestHandler):
                 return
             if self.path == "/api/skills":
                 self._send_json(self.server.state.skills_payload())
+                return
+            if self.path == "/api/notes":
+                self._send_json(self.server.state.notes_payload())
                 return
             self._send_error(HTTPStatus.NOT_FOUND, "not found")
         except Exception as e:  # noqa: BLE001
@@ -81,6 +86,14 @@ class DemoHandler(BaseHTTPRequestHandler):
                 payload = self.server.state.update_persona_payload(data)
                 self._send_json(payload)
                 return
+            if self.path == "/api/notes":
+                payload = self.server.state.create_note_payload(
+                    content=str(data.get("content", "")),
+                    title=data.get("title"),
+                    tags=data.get("tags"),
+                )
+                self._send_json(payload)
+                return
             self._send_error(HTTPStatus.NOT_FOUND, "not found")
         except RuntimeError as e:
             self._send_error(HTTPStatus.BAD_REQUEST, str(e))
@@ -96,6 +109,92 @@ class DemoHandler(BaseHTTPRequestHandler):
                 return
             self._send_error(HTTPStatus.NOT_FOUND, "not found")
         except RuntimeError as e:
+            self._send_error(HTTPStatus.BAD_REQUEST, str(e))
+        except Exception as e:  # noqa: BLE001
+            self._send_error(HTTPStatus.INTERNAL_SERVER_ERROR, str(e))
+
+    def do_PATCH(self) -> None:  # noqa: N802
+        try:
+            data = self._read_json()
+            if self.path.startswith("/api/profile/fields/"):
+                key = unquote(self.path.removeprefix("/api/profile/fields/"))
+                payload = self.server.state.update_profile_field_payload(
+                    key,
+                    str(data.get("value", "")),
+                )
+                self._send_json(payload)
+                return
+            if self.path.startswith("/api/profile/claims/"):
+                claim_id = int(self.path.removeprefix("/api/profile/claims/"))
+                payload = self.server.state.update_profile_claim_payload(
+                    claim_id,
+                    claim=data.get("claim"),
+                    confidence=data.get("confidence"),
+                )
+                self._send_json(payload)
+                return
+            if self.path.startswith("/api/memory/archive/"):
+                memory_id = unquote(self.path.removeprefix("/api/memory/archive/"))
+                payload = self.server.state.update_memory_payload(
+                    memory_id,
+                    content=data.get("content"),
+                    metadata=data.get("metadata"),
+                )
+                self._send_json(payload)
+                return
+            if self.path.startswith("/api/notes/"):
+                note_id = int(self.path.removeprefix("/api/notes/"))
+                payload = self.server.state.update_note_payload(
+                    note_id,
+                    content=data.get("content"),
+                    title=data.get("title"),
+                    tags=data.get("tags"),
+                )
+                self._send_json(payload)
+                return
+            if self.path.startswith("/api/reminders/"):
+                reminder_id = int(self.path.removeprefix("/api/reminders/"))
+                payload = self.server.state.update_reminder_payload(
+                    reminder_id,
+                    str(data.get("status", "")),
+                )
+                self._send_json(payload)
+                return
+            if self.path.startswith("/api/skills/"):
+                name = unquote(self.path.removeprefix("/api/skills/"))
+                payload = self.server.state.update_skill_payload(name, data.get("archived"))
+                self._send_json(payload)
+                return
+            self._send_error(HTTPStatus.NOT_FOUND, "not found")
+        except RuntimeError as e:
+            self._send_error(HTTPStatus.BAD_REQUEST, str(e))
+        except ValueError as e:
+            self._send_error(HTTPStatus.BAD_REQUEST, str(e))
+        except Exception as e:  # noqa: BLE001
+            self._send_error(HTTPStatus.INTERNAL_SERVER_ERROR, str(e))
+
+    def do_DELETE(self) -> None:  # noqa: N802
+        try:
+            if self.path.startswith("/api/profile/fields/"):
+                key = unquote(self.path.removeprefix("/api/profile/fields/"))
+                self._send_json(self.server.state.delete_profile_field_payload(key))
+                return
+            if self.path.startswith("/api/profile/claims/"):
+                claim_id = int(self.path.removeprefix("/api/profile/claims/"))
+                self._send_json(self.server.state.delete_profile_claim_payload(claim_id))
+                return
+            if self.path.startswith("/api/memory/archive/"):
+                memory_id = unquote(self.path.removeprefix("/api/memory/archive/"))
+                self._send_json(self.server.state.delete_memory_payload(memory_id))
+                return
+            if self.path.startswith("/api/notes/"):
+                note_id = int(self.path.removeprefix("/api/notes/"))
+                self._send_json(self.server.state.delete_note_payload(note_id))
+                return
+            self._send_error(HTTPStatus.NOT_FOUND, "not found")
+        except RuntimeError as e:
+            self._send_error(HTTPStatus.BAD_REQUEST, str(e))
+        except ValueError as e:
             self._send_error(HTTPStatus.BAD_REQUEST, str(e))
         except Exception as e:  # noqa: BLE001
             self._send_error(HTTPStatus.INTERNAL_SERVER_ERROR, str(e))

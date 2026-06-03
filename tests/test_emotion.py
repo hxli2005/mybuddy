@@ -179,5 +179,6 @@ def test_support_hint_not_empty_for_negative() -> None:
     )
 
     hint = support_system_hint(support)
-    assert "情绪价值策略" in hint
-    assert "低负担行动" in hint
+    assert "内部情绪场景线索" in hint
+    assert "低压行动" in hint
+    assert "固定三段式" in hint

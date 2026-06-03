@@ -112,18 +112,20 @@ def support_system_hint(support: EmotionalSupport) -> str:
     if support.mode == "neutral":
         return ""
     lines = [
-        "## 情绪价值策略",
+        "## 内部情绪场景线索",
         f"- 模式:{support.mode}",
-        f"- 情绪镜映:{support.mirror}",
-        f"- 主要心理需求:{support.need}",
-        f"- 回复策略:{support.guidance}",
-        f"- 低负担行动:{support.small_action}",
+        f"- 用户此刻可能需要:{support.need}",
+        f"- 内部判断:{support.mirror}",
+        f"- 角色内处理:{support.guidance}",
+        f"- 低压行动:{support.small_action}",
     ]
     if support.safety_note:
         lines.append(f"- 安全边界:{support.safety_note}")
     if support.principles:
         lines.append(f"- 原则:{' / '.join(support.principles)}")
-    lines.append("不要明示这些字段名;自然地体现在回复里。")
+    lines.append(
+        "不要明示这些字段名;不要套用'我理解你/你现在感到/可以试试'的固定三段式。"
+    )
     return "\n".join(lines)
 
 

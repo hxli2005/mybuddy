@@ -13,7 +13,9 @@ from mybuddy.api import (
     _run_deterministic_demo_tools,
 )
 from mybuddy.config import Config, load_config
-from mybuddy.storage import Reminder, init_db, session_scope
+from mybuddy.learning import SkillRegistry
+from mybuddy.memory import LongTermMemory, UserProfile
+from mybuddy.storage import Note, ProfileClaim, ProfileField, Reminder, init_db, session_scope
 from mybuddy.tools import set_context
 
 
@@ -103,6 +105,189 @@ memory:
     raw = yaml.safe_load(saved)
     assert raw["llm"]["api_key"] == "${OPENROUTER_API_KEY}"
     assert raw["persona"]["relationship"] == "像长期合作的项目伙伴"
+
+
+def test_notes_payload_create_and_list_syncs_archive(tmp_path) -> None:
+    engine = init_db(str(tmp_path / "notes.db"))
+    ltm = LongTermMemory(persist_dir=tmp_path / "memory")
+    state = AppState(config_path="config.yaml")
+    state.engine = engine
+    state.ltm = ltm
+
+    created = state.create_note_payload(
+        content="今天重构 MyBuddy 前端控制台",
+        title="前端重构",
+        tags=["mybuddy", "frontend"],
+    )
+
+    assert created["note"]["title"] == "前端重构"
+    assert "frontend" in created["note"]["tags"]
+    listed = state.notes_payload()
+    assert listed["notes"][0]["content"] == "今天重构 MyBuddy 前端控制台"
+    with session_scope(engine) as s:
+        row = s.query(Note).one()
+        assert row.title == "前端重构"
+    hits = ltm.search("控制台", mem_type="note")
+    assert hits
+
+
+def test_note_update_and_delete_payload_syncs_archive(tmp_path) -> None:
+    engine = init_db(str(tmp_path / "notes_update.db"))
+    ltm = LongTermMemory(persist_dir=tmp_path / "memory")
+    state = AppState(config_path="config.yaml")
+    state.engine = engine
+    state.ltm = ltm
+    created = state.create_note_payload(content="明天整理汇报材料", title="旧标题", tags=["工作"])
+    note_id = created["note"]["id"]
+
+    updated = state.update_note_payload(
+        note_id,
+        content="明天整理汇报材料,先写开场",
+        title="汇报准备",
+        tags=["工作", "项目"],
+    )
+
+    assert updated["note"]["title"] == "汇报准备"
+    assert updated["note"]["tags"] == ["工作", "项目"]
+    hits = ltm.search("开场", mem_type="note")
+    assert hits and hits[0]["metadata"]["title"] == "汇报准备"
+
+    deleted = state.delete_note_payload(note_id)
+
+    assert deleted["ok"] is True
+    assert state.notes_payload()["notes"] == []
+    assert ltm.list_all(mem_type="note") == []
+
+
+def test_memory_update_and_delete_note_syncs_sqlite(tmp_path) -> None:
+    engine = init_db(str(tmp_path / "notes_sync.db"))
+    ltm = LongTermMemory(persist_dir=tmp_path / "memory")
+    state = AppState(config_path="config.yaml")
+    state.engine = engine
+    state.ltm = ltm
+    created = state.create_note_payload(content="周五要汇报项目", title="项目汇报")
+    memory_id = f"note_{created['note']['id']}"
+
+    state.update_memory_payload(memory_id, content="周五要汇报项目,先练开头三十秒")
+
+    assert state.notes_payload()["notes"][0]["content"] == "周五要汇报项目,先练开头三十秒"
+
+    deleted = state.delete_memory_payload(memory_id)
+
+    assert deleted["ok"] is True
+    assert state.notes_payload()["notes"] == []
+    assert ltm.list_all(mem_type="note") == []
+
+
+def test_profile_field_update_and_delete_payload(tmp_path) -> None:
+    engine = init_db(str(tmp_path / "profile_fields.db"))
+    state = AppState(config_path="config.yaml")
+    state.profile = UserProfile(engine)
+
+    updated = state.update_profile_field_payload("称呼", "小林")
+
+    assert updated["field"] == {"key": "称呼", "value": "小林"}
+    with session_scope(engine) as s:
+        assert s.query(ProfileField).filter_by(key="称呼").one().value == "小林"
+
+    deleted = state.delete_profile_field_payload("称呼")
+
+    assert deleted["ok"] is True
+    with session_scope(engine) as s:
+        assert s.query(ProfileField).filter_by(key="称呼").one_or_none() is None
+
+
+def test_profile_claim_update_and_delete_payload_syncs_archive(tmp_path) -> None:
+    engine = init_db(str(tmp_path / "profile_claims.db"))
+    ltm = LongTermMemory(persist_dir=tmp_path / "memory")
+    profile = UserProfile(engine, ltm)
+    claim_id = profile.add_claim("用户最近对项目汇报焦虑", confidence=0.6)
+    state = AppState(config_path="config.yaml")
+    state.profile = profile
+
+    updated = state.update_profile_claim_payload(
+        claim_id,
+        claim="用户最近担心项目汇报开头讲不顺",
+        confidence=0.8,
+    )
+
+    assert updated["claim"]["claim"] == "用户最近担心项目汇报开头讲不顺"
+    assert updated["claim"]["confidence"] == 0.8
+    hits = ltm.search("开头讲不顺", mem_type="claim")
+    assert hits and hits[0]["content"] == "用户最近担心项目汇报开头讲不顺"
+
+    deleted = state.delete_profile_claim_payload(claim_id)
+
+    assert deleted["ok"] is True
+    assert not ltm.search("开头讲不顺", mem_type="claim")
+
+
+def test_memory_update_and_delete_payload(tmp_path) -> None:
+    ltm = LongTermMemory(persist_dir=tmp_path / "memory")
+    memory_id = ltm.add("上次我们约定先不开新战场", mem_type="shared_moment")
+    state = AppState(config_path="config.yaml")
+    state.ltm = ltm
+
+    updated = state.update_memory_payload(
+        memory_id,
+        content="上次我们约定先不开新战场,只处理一个最小动作",
+    )
+
+    assert updated["memory"]["content"] == "上次我们约定先不开新战场,只处理一个最小动作"
+    assert ltm.search("最小动作", mem_type="shared_moment")
+
+    deleted = state.delete_memory_payload(memory_id)
+
+    assert deleted["ok"] is True
+    assert ltm.list_all() == []
+
+
+def test_memory_delete_claim_syncs_profile_sqlite(tmp_path) -> None:
+    engine = init_db(str(tmp_path / "claim_sync.db"))
+    ltm = LongTermMemory(persist_dir=tmp_path / "memory")
+    profile = UserProfile(engine, ltm)
+    claim_id = profile.add_claim("用户不喜欢空泛鼓励", confidence=0.7)
+    state = AppState(config_path="config.yaml")
+    state.engine = engine
+    state.ltm = ltm
+
+    deleted = state.delete_memory_payload(f"claim_{claim_id}")
+
+    assert deleted["ok"] is True
+    with session_scope(engine) as s:
+        assert s.query(ProfileClaim).filter(ProfileClaim.id == claim_id).one_or_none() is None
+
+
+def test_update_reminder_payload_cancels_pending(tmp_path) -> None:
+    engine = init_db(str(tmp_path / "reminders.db"))
+    with session_scope(engine) as s:
+        row = Reminder(content="开会", trigger_at=datetime(2026, 6, 3, 9, 0), status="pending")
+        s.add(row)
+        s.flush()
+        rid = row.id
+
+    state = AppState(config_path="config.yaml")
+    state.engine = engine
+    payload = state.update_reminder_payload(rid, "cancelled")
+
+    assert payload["reminder"]["status"] == "cancelled"
+    with session_scope(engine) as s:
+        assert s.query(Reminder).filter(Reminder.id == rid).one().status == "cancelled"
+
+
+def test_update_skill_payload_toggles_archive(tmp_path) -> None:
+    registry = SkillRegistry(tmp_path / "skills")
+    registry.create(name="晨间整理", triggers=["早上"], steps=["看提醒"], confidence=0.7)
+    state = AppState(config_path="config.yaml")
+    state.skill_registry = registry
+
+    archived = state.update_skill_payload("晨间整理", True)
+    assert archived["skill"]["archived"] is True
+    assert registry.get("晨间整理").archived is True
+
+    restored = state.update_skill_payload("晨间整理", False)
+    assert restored["skill"]["archived"] is False
+    assert registry.get("晨间整理").archived is False
 
 
 @pytest.mark.asyncio

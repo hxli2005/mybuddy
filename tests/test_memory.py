@@ -12,10 +12,11 @@ from typing import Any
 import pytest
 
 from mybuddy.config import Config
-from mybuddy.llm import Message, Role
+from mybuddy.llm import BaseLLMProvider, LLMResponse, Message, Role, ToolSpec
 from mybuddy.memory import (
     FactExtractResult,
     LongTermMemory,
+    MemoryManager,
     ShortTermMemory,
     UserProfile,
 )
@@ -88,6 +89,16 @@ class MockEmbedding:
 
 
 mock_embed = MockEmbedding()
+
+
+class DummyProvider(BaseLLMProvider):
+    async def generate(
+        self,
+        messages: list[Message],
+        tools: list[ToolSpec] | None = None,
+        **kwargs: Any,
+    ) -> LLMResponse:
+        return LLMResponse(text="{}", finish_reason="stop")
 
 
 # =============================================================================
@@ -295,6 +306,46 @@ def test_profile_claims_fallback_without_ltm(tmp_path) -> None:
     assert hits[0]["claim"] == "用户喜欢早起"
 
 
+def test_memory_manager_prioritizes_relationship_context(tmp_path) -> None:
+    engine = init_db(str(tmp_path / "manager.db"))
+    cfg = Config()
+    chroma_dir = tmp_path / "manager_chroma"
+    chroma_dir.mkdir()
+    ltm = LongTermMemory(
+        persist_dir=str(chroma_dir),
+        collection_name="manager_ctx",
+        embedding_fn=mock_embed,
+    )
+    ltm.add(
+        "用户说明天要写报告开头,但担心自己拖着不动。",
+        mem_type="open_thread",
+        extra_meta={
+            "title": "报告开头还没写",
+            "contact_reason": "用户说过明天别再拖",
+            "triggers": ["报告", "拖延"],
+        },
+    )
+    ltm.add(
+        "用户上次不想写代码时,接受了“不开新战场”的低压启动方式。",
+        mem_type="shared_moment",
+        extra_meta={
+            "title": "那个没有催的晚上",
+            "callback_style": "轻轻提起",
+            "keywords": ["拖延", "报告"],
+        },
+    )
+    ltm.add("用户不喜欢被强行打鸡血", mem_type="anti_preference")
+    ltm.add("用户拖延了报告开头,报告开头还是没写", mem_type="memory")
+
+    manager = MemoryManager(engine=engine, config=cfg, ltm=ltm, provider=DummyProvider())
+    text, related_claim_ids = manager.build_context_section("我又拖延了,报告开头还是没写")
+
+    assert related_claim_ids == []
+    assert text.index("## 未完成话题") < text.index("## 相关历史记忆")
+    assert "那个没有催的晚上" in text
+    assert "不喜欢被强行打鸡血" in text
+
+
 # =============================================================================
 # FactExtractor
 # =============================================================================
@@ -323,6 +374,44 @@ def test_extractor_parse_valid_json() -> None:
     assert result.profile_fields == {"名字": "小明"}
     assert len(result.claims) == 1
     assert result.claims[0]["confidence"] == 0.6
+
+
+def test_extractor_parse_relationship_memories() -> None:
+    from mybuddy.memory.extractor import FactExtractor
+
+    extractor = FactExtractor.__new__(FactExtractor)
+    result = extractor._parse(
+        json.dumps(
+            {
+                "facts": [],
+                "profile_fields": {},
+                "claims": [],
+                "relationship_memories": {
+                    "shared_moment": [
+                        {
+                            "title": "那个没有催的晚上",
+                            "content": "用户不想写代码时,小布用不开新战场的方式陪用户缩小任务。",
+                            "triggers": ["不想动", "拖延"],
+                            "callback_style": "轻轻提起",
+                        }
+                    ],
+                    "open_thread": [
+                        {
+                            "title": "报告开头",
+                            "content": "用户明天要写报告开头。",
+                            "contact_reason": "用户说明天别再拖",
+                        }
+                    ],
+                },
+            },
+            ensure_ascii=False,
+        )
+    )
+
+    assert len(result.relationship_memories["shared_moment"]) == 1
+    assert result.relationship_memories["shared_moment"][0]["title"] == "那个没有催的晚上"
+    assert len(result.relationship_memories["open_thread"]) == 1
+    assert result.is_empty() is False
 
 
 def test_extractor_parse_markdown_wrapped_json() -> None:

@@ -31,7 +31,15 @@ from mybuddy.learning import (
 from mybuddy.llm import make_provider
 from mybuddy.memory import LongTermMemory, MemoryManager, UserProfile
 from mybuddy.scheduler import MyBuddyScheduler
-from mybuddy.storage import Reminder, drain_pending, init_db, list_undelivered, session_scope
+from mybuddy.storage import (
+    Note,
+    ProfileClaim,
+    Reminder,
+    drain_pending,
+    init_db,
+    list_undelivered,
+    session_scope,
+)
 from mybuddy.tools import ToolRegistry, set_context, setup_memory_tool, setup_skill_tool
 from mybuddy.tools.reminder import parse_reminder_time
 
@@ -50,6 +58,20 @@ class FeedbackRequest(BaseModel):
     turn_id: str | None = None
 
 
+class ProfileFieldUpdateRequest(BaseModel):
+    value: str = Field(min_length=1)
+
+
+class ProfileClaimUpdateRequest(BaseModel):
+    claim: str | None = None
+    confidence: float | None = None
+
+
+class MemoryUpdateRequest(BaseModel):
+    content: str | None = None
+    metadata: dict[str, Any] | None = None
+
+
 class PersonaUpdateRequest(BaseModel):
     name: str | None = None
     style: str | None = None
@@ -58,7 +80,30 @@ class PersonaUpdateRequest(BaseModel):
     tone: str | None = None
     boundaries: str | None = None
     response_habits: list[str] | None = None
+    roleplay_style: dict[str, Any] | None = None
+    character_life: dict[str, Any] | None = None
+    relationship_model: dict[str, Any] | None = None
     address_user: str | None = None
+
+
+class NoteCreateRequest(BaseModel):
+    content: str = Field(min_length=1)
+    title: str | None = None
+    tags: list[str] | None = None
+
+
+class NoteUpdateRequest(BaseModel):
+    content: str | None = None
+    title: str | None = None
+    tags: list[str] | None = None
+
+
+class ReminderUpdateRequest(BaseModel):
+    status: str
+
+
+class SkillUpdateRequest(BaseModel):
+    archived: bool | None = None
 
 
 @dataclass
@@ -245,6 +290,45 @@ class AppState:
             "claims": p.get_all_claims(min_confidence=0.0)[:20],
         }
 
+    def update_profile_field_payload(self, key: str, value: str) -> dict[str, Any]:
+        clean_key = key.strip()
+        clean_value = value.strip()
+        if not clean_key:
+            raise RuntimeError("画像字段名为空")
+        if not clean_value:
+            raise RuntimeError("画像字段值为空")
+        p = _require(self.profile)
+        p.set_field(clean_key, clean_value)
+        return {"field": {"key": clean_key, "value": clean_value}}
+
+    def delete_profile_field_payload(self, key: str) -> dict[str, Any]:
+        clean_key = key.strip()
+        if not clean_key:
+            raise RuntimeError("画像字段名为空")
+        p = _require(self.profile)
+        if not p.delete_field(clean_key):
+            raise RuntimeError(f"画像字段不存在:{clean_key}")
+        return {"ok": True, "key": clean_key}
+
+    def update_profile_claim_payload(
+        self,
+        claim_id: int,
+        *,
+        claim: str | None = None,
+        confidence: float | None = None,
+    ) -> dict[str, Any]:
+        p = _require(self.profile)
+        updated = p.update_claim(claim_id, claim=claim, confidence=confidence)
+        if updated is None:
+            raise RuntimeError(f"画像命题不存在或内容为空:id={claim_id}")
+        return {"claim": updated}
+
+    def delete_profile_claim_payload(self, claim_id: int) -> dict[str, Any]:
+        p = _require(self.profile)
+        if not p.delete_claim(claim_id):
+            raise RuntimeError(f"画像命题不存在:id={claim_id}")
+        return {"ok": True, "id": claim_id}
+
     def memory_payload(self) -> dict[str, Any]:
         cfg = _require(self.cfg)
         ltm = _require(self.ltm)
@@ -254,6 +338,43 @@ class AppState:
             "conversations": _read_jsonl_tail(base / "conversations", limit=20),
             "raw": _read_jsonl_tail(base / "raw", limit=20),
         }
+
+    def update_memory_payload(
+        self,
+        memory_id: str,
+        *,
+        content: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        clean_id = memory_id.strip()
+        if not clean_id:
+            raise RuntimeError("记忆 ID 为空")
+        ltm = _require(self.ltm)
+        clean_content = content.strip() if content is not None else None
+        if content is not None and not clean_content:
+            raise RuntimeError("记忆内容为空")
+        original = _find_memory_item(ltm, clean_id)
+        if original is None:
+            raise RuntimeError(f"记忆不存在:id={clean_id}")
+        updated = ltm.update(clean_id, content=clean_content, metadata=_clean_memory_metadata(metadata))
+        if updated is None:
+            raise RuntimeError(f"记忆不存在:id={clean_id}")
+        if self.engine is not None:
+            _sync_memory_backing_update(self.engine, original, updated)
+        return {"memory": updated}
+
+    def delete_memory_payload(self, memory_id: str) -> dict[str, Any]:
+        clean_id = memory_id.strip()
+        if not clean_id:
+            raise RuntimeError("记忆 ID 为空")
+        ltm = _require(self.ltm)
+        item = _find_memory_item(ltm, clean_id)
+        if item is None:
+            raise RuntimeError(f"记忆不存在:id={clean_id}")
+        if self.engine is not None:
+            _sync_memory_backing_delete(self.engine, item)
+        ltm.delete(clean_id)
+        return {"ok": True, "id": clean_id}
 
     def reminders_payload(self) -> dict[str, Any]:
         engine = _require(self.engine)
@@ -269,6 +390,27 @@ class AppState:
                 for r in rows
             ]
         return {"reminders": items, "pending_messages": list_undelivered(engine)}
+
+    def update_reminder_payload(self, reminder_id: int, status: str) -> dict[str, Any]:
+        if status != "cancelled":
+            raise RuntimeError("目前只支持把提醒取消为 cancelled")
+        engine = _require(self.engine)
+        with session_scope(engine) as s:
+            row = s.query(Reminder).filter(Reminder.id == reminder_id).one_or_none()
+            if row is None:
+                raise RuntimeError(f"提醒不存在:id={reminder_id}")
+            if row.status != "pending":
+                raise RuntimeError(f"状态非 pending,无法取消:{row.status}")
+            row.status = "cancelled"
+            item = {
+                "id": row.id,
+                "content": row.content,
+                "trigger_at": row.trigger_at.isoformat(timespec="minutes"),
+                "status": row.status,
+            }
+        if self.scheduler is not None and self.scheduler.running:
+            self.scheduler.cancel_reminder(reminder_id)
+        return {"reminder": item}
 
     def skills_payload(self) -> dict[str, Any]:
         registry = _require(self.skill_registry)
@@ -286,6 +428,118 @@ class AppState:
             ]
         }
 
+    def update_skill_payload(self, name: str, archived: bool | None) -> dict[str, Any]:
+        if archived is None:
+            raise RuntimeError("archived is required")
+        registry = _require(self.skill_registry)
+        skill = registry.get(name)
+        if skill is None:
+            raise RuntimeError(f"skill 不存在:{name}")
+        skill.archived = archived
+        registry.save(skill)
+        return {
+            "skill": {
+                "name": skill.name,
+                "triggers": skill.triggers,
+                "confidence": skill.confidence,
+                "success_count": skill.success_count,
+                "fail_count": skill.fail_count,
+                "archived": skill.archived,
+            }
+        }
+
+    def notes_payload(self, limit: int = 30) -> dict[str, Any]:
+        engine = _require(self.engine)
+        with session_scope(engine) as s:
+            rows = s.query(Note).order_by(Note.created_at.desc()).limit(limit).all()
+            notes = [_note_payload(row) for row in rows]
+        return {"notes": notes}
+
+    def create_note_payload(
+        self,
+        *,
+        content: str,
+        title: str | None = None,
+        tags: list[str] | None = None,
+    ) -> dict[str, Any]:
+        clean_content = content.strip()
+        if not clean_content:
+            raise RuntimeError("笔记内容为空")
+        clean_title = (title or "").strip() or clean_content[:30]
+        tag_list = _clean_note_tags(tags)
+        engine = _require(self.engine)
+        with session_scope(engine) as s:
+            row = Note(
+                title=clean_title,
+                content=clean_content,
+                tags_json=json.dumps(tag_list, ensure_ascii=False) if tag_list else None,
+            )
+            s.add(row)
+            s.flush()
+            note = _note_payload(row)
+        ltm = self.ltm
+        if ltm is not None:
+            ltm.add(
+                clean_content,
+                mem_type="note",
+                uid=f"note_{note['id']}",
+                extra_meta={"sql_id": note["id"], "title": clean_title, "tags": ",".join(tag_list)},
+            )
+        return {"note": note}
+
+    def update_note_payload(
+        self,
+        note_id: int,
+        *,
+        content: str | None = None,
+        title: str | None = None,
+        tags: list[str] | None = None,
+    ) -> dict[str, Any]:
+        clean_content = content.strip() if content is not None else None
+        if content is not None and not clean_content:
+            raise RuntimeError("笔记内容为空")
+        clean_title = title.strip() if title is not None else None
+        tag_list = _clean_note_tags(tags) if tags is not None else None
+
+        engine = _require(self.engine)
+        with session_scope(engine) as s:
+            row = s.query(Note).filter(Note.id == note_id).one_or_none()
+            if row is None:
+                raise RuntimeError(f"笔记不存在:id={note_id}")
+            if clean_content is not None:
+                row.content = clean_content
+            if clean_title is not None:
+                row.title = clean_title or row.content[:30]
+            if tag_list is not None:
+                row.tags_json = json.dumps(tag_list, ensure_ascii=False) if tag_list else None
+            s.flush()
+            note = _note_payload(row)
+
+        ltm = self.ltm
+        if ltm is not None:
+            ltm.update(
+                f"note_{note_id}",
+                content=note["content"],
+                metadata={
+                    "type": "note",
+                    "sql_id": note_id,
+                    "title": note["title"],
+                    "tags": note["tags"],
+                },
+            )
+        return {"note": note}
+
+    def delete_note_payload(self, note_id: int) -> dict[str, Any]:
+        engine = _require(self.engine)
+        with session_scope(engine) as s:
+            row = s.query(Note).filter(Note.id == note_id).one_or_none()
+            if row is None:
+                raise RuntimeError(f"笔记不存在:id={note_id}")
+            s.delete(row)
+        if self.ltm is not None:
+            self.ltm.delete(f"note_{note_id}")
+        return {"ok": True, "id": note_id}
+
 
 def create_app(config_path: str = "config.yaml", max_steps: int = 6):
     try:
@@ -300,8 +554,9 @@ def create_app(config_path: str = "config.yaml", max_steps: int = 6):
     app.state.mybuddy = state
 
     frontend_dir = Path(__file__).resolve().parents[1] / "frontend"
-    if frontend_dir.exists():
-        app.mount("/static", StaticFiles(directory=frontend_dir), name="static")
+    static_dir = _frontend_static_dir(frontend_dir)
+    if static_dir.exists():
+        app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
     @app.on_event("startup")
     async def _startup() -> None:
@@ -313,9 +568,9 @@ def create_app(config_path: str = "config.yaml", max_steps: int = 6):
 
     @app.get("/")
     async def index():
-        path = frontend_dir / "index.html"
+        path = _frontend_index_path(frontend_dir)
         if not path.exists():
-            raise HTTPException(status_code=404, detail="frontend/index.html not found")
+            raise HTTPException(status_code=404, detail="frontend index not found")
         return FileResponse(path)
 
     @app.get("/api/status")
@@ -351,19 +606,262 @@ def create_app(config_path: str = "config.yaml", max_steps: int = 6):
     async def profile() -> dict[str, Any]:
         return state.profile_payload()
 
+    @app.patch("/api/profile/fields/{key}")
+    async def update_profile_field(key: str, req: ProfileFieldUpdateRequest) -> dict[str, Any]:
+        try:
+            return state.update_profile_field_payload(key, req.value)
+        except RuntimeError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+
+    @app.delete("/api/profile/fields/{key}")
+    async def delete_profile_field(key: str) -> dict[str, Any]:
+        try:
+            return state.delete_profile_field_payload(key)
+        except RuntimeError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+
+    @app.patch("/api/profile/claims/{claim_id}")
+    async def update_profile_claim(
+        claim_id: int,
+        req: ProfileClaimUpdateRequest,
+    ) -> dict[str, Any]:
+        try:
+            return state.update_profile_claim_payload(
+                claim_id,
+                claim=req.claim,
+                confidence=req.confidence,
+            )
+        except RuntimeError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+
+    @app.delete("/api/profile/claims/{claim_id}")
+    async def delete_profile_claim(claim_id: int) -> dict[str, Any]:
+        try:
+            return state.delete_profile_claim_payload(claim_id)
+        except RuntimeError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+
     @app.get("/api/memory")
     async def memory() -> dict[str, Any]:
         return state.memory_payload()
+
+    @app.patch("/api/memory/archive/{memory_id}")
+    async def update_memory(memory_id: str, req: MemoryUpdateRequest) -> dict[str, Any]:
+        try:
+            return state.update_memory_payload(
+                memory_id,
+                content=req.content,
+                metadata=req.metadata,
+            )
+        except RuntimeError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+
+    @app.delete("/api/memory/archive/{memory_id}")
+    async def delete_memory(memory_id: str) -> dict[str, Any]:
+        try:
+            return state.delete_memory_payload(memory_id)
+        except RuntimeError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
 
     @app.get("/api/reminders")
     async def reminders() -> dict[str, Any]:
         return state.reminders_payload()
 
+    @app.patch("/api/reminders/{reminder_id}")
+    async def update_reminder(reminder_id: int, req: ReminderUpdateRequest) -> dict[str, Any]:
+        try:
+            return state.update_reminder_payload(reminder_id, req.status)
+        except RuntimeError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+
     @app.get("/api/skills")
     async def skills() -> dict[str, Any]:
         return state.skills_payload()
 
+    @app.patch("/api/skills/{name}")
+    async def update_skill(name: str, req: SkillUpdateRequest) -> dict[str, Any]:
+        try:
+            return state.update_skill_payload(name, req.archived)
+        except RuntimeError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+
+    @app.get("/api/notes")
+    async def notes() -> dict[str, Any]:
+        return state.notes_payload()
+
+    @app.post("/api/notes")
+    async def create_note(req: NoteCreateRequest) -> dict[str, Any]:
+        try:
+            return state.create_note_payload(content=req.content, title=req.title, tags=req.tags)
+        except RuntimeError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+
+    @app.patch("/api/notes/{note_id}")
+    async def update_note(note_id: int, req: NoteUpdateRequest) -> dict[str, Any]:
+        try:
+            return state.update_note_payload(
+                note_id,
+                content=req.content,
+                title=req.title,
+                tags=req.tags,
+            )
+        except RuntimeError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+
+    @app.delete("/api/notes/{note_id}")
+    async def delete_note(note_id: int) -> dict[str, Any]:
+        try:
+            return state.delete_note_payload(note_id)
+        except RuntimeError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+
     return app
+
+
+def _frontend_static_dir(frontend_dir: Path) -> Path:
+    dist = frontend_dir / "dist"
+    return dist if (dist / "index.html").exists() else frontend_dir
+
+
+def _frontend_index_path(frontend_dir: Path) -> Path:
+    dist_index = frontend_dir / "dist" / "index.html"
+    return dist_index if dist_index.exists() else frontend_dir / "index.html"
+
+
+def _note_payload(row: Note) -> dict[str, Any]:
+    tags: list[str] = []
+    if row.tags_json:
+        try:
+            loaded = json.loads(row.tags_json)
+            if isinstance(loaded, list):
+                tags = [str(t) for t in loaded if str(t).strip()]
+        except json.JSONDecodeError:
+            tags = []
+    return {
+        "id": row.id,
+        "title": row.title,
+        "content": row.content,
+        "tags": tags,
+        "created_at": row.created_at.isoformat(timespec="minutes"),
+        "updated_at": row.updated_at.isoformat(timespec="minutes"),
+    }
+
+
+def _clean_note_tags(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        raw = re.split(r"[,，\s]+", value)
+    elif isinstance(value, list | tuple | set):
+        raw = list(value)
+    else:
+        raw = [value]
+    return [str(t).strip() for t in raw if str(t).strip()]
+
+
+def _clean_memory_metadata(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    blocked = {"id", "created_at", "updated_at"}
+    clean: dict[str, Any] = {}
+    for key, item in value.items():
+        clean_key = str(key).strip()
+        if not clean_key or clean_key in blocked:
+            continue
+        if isinstance(item, str):
+            clean[clean_key] = item.strip()
+        elif isinstance(item, bool | int | float):
+            clean[clean_key] = item
+        elif isinstance(item, list):
+            clean[clean_key] = [str(x).strip() for x in item if str(x).strip()]
+    return clean
+
+
+def _find_memory_item(ltm: LongTermMemory, memory_id: str) -> dict[str, Any] | None:
+    for item in ltm.list_all():
+        if item.get("id") == memory_id:
+            return item
+    return None
+
+
+def _memory_sql_id(item: dict[str, Any], prefix: str) -> int | None:
+    meta = item.get("metadata", {}) or {}
+    raw = meta.get("sql_id")
+    if isinstance(raw, int):
+        return raw
+    if isinstance(raw, str) and raw.isdigit():
+        return int(raw)
+    item_id = str(item.get("id") or "")
+    prefix_text = f"{prefix}_"
+    if item_id.startswith(prefix_text) and item_id.removeprefix(prefix_text).isdigit():
+        return int(item_id.removeprefix(prefix_text))
+    return None
+
+
+def _sync_memory_backing_update(
+    engine: Engine,
+    original: dict[str, Any],
+    updated: dict[str, Any],
+) -> None:
+    meta = updated.get("metadata", {}) or original.get("metadata", {}) or {}
+    mem_type = str(meta.get("type") or "")
+    if mem_type == "note":
+        note_id = _memory_sql_id(updated, "note") or _memory_sql_id(original, "note")
+        if note_id is None:
+            return
+        with session_scope(engine) as s:
+            row = s.query(Note).filter(Note.id == note_id).one_or_none()
+            if row is None:
+                return
+            row.content = updated["content"]
+            title = meta.get("title")
+            if isinstance(title, str) and title.strip():
+                row.title = title.strip()[:128]
+            if "tags" in meta:
+                tags = _clean_note_tags(meta.get("tags"))
+                row.tags_json = json.dumps(tags, ensure_ascii=False) if tags else None
+        return
+
+    if mem_type == "claim":
+        claim_id = _memory_sql_id(updated, "claim") or _memory_sql_id(original, "claim")
+        if claim_id is None:
+            return
+        with session_scope(engine) as s:
+            row = s.query(ProfileClaim).filter(ProfileClaim.id == claim_id).one_or_none()
+            if row is None:
+                return
+            row.claim = updated["content"]
+            confidence = meta.get("confidence")
+            if isinstance(confidence, int | float):
+                row.confidence = max(0.0, min(1.0, float(confidence)))
+            evidence_ids = meta.get("evidence_ids")
+            if isinstance(evidence_ids, str):
+                row.evidence_ids_json = evidence_ids
+            elif isinstance(evidence_ids, list):
+                row.evidence_ids_json = json.dumps(evidence_ids, ensure_ascii=False)
+
+
+def _sync_memory_backing_delete(engine: Engine, item: dict[str, Any]) -> None:
+    meta = item.get("metadata", {}) or {}
+    mem_type = str(meta.get("type") or "")
+    if mem_type == "note":
+        note_id = _memory_sql_id(item, "note")
+        if note_id is None:
+            return
+        with session_scope(engine) as s:
+            row = s.query(Note).filter(Note.id == note_id).one_or_none()
+            if row is not None:
+                s.delete(row)
+        return
+
+    if mem_type == "claim":
+        claim_id = _memory_sql_id(item, "claim")
+        if claim_id is None:
+            return
+        with session_scope(engine) as s:
+            row = s.query(ProfileClaim).filter(ProfileClaim.id == claim_id).one_or_none()
+            if row is not None:
+                s.delete(row)
 
 
 def _restore_reminders(scheduler: MyBuddyScheduler, engine: Engine) -> None:

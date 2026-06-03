@@ -7,8 +7,8 @@
   2. **置信度重算**:对动态命题,结合"最近 N 天有无新证据"做线性衰减/加强。
   3. **冲突消解**:把所有现存命题打包交给 LLM 一次判断两两冲突,冲突对中置信度较低者 -0.2。
   4. **生成洞察**:把当天对话文本汇总交给 LLM,输出新命题候选(confidence 0.3-0.6),add_claim。
-  5. **nudge 生成**:从 long-term memory 里挑"重要但久未提及"的条目,交给 LLM 写 1-2 条温暖问候,
-     入 pending_messages 供 CLI 下次交互时播出。
+  5. **nudge 生成**:从 open_thread 里挑有具体由头的未完成话题,交给 LLM 写 1-2 条事件式短信。
+  6. **角色动态**:基于角色生活状态和近期关系记忆,低频生成一条不强迫回复的动态。
 
 每一步都在 try/except 里隔离,失败不影响其他步骤。触发入口是
 `scheduler.jobs.run_dream_job`(凌晨 cron),也可以通过 `mybuddy dream run` 手动跑。
@@ -42,6 +42,7 @@ CONFIDENCE_DECAY = 0.05     # 无新证据时的衰减量
 CONFIDENCE_BOOST = 0.05     # 有新证据时的加强量
 CONFLICT_PENALTY = 0.2
 NUDGE_COUNT = 2
+DYNAMIC_COUNT = 1
 
 
 @dataclass
@@ -53,6 +54,7 @@ class DreamReport:
     conflicts_resolved: int = 0
     insights_added: int = 0
     nudges_enqueued: int = 0
+    dynamics_enqueued: int = 0
     errors: list[str] = field(default_factory=list)
 
     def summary(self) -> str:
@@ -61,7 +63,8 @@ class DreamReport:
             f"命题更新 {self.confidence_updates} 条 · "
             f"冲突消解 {self.conflicts_resolved} 对 · "
             f"新增洞察 {self.insights_added} 条 · "
-            f"nudge {self.nudges_enqueued} 条"
+            f"nudge {self.nudges_enqueued} 条 · "
+            f"dynamic {self.dynamics_enqueued} 条"
         )
 
 
@@ -81,12 +84,33 @@ INSIGHT_PROMPT = """你是一个用户画像分析助手。从以下今天的对
 """
 
 
-NUDGE_PROMPT = """你是用户的 AI 小伙伴,名字叫 {persona_name}。
-请基于以下 1-3 条久未提及的过往记忆,写 {count} 条简短的主动问候(每条 15-40 字,温暖不套路)。
+NUDGE_PROMPT = """你是 {persona_name},一个克制但有牵挂的长期陪伴角色。
+请基于以下 1-3 条未完成话题,写 {count} 条事件式短信(每条 18-50 字)。
+要求:
+- 每条必须有具体由头,像是你刚想起一件未收尾的小事。
+- 不催促,不说教,不问泛泛的"现在感觉怎么样"。
+- 不默认恋爱化,但可以有轻微偏爱和专属感。
 严格输出 JSON 字符串数组,不要其他文本:
 ["...", "..."]
 
-相关记忆:
+未完成话题:
+{memories}
+"""
+
+
+DYNAMIC_PROMPT = """你是 {persona_name},一个有自己生活状态的长期陪伴角色。
+请基于角色今天的状态和近期共同记忆,写 {count} 条轻量动态(每条 15-45 字)。
+动态像是你自己的生活片段或顺手记下的小事,不要求用户回复。
+不要像系统推送,不要总结用户画像,不要默认恋爱化。
+严格输出 JSON 字符串数组,不要其他文本:
+["..."]
+
+角色今天的状态:
+- {today_status}
+- {current_mood}
+- {recent_self_event}
+
+近期关系记忆:
 {memories}
 """
 
@@ -118,6 +142,7 @@ class DreamJob:
             ("resolve_conflicts", self._resolve_conflicts),
             ("generate_insights", self._generate_insights),
             ("generate_nudges", self._generate_nudges),
+            ("generate_dynamics", self._generate_dynamics),
         ):
             try:
                 await coro(report)
@@ -263,20 +288,16 @@ class DreamJob:
     # 5. nudge 生成
     # -----------------------------------------------------------------
     async def _generate_nudges(self, report: DreamReport) -> None:
-        items = self._ltm.list_all(mem_type="memory")
+        items = self._ltm.list_all(mem_type="open_thread")
         if not items:
             return
 
-        # 挑 created_at 最久远的 top-3(若 metadata 没时间戳则随机取前 3)
-        def _created_key(m: dict[str, Any]) -> str:
-            return (m.get("metadata") or {}).get("created_at", "")
-
-        items.sort(key=_created_key)
+        items.sort(key=_updated_key, reverse=True)
         picks = items[:3]
         if not picks:
             return
 
-        memories_block = "\n".join(f"- {m['content']}" for m in picks)
+        memories_block = "\n".join(_memory_line(m) for m in picks)
         prompt = NUDGE_PROMPT.format(
             persona_name=self._config.persona.name,
             count=NUDGE_COUNT,
@@ -302,10 +323,57 @@ class DreamJob:
                 self._engine,
                 source="nudge",
                 content=n.strip(),
-                meta={"origin": "dream_job"},
+                meta={
+                    "origin": "dream_job_open_thread",
+                    "contact_reason": _first_contact_reason(picks),
+                },
             )
             enqueued += 1
         report.nudges_enqueued = enqueued
+
+    # -----------------------------------------------------------------
+    # 6. 角色动态
+    # -----------------------------------------------------------------
+    async def _generate_dynamics(self, report: DreamReport) -> None:
+        items: list[dict[str, Any]] = []
+        for mem_type in ("shared_moment", "relationship_note", "character_note"):
+            items.extend(self._ltm.list_all(mem_type=mem_type))
+        if not items:
+            return
+        items.sort(key=_updated_key, reverse=True)
+        memories_block = "\n".join(_memory_line(m) for m in items[:3])
+        life = self._config.persona.character_life
+        prompt = DYNAMIC_PROMPT.format(
+            persona_name=self._config.persona.name,
+            count=DYNAMIC_COUNT,
+            today_status=life.today_status,
+            current_mood=life.current_mood,
+            recent_self_event=life.recent_self_event,
+            memories=memories_block,
+        )
+        from mybuddy.llm import Message, Role
+
+        resp = await self._provider.generate(
+            messages=[Message(role=Role.USER, content="请生成。")],
+            system=prompt,
+            temperature=0.7,
+            model=self._config.llm.small_model or None,
+        )
+        dynamics = _parse_json_array(resp.text)
+        if not isinstance(dynamics, list):
+            return
+        enqueued = 0
+        for text in dynamics[:DYNAMIC_COUNT]:
+            if not isinstance(text, str) or not text.strip():
+                continue
+            enqueue(
+                self._engine,
+                source="dynamic",
+                content=text.strip(),
+                meta={"origin": "dream_job_character_dynamic"},
+            )
+            enqueued += 1
+        report.dynamics_enqueued = enqueued
 
     # -----------------------------------------------------------------
     # 工具方法
@@ -365,3 +433,30 @@ def _parse_json_array(text: str) -> Any:
         return json.loads(clean)
     except json.JSONDecodeError:
         return None
+
+
+def _updated_key(item: dict[str, Any]) -> str:
+    meta = item.get("metadata") or {}
+    return str(meta.get("updated_at") or meta.get("created_at") or "")
+
+
+def _memory_line(item: dict[str, Any]) -> str:
+    meta = item.get("metadata") or {}
+    parts = []
+    if meta.get("title"):
+        parts.append(str(meta["title"]))
+    parts.append(str(item.get("content", "")))
+    if meta.get("contact_reason"):
+        parts.append(f"由头:{meta['contact_reason']}")
+    if meta.get("callback_style"):
+        parts.append(f"回响方式:{meta['callback_style']}")
+    return "- " + " / ".join(part for part in parts if part)
+
+
+def _first_contact_reason(items: list[dict[str, Any]]) -> str:
+    for item in items:
+        meta = item.get("metadata") or {}
+        reason = meta.get("contact_reason") or meta.get("title")
+        if reason:
+            return str(reason)
+    return "open_thread"

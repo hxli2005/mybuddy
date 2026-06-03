@@ -1,0 +1,64 @@
+{
+  "scanned_at": "2026-06-03",
+  "font_stack": {
+    "summary": "Google Fonts loads Bricolage Grotesque, Geist, and Geist Mono; current tokens route display/body/outlier through Geist and Geist Mono variables.",
+    "sources": [
+      "frontend/src/index.html:6",
+      "frontend/src/index.html:9",
+      "tokens.css:47"
+    ]
+  },
+  "palette": {
+    "summary": "OKLCH custom properties live in the root tokens.css file and are imported by frontend/src/styles.css.",
+    "sources": [
+      "tokens.css:1",
+      "tokens.css:5",
+      "frontend/src/styles.css:6"
+    ]
+  },
+  "motion": {
+    "summary": "motion-cut; no framer-motion, gsap, motion, lenis, lottie-react, react-spring, or auto-animate dependency detected.",
+    "sources": [
+      "frontend/package.json:11",
+      "frontend/package.json:22"
+    ]
+  },
+  "spacing": {
+    "summary": "4-point semantic spacing scale is defined in tokens.css and consumed throughout frontend/src/styles.css.",
+    "sources": [
+      "tokens.css:52",
+      "frontend/src/styles.css:255"
+    ]
+  },
+  "framework": {
+    "summary": "React 19 with Vite 6, Vite root set to frontend/src.",
+    "sources": [
+      "frontend/package.json:7",
+      "frontend/package.json:14",
+      "frontend/package.json:22",
+      "frontend/vite.config.ts:4",
+      "frontend/vite.config.ts:6"
+    ]
+  },
+  "icons": {
+    "summary": "lucide-react is installed and used consistently for navigation, actions, and observer state.",
+    "sources": [
+      "frontend/package.json:13",
+      "frontend/src/components/Shell.tsx:1"
+    ]
+  },
+  "preserve": [
+    "React/Vite structure",
+    "React Query data-fetching boundary",
+    "lucide icon usage",
+    "existing API contract",
+    "Chinese-first navigation labels"
+  ],
+  "introduce": [
+    "view registry and grouped work model",
+    "command palette navigation",
+    "Quiet OKLCH token layer",
+    "inline destructive-action confirmation states",
+    "responsive hardening at 320/375/414/768 px"
+  ]
+}

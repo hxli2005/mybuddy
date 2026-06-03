@@ -1,0 +1,18 @@
+[
+  {
+    "date": "2026-06-03",
+    "macrostructure": "Ecosystem Index",
+    "theme": "Quiet",
+    "enrichment": "none",
+    "brief": "MyBuddy frontend information architecture and interaction redesign",
+    "theme_axes": "light / system-native / cool"
+  },
+  {
+    "date": "2026-06-02",
+    "macrostructure": "Workbench",
+    "theme": "Bloom",
+    "enrichment": "none",
+    "brief": "MyBuddy AI companion chat console UI",
+    "theme_axes": "dark / geometric-sans / warm"
+  }
+]

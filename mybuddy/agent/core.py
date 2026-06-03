@@ -259,11 +259,11 @@ class Agent:
                 self._emotion_tracker.is_consecutive_negative(n=2)
                 and self._engine is not None
             ):
-                self._enqueue_empathy_nudge()
+                self._enqueue_empathy_nudge(user_input)
         return result
 
     def _emotion_system_hint(self, emotion: EmotionResult | None) -> str:
-        """若情绪负面,往 system prompt 追加"先共情再给方案"的指引。"""
+        """若情绪负面,往 system prompt 追加内部场景提示。"""
         if emotion is None or not emotion.is_negative:
             return ""
         consecutive = (
@@ -271,12 +271,12 @@ class Agent:
             and self._emotion_tracker.is_consecutive_negative(n=2)
         )
         extra = (
-            "注意最近两轮用户情绪都偏低,不要急着给方案或做事,"
-            "先用 1-2 句话共情,让 TA 感到被看见。"
+            "最近两轮用户情绪都偏低。把这当作低压陪伴场景:先用角色内微反应靠近,"
+            "可以引用共同仪式或具体动作,不要机械复述情绪或立刻安排任务。"
             if consecutive
-            else "用户这句话情绪偏低,回复时先共情再给内容,语气放软。"
+            else "用户这句话情绪偏低。用角色内表达放轻话题,避免模板化共情句。"
         )
-        return f"## 情绪提示\n{extra}"
+        return f"## 内部情绪提示\n{extra}"
 
     # -----------------------------------------------------------------
     # M6 Skill 匹配 & curator 触发
@@ -328,20 +328,33 @@ class Agent:
             # 没有 running loop(例如在同步测试里 await agent.run 之外调用过),忽略
             logger.debug("no running loop for curator task, skipping")
 
-    def _enqueue_empathy_nudge(self) -> None:
+    def _enqueue_empathy_nudge(self, user_input: str) -> None:
         """连续 2 轮 negative → 延迟 30min 的主动问候,写 pending_messages。"""
         if self._engine is None:
             return
         persona = self._config.persona.name
+        reason = _brief_reason(user_input)
         content = (
-            f"{persona}有点惦记你~刚才聊到的事,现在感觉怎么样了?"
-            "不想说也没事,我一直都在。"
+            f"{persona}刚才还记着你说的「{reason}」。"
+            "不是来催你,只是想确认一下:那股压力现在还压着吗?不想回也没事。"
         )
         scheduled_at = utcnow() + timedelta(minutes=30)
         enqueue(
             self._engine,
             source="nudge",
             content=content,
-            meta={"origin": "emotion_consecutive_negative"},
+            meta={
+                "origin": "emotion_consecutive_negative",
+                "contact_reason": f"连续两轮负面情绪,最近一句:{reason}",
+            },
             scheduled_at=scheduled_at,
         )
+
+
+def _brief_reason(text: str, limit: int = 28) -> str:
+    clean = " ".join((text or "").strip().split())
+    if not clean:
+        return "刚才那件事"
+    if len(clean) <= limit:
+        return clean
+    return clean[:limit] + "..."

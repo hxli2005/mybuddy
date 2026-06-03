@@ -137,8 +137,15 @@ async def test_insights_generated_and_added(dream_env) -> None:
 async def test_nudges_enqueued(dream_env) -> None:
     engine, cfg, ltm, profile = dream_env
 
-    ltm.add("用户去年搬家到上海", mem_type="memory", extra_meta={"created_at": "2025-01-01"})
-    ltm.add("用户今年想养只猫", mem_type="memory", extra_meta={"created_at": "2025-03-01"})
+    ltm.add(
+        "用户说明天要开始写报告开头,但担心自己又拖着不动。",
+        mem_type="open_thread",
+        extra_meta={
+            "title": "报告开头还没写",
+            "contact_reason": "用户昨天说“明天别再拖了”",
+            "triggers": ["报告", "拖延"],
+        },
+    )
 
     # 为让 conflict 和 insights 步都调 LLM,需要 claims >= 2 且 messages 非空
     profile.add_claim("用户偏好简洁沟通", confidence=0.6)
@@ -167,6 +174,27 @@ async def test_nudges_enqueued(dream_env) -> None:
 
 
 @pytest.mark.asyncio
+async def test_character_dynamic_enqueued(dream_env) -> None:
+    engine, cfg, ltm, profile = dream_env
+
+    ltm.add(
+        "用户和小布形成了“不开新战场”的共同仪式。",
+        mem_type="shared_moment",
+        extra_meta={"title": "不开新战场"},
+    )
+
+    provider = ScriptedProvider(['["我把昨晚那张便签折了一下,放在桌角。今天先不急着开新战场。"]'])
+
+    job = DreamJob(engine=engine, config=cfg, provider=provider, ltm=ltm, profile=profile)
+    report = await job.run()
+
+    assert report.dynamics_enqueued == 1
+    pending = list_undelivered(engine)
+    assert len(pending) == 1
+    assert pending[0]["source"] == "dynamic"
+
+
+@pytest.mark.asyncio
 async def test_run_collects_errors_without_crashing(dream_env) -> None:
     """某一步异常不应导致其他步骤失败。"""
     engine, cfg, ltm, profile = dream_env
@@ -175,6 +203,8 @@ async def test_run_collects_errors_without_crashing(dream_env) -> None:
     profile.add_claim("a", confidence=0.6)
     profile.add_claim("b", confidence=0.6)
     ltm.add("some memory", mem_type="memory")
+    ltm.add("some open thread", mem_type="open_thread", extra_meta={"contact_reason": "test"})
+    ltm.add("some shared moment", mem_type="shared_moment")
     from mybuddy.storage import Message as DBMessage
     from mybuddy.storage import session_scope
     with session_scope(engine) as s:
@@ -193,6 +223,6 @@ async def test_run_collects_errors_without_crashing(dream_env) -> None:
     )
     report = await job.run()
 
-    # LLM 相关的三步(conflict / insights / nudges)应该全部进 errors,但不崩
-    assert len(report.errors) >= 3
+    # LLM 相关步骤(conflict / insights / nudges / dynamics)应该进 errors,但不崩
+    assert len(report.errors) >= 4
     assert all("LLM" in e or "RuntimeError" in e for e in report.errors)

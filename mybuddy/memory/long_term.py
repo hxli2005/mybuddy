@@ -181,6 +181,34 @@ class LongTermMemory:
         if path.exists():
             path.unlink()
 
+    def update(
+        self,
+        uid: str,
+        *,
+        content: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        """更新一张档案卡的正文和 metadata,返回更新后的卡片。"""
+        loaded = self._read_card(uid)
+        if loaded is None:
+            return None
+        old_meta, old_content = loaded
+        new_content = old_content if content is None else content.strip()
+        if not new_content:
+            return None
+        meta_updates = dict(metadata or {})
+        meta_updates.pop("id", None)
+        new_meta = {
+            **old_meta,
+            **meta_updates,
+            "id": uid,
+            "updated_at": utcnow().isoformat(timespec="seconds"),
+        }
+        if content is not None and "keywords" not in meta_updates:
+            new_meta["keywords"] = _extract_keywords(new_content)
+        self._write_card(uid, new_meta, new_content)
+        return {"id": uid, "content": new_content, "metadata": new_meta}
+
     def update_metadata(self, uid: str, meta: dict[str, Any]) -> None:
         """合并更新一张档案卡的 metadata。"""
         loaded = self._read_card(uid)
