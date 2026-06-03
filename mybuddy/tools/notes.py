@@ -67,7 +67,13 @@ def write_note(content: str, title: str = "", tags: list[str] | None = None) -> 
             content,
             mem_type="note",
             uid=_archive_uid(note_id),
-            extra_meta={"sql_id": note_id, "title": title, "tags": ",".join(tag_list)},
+            extra_meta={
+                "sql_id": note_id,
+                "title": title,
+                "tags": ",".join(tag_list),
+                "source": "user_note",
+                "importance": 0.85,
+            },
         )
     except Exception:  # noqa: BLE001
         logger.exception("notes: 档案索引失败,笔记已存 SQLite")

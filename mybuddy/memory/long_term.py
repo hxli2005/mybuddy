@@ -22,6 +22,7 @@ from typing import Any
 import yaml
 
 from mybuddy._time import utcnow
+from mybuddy.memory.governance import make_memory_key
 
 # 兼容旧构造参数。文本存储不再使用 embedding_fn。
 EmbedFn = Callable[[list[str]], list[list[float]]]
@@ -124,15 +125,21 @@ class LongTermMemory:
         uid = uid or uuid.uuid4().hex
         now = utcnow().isoformat(timespec="seconds")
         extra = dict(extra_meta or {})
+        key_meta = dict(extra)
         meta: dict[str, Any] = {
             "id": uid,
             "type": mem_type,
             "status": extra.pop("status", "active"),
             "session_id": session_id,
+            "source": extra.pop("source", "manual"),
             "tags": _normalize_list(extra.pop("tags", [])),
             "keywords": _normalize_list(extra.pop("keywords", _extract_keywords(content))),
             "importance": float(extra.pop("importance", 0.5)),
             "confidence": float(extra.pop("confidence", 0.8)),
+            "memory_key": extra.pop("memory_key", make_memory_key(mem_type, content, key_meta)),
+            "observed_at": extra.pop("observed_at", now),
+            "last_seen_at": extra.pop("last_seen_at", now),
+            "occurrence_count": int(extra.pop("occurrence_count", 1)),
             "created_at": extra.pop("created_at", now),
             "updated_at": extra.pop("updated_at", now),
             **extra,
@@ -206,6 +213,12 @@ class LongTermMemory:
         }
         if content is not None and "keywords" not in meta_updates:
             new_meta["keywords"] = _extract_keywords(new_content)
+        if content is not None and "memory_key" not in meta_updates:
+            new_meta["memory_key"] = make_memory_key(
+                str(new_meta.get("type") or "memory"),
+                new_content,
+                new_meta,
+            )
         self._write_card(uid, new_meta, new_content)
         return {"id": uid, "content": new_content, "metadata": new_meta}
 
@@ -224,6 +237,43 @@ class LongTermMemory:
         if "keywords" not in new_meta:
             new_meta["keywords"] = _extract_keywords(content)
         self._write_card(uid, new_meta, content)
+
+    def normalize_metadata(self) -> int:
+        """补齐旧档案卡缺失的治理字段,返回更新数量。"""
+        now = utcnow().isoformat(timespec="seconds")
+        count = 0
+        for item in self.list_all():
+            uid = str(item.get("id") or "")
+            content = str(item.get("content") or "")
+            meta = dict(item.get("metadata") or {})
+            mem_type = str(meta.get("type") or "memory")
+            created_at = str(meta.get("created_at") or meta.get("updated_at") or now)
+            updates: dict[str, Any] = {}
+
+            defaults = {
+                "id": uid,
+                "type": mem_type,
+                "status": "active",
+                "source": "legacy",
+                "tags": [],
+                "keywords": _extract_keywords(content),
+                "importance": 0.5,
+                "confidence": 0.8,
+                "memory_key": make_memory_key(mem_type, content, meta),
+                "observed_at": created_at,
+                "last_seen_at": str(meta.get("updated_at") or created_at),
+                "occurrence_count": 1,
+                "created_at": created_at,
+                "updated_at": str(meta.get("updated_at") or created_at),
+            }
+            for key, value in defaults.items():
+                if meta.get(key) in (None, "", []):
+                    updates[key] = value
+            if not updates:
+                continue
+            self._write_card(uid, {**meta, **updates}, content)
+            count += 1
+        return count
 
     def count(self) -> int:
         return len(self.list_all())

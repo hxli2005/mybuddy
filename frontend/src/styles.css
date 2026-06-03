@@ -495,6 +495,39 @@ code,
   gap: var(--space-xs);
 }
 
+.memory-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-xs);
+  color: var(--color-muted);
+  font-size: var(--text-xs);
+}
+
+.memory-meta span {
+  display: inline-flex;
+  min-height: 1.35rem;
+  align-items: center;
+  border-block-start: var(--rule-hairline) solid var(--color-rule-2);
+  padding-block-start: var(--space-2xs);
+}
+
+.claim-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-xs);
+}
+
+.claim-meta span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 1.35rem;
+  border-radius: var(--radius-pill);
+  background: var(--color-surface);
+  color: var(--color-muted);
+  font-size: var(--text-xs);
+  padding: 0 var(--space-xs);
+}
+
 .tag,
 .badge {
   display: inline-flex;

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -35,6 +36,8 @@ EMOTION_PROMPT = """你是一个情绪识别助手。判断以下用户消息的
 
 
 VALID_LABELS = {"positive", "neutral", "negative"}
+AUTH_STATUS_CODES = {401, 403}
+AUTH_ERROR_NAMES = {"authenticationerror", "permissiondeniederror"}
 
 
 @dataclass
@@ -61,9 +64,12 @@ class EmotionDetector:
     ) -> None:
         self._provider = provider
         self._small_model = small_model
+        self._disabled_after_auth_error = False
 
     async def classify(self, text: str) -> EmotionResult:
         if not text or not text.strip():
+            return EmotionResult()
+        if self._disabled_after_auth_error:
             return EmotionResult()
 
         from mybuddy.llm import Message, Role
@@ -76,10 +82,19 @@ class EmotionDetector:
                 model=self._small_model or None,
             )
         except Exception as e:
-            logger.warning(
-                "emotion classify LLM call failed; falling back to neutral: %s",
-                type(e).__name__,
-            )
+            if _is_auth_error(e):
+                self._disabled_after_auth_error = True
+                logger.warning(
+                    "emotion classify LLM authentication failed; "
+                    "disabling emotion classifier for this process and falling back to neutral. "
+                    "Check llm.api_key/provider/base_url/small_model. %s",
+                    _error_summary(e),
+                )
+            else:
+                logger.warning(
+                    "emotion classify LLM call failed; falling back to neutral: %s",
+                    _error_summary(e),
+                )
             return EmotionResult()
 
         return _parse(resp.text)
@@ -116,3 +131,28 @@ def _parse(text: str) -> EmotionResult:
     reason = str(data.get("reason", ""))[:50]
 
     return EmotionResult(label=label, strength=strength, reason=reason)
+
+
+def _is_auth_error(err: Exception) -> bool:
+    status = getattr(err, "status_code", None)
+    if isinstance(status, int) and status in AUTH_STATUS_CODES:
+        return True
+    return type(err).__name__.lower() in AUTH_ERROR_NAMES
+
+
+def _error_summary(err: Exception) -> str:
+    status = getattr(err, "status_code", None)
+    name = type(err).__name__
+    detail = _redact_secrets(str(err).strip())
+    if status is not None:
+        name = f"{name}(status={status})"
+    if not detail:
+        return name
+    return f"{name}: {detail}"
+
+
+def _redact_secrets(text: str) -> str:
+    text = re.sub(r"sk-ant-[A-Za-z0-9_-]{8,}", "sk-ant-***", text)
+    text = re.sub(r"sk-[A-Za-z0-9_-]{8,}", "sk-***", text)
+    text = re.sub(r"(api[_-]?key[\"'=:\s]+)[A-Za-z0-9_-]{8,}", r"\1***", text, flags=re.I)
+    return text

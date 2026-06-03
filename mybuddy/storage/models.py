@@ -82,6 +82,17 @@ class ProfileClaim(Base):
     claim: Mapped[str] = mapped_column(Text)
     confidence: Mapped[float] = mapped_column(Float, default=0.5)
     evidence_ids_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # candidate | active | stable | promoted | stale | refuted | archived
+    status: Mapped[str] = mapped_column(String(16), default="active", index=True)
+    # general | fact | preference | relationship | emotion_pattern | task | boundary
+    category: Mapped[str] = mapped_column(String(32), default="general", index=True)
+    evidence_count: Mapped[int] = mapped_column(Integer, default=0)
+    evidence_days_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    conflict_ids_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    first_seen_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    promoted_memory_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    promotion_checked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
 
 

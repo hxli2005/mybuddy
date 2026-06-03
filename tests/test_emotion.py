@@ -104,6 +104,30 @@ async def test_detector_swallows_llm_exception() -> None:
     assert r.label == "neutral"
 
 
+@pytest.mark.asyncio
+async def test_detector_disables_after_auth_error() -> None:
+    class AuthError(Exception):
+        status_code = 401
+
+    class AuthProvider(BaseLLMProvider):
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def generate(self, *a, **k):
+            self.calls += 1
+            raise AuthError("invalid api_key sk-testsecret123")
+
+    provider = AuthProvider()
+    det = EmotionDetector(provider)
+
+    first = await det.classify("test")
+    second = await det.classify("test again")
+
+    assert first.label == "neutral"
+    assert second.label == "neutral"
+    assert provider.calls == 1
+
+
 # ---- tracker ----
 
 def _r(label: str, strength: float = 0.5) -> EmotionResult:

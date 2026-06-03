@@ -126,6 +126,7 @@ function MemoryCard({
   onDelete: () => void;
 }) {
   const tags = Array.isArray(item.metadata?.tags) ? item.metadata.tags.map(String) : [];
+  const meta = memoryMeta(item);
 
   return (
     <article className="list-card memory-card">
@@ -154,6 +155,7 @@ function MemoryCard({
       ) : (
         <>
           <p>{item.content}</p>
+          {meta.length ? <div className="memory-meta">{meta.map((part) => <span key={part}>{part}</span>)}</div> : null}
           <Tags values={tags} />
           <div className="inline-actions">
             <button aria-label="编辑记忆" className="icon-button" onClick={onEdit} title="编辑" type="button">
@@ -173,4 +175,48 @@ function MemoryCard({
       )}
     </article>
   );
+}
+
+function memoryMeta(item: MemoryItem): string[] {
+  const meta = item.metadata || {};
+  const parts: string[] = [];
+  const status = typeof meta.status === "string" ? meta.status : "";
+  if (status && status !== "active") parts.push(statusLabel(status));
+  const source = typeof meta.source === "string" ? meta.source : "";
+  if (source) parts.push(sourceLabel(source));
+  const eventTime = typeof meta.event_time === "string" ? meta.event_time : "";
+  if (eventTime) parts.push(`事件 ${eventTime}`);
+  const created = typeof meta.created_at === "string" ? meta.created_at : "";
+  if (created) parts.push(`记录 ${shortTime(created)}`);
+  const updated = typeof meta.updated_at === "string" ? meta.updated_at : "";
+  if (updated && updated !== created) parts.push(`更新 ${shortTime(updated)}`);
+  const lastSeen = typeof meta.last_seen_at === "string" ? meta.last_seen_at : "";
+  if (lastSeen && lastSeen !== updated && lastSeen !== created) parts.push(`最近出现 ${shortTime(lastSeen)}`);
+  const count = Number(meta.occurrence_count || 0);
+  if (count > 1) parts.push(`${count} 次`);
+  return parts;
+}
+
+function shortTime(value: string): string {
+  return value.replace("T", " ").slice(0, 16);
+}
+
+function sourceLabel(value: string): string {
+  const labels: Record<string, string> = {
+    fact_extraction: "自动事实",
+    relationship_extraction: "关系抽取",
+    profile_claim: "画像命题",
+    user_note: "用户笔记",
+    manual: "手动",
+  };
+  return labels[value] || value;
+}
+
+function statusLabel(value: string): string {
+  const labels: Record<string, string> = {
+    stale: "已过期",
+    resolved: "已收尾",
+    archived: "已归档",
+  };
+  return labels[value] || value;
 }

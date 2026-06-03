@@ -132,6 +132,7 @@ class AppState:
             persist_dir=cfg.paths.chroma_dir,
             embedding_model=cfg.memory.embedding_model,
         )
+        ltm.normalize_metadata()
         provider = make_provider(cfg.llm) if cfg.llm.api_key else None
         logger = TrajectoryLogger(cfg.paths.trajectories_dir)
         profile = UserProfile(engine, ltm)
@@ -287,7 +288,7 @@ class AppState:
         p = _require(self.profile)
         return {
             "fields": p.get_all_fields(),
-            "claims": p.get_all_claims(min_confidence=0.0)[:20],
+            "claims": p.get_all_claims(min_confidence=0.0, include_hidden=False)[:20],
         }
 
     def update_profile_field_payload(self, key: str, value: str) -> dict[str, Any]:
@@ -332,6 +333,7 @@ class AppState:
     def memory_payload(self) -> dict[str, Any]:
         cfg = _require(self.cfg)
         ltm = _require(self.ltm)
+        ltm.normalize_metadata()
         base = Path(cfg.paths.chroma_dir)
         return {
             "archive": ltm.list_all()[:50],
@@ -483,7 +485,13 @@ class AppState:
                 clean_content,
                 mem_type="note",
                 uid=f"note_{note['id']}",
-                extra_meta={"sql_id": note["id"], "title": clean_title, "tags": ",".join(tag_list)},
+                extra_meta={
+                    "sql_id": note["id"],
+                    "title": clean_title,
+                    "tags": ",".join(tag_list),
+                    "source": "user_note",
+                    "importance": 0.85,
+                },
             )
         return {"note": note}
 
@@ -525,6 +533,8 @@ class AppState:
                     "sql_id": note_id,
                     "title": note["title"],
                     "tags": note["tags"],
+                    "source": "user_note",
+                    "importance": 0.85,
                 },
             )
         return {"note": note}

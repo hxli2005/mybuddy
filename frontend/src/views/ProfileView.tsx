@@ -257,7 +257,13 @@ function ClaimCard({
       ) : (
         <>
           <p>{claim.claim}</p>
-          {claim.evidence_ids?.length ? <span>{claim.evidence_ids.length} 条证据</span> : null}
+          <div className="claim-meta">
+            <span>{claimStatusLabel(claim.status)}</span>
+            <span>{claimCategoryLabel(claim.category)}</span>
+            {claim.evidence_count || claim.evidence_ids?.length ? (
+              <span>{claim.evidence_count || claim.evidence_ids?.length} 条证据</span>
+            ) : null}
+          </div>
           {id ? (
             <div className="inline-actions">
               <button
@@ -284,4 +290,26 @@ function ClaimCard({
       )}
     </article>
   );
+}
+
+function claimStatusLabel(value?: string) {
+  const labels: Record<string, string> = {
+    candidate: "候选",
+    active: "追踪中",
+    stable: "稳定",
+  };
+  return labels[value || "active"] || "追踪中";
+}
+
+function claimCategoryLabel(value?: string) {
+  const labels: Record<string, string> = {
+    fact: "事实",
+    preference: "偏好",
+    relationship: "关系",
+    emotion_pattern: "模式",
+    task: "事项",
+    boundary: "边界",
+    general: "观察",
+  };
+  return labels[value || "general"] || "观察";
 }

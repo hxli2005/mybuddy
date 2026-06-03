@@ -70,6 +70,13 @@ export type ProfileClaim = {
   claim: string;
   confidence: number;
   evidence_ids?: string[];
+  status?: string;
+  category?: string;
+  evidence_count?: number;
+  evidence_days?: string[];
+  first_seen_at?: string;
+  last_seen_at?: string;
+  promoted_memory_id?: string | null;
   updated_at?: string;
 };
 
@@ -132,4 +139,3 @@ export type NotesPayload = {
 export type PersonaPayload = {
   persona: Persona;
 };
-

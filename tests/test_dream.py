@@ -6,6 +6,7 @@ LLM 用 ScriptedProvider,Chroma 用 MockEmbedding;验证的是执行后观察到
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 import pytest
@@ -14,7 +15,7 @@ from mybuddy.config import Config
 from mybuddy.learning import DreamJob
 from mybuddy.llm import BaseLLMProvider, LLMResponse, Message, ToolSpec
 from mybuddy.memory import LongTermMemory, UserProfile
-from mybuddy.storage import init_db, list_undelivered
+from mybuddy.storage import ProfileClaim, init_db, list_undelivered, session_scope
 
 from .test_memory import mock_embed
 
@@ -56,6 +57,15 @@ def dream_env(tmp_path):
     )
     profile = UserProfile(engine, ltm)
     return engine, cfg, ltm, profile
+
+
+def _make_claim_eligible(engine, claim_id: int, *, category: str = "boundary") -> None:
+    with session_scope(engine) as s:
+        row = s.query(ProfileClaim).filter_by(id=claim_id).one()
+        row.status = "active"
+        row.category = category
+        row.evidence_count = 3
+        row.evidence_days_json = json.dumps(["2026-06-02", "2026-06-03"], ensure_ascii=False)
 
 
 @pytest.mark.asyncio
@@ -131,6 +141,52 @@ async def test_insights_generated_and_added(dream_env) -> None:
     assert report.insights_added == 2
     after = len(profile.get_all_claims())
     assert after - before == 2
+
+
+@pytest.mark.asyncio
+async def test_stable_claim_promoted_to_long_term_memory(dream_env) -> None:
+    engine, cfg, ltm, profile = dream_env
+
+    cid = profile.add_claim(
+        "用户不喜欢空泛鼓励",
+        confidence=0.8,
+        evidence_ids=["turn_1", "turn_2", "turn_3"],
+    )
+    _make_claim_eligible(engine, cid, category="boundary")
+
+    provider = ScriptedProvider([])
+    job = DreamJob(engine=engine, config=cfg, provider=provider, ltm=ltm, profile=profile)
+    report = await job.run()
+
+    assert report.promoted_claims == 1
+    claim = next(c for c in profile.get_all_claims() if c["sql_id"] == cid)
+    assert claim["status"] == "promoted"
+    assert claim["promoted_memory_id"]
+    assert profile.get_all_claims(include_hidden=False) == []
+
+    promoted = ltm.list_all(mem_type="anti_preference")
+    assert len(promoted) == 1
+    assert promoted[0]["metadata"]["promoted_from_claim_id"] == cid
+
+
+@pytest.mark.asyncio
+async def test_conflicted_claim_is_not_promoted(dream_env) -> None:
+    engine, cfg, ltm, profile = dream_env
+
+    cid1 = profile.add_claim("用户喜欢直接建议", confidence=0.8, evidence_ids=["a", "b", "c"])
+    cid2 = profile.add_claim("用户不喜欢别人立刻给建议", confidence=0.8, evidence_ids=["d", "e", "f"])
+    _make_claim_eligible(engine, cid1, category="preference")
+    _make_claim_eligible(engine, cid2, category="boundary")
+
+    provider = ScriptedProvider([json.dumps([{"a": cid1, "b": cid2}], ensure_ascii=False)])
+    job = DreamJob(engine=engine, config=cfg, provider=provider, ltm=ltm, profile=profile)
+    report = await job.run()
+
+    assert report.conflicts_resolved == 1
+    assert report.promoted_claims == 0
+    claims = profile.get_all_claims()
+    assert all(c["status"] != "promoted" for c in claims)
+    assert any(c["conflict_ids"] for c in claims)
 
 
 @pytest.mark.asyncio

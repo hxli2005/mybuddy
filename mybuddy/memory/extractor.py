@@ -57,6 +57,8 @@ EXTRACT_PROMPT = """你是一个关系记忆管理助手。请从以下用户与
         "title": "未完成话题",
         "content": "之后有具体由头可关心的事",
         "contact_reason": "为什么之后可以提起",
+        "event_time": "如果对话出现明确发生时间,填 ISO 日期或原始时间短语",
+        "expires_at": "如果未完成话题有明确截止/过期时间,填 ISO 日期时间或原始时间短语",
         "triggers": ["相关触发词"],
         "confidence": 0.7
       }
@@ -77,6 +79,7 @@ EXTRACT_PROMPT = """你是一个关系记忆管理助手。请从以下用户与
 - relationship_memories:
   - shared_moment:用户和 AI 之间形成的共同经历、回忆卡、有效陪伴片段。
   - open_thread:未来有明确由头可回访的未完成话题;必须有具体 evidence,不要泛泛关心。
+    如果能判断截止或过期时间,填写 expires_at;如果能判断事件发生时间,填写 event_time。
   - private_code:用户和 AI 形成的暗号或特殊说法。
   - anti_preference:用户明确不喜欢的回应方式。
   - relationship_note:关于当前关系质感、边界、默契的稳定线索。
@@ -132,8 +135,11 @@ class FactExtractor:
         if not recent_messages:
             return FactExtractResult()
 
+        from mybuddy._time import utcnow
+
         conversation = "\n".join(recent_messages)
-        user_prompt = f"对话:\n{conversation}\n\n请提取信息,只输出 JSON:"
+        today = utcnow().date().isoformat()
+        user_prompt = f"当前日期:{today}\n\n对话:\n{conversation}\n\n请提取信息,只输出 JSON:"
 
         from mybuddy.llm import Message, Role
 

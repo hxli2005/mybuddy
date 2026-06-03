@@ -16,6 +16,7 @@ from mybuddy.llm import BaseLLMProvider, LLMResponse, Message, Role, ToolSpec
 from mybuddy.memory import (
     FactExtractResult,
     LongTermMemory,
+    MemoryGovernance,
     MemoryManager,
     ShortTermMemory,
     UserProfile,
@@ -101,6 +102,19 @@ class DummyProvider(BaseLLMProvider):
         return LLMResponse(text="{}", finish_reason="stop")
 
 
+class StaticProvider(BaseLLMProvider):
+    def __init__(self, text: str) -> None:
+        self._text = text
+
+    async def generate(
+        self,
+        messages: list[Message],
+        tools: list[ToolSpec] | None = None,
+        **kwargs: Any,
+    ) -> LLMResponse:
+        return LLMResponse(text=self._text, finish_reason="stop")
+
+
 # =============================================================================
 # ShortTermMemory
 # =============================================================================
@@ -158,6 +172,12 @@ def test_long_term_add_and_search(ltm) -> None:
     assert len(hits) >= 1
     content_lower = hits[0]["content"].lower()
     assert "美式" in content_lower or "咖啡" in content_lower
+    meta = hits[0]["metadata"]
+    assert meta["memory_key"].startswith("memory:")
+    assert meta["source"] == "manual"
+    assert meta["created_at"]
+    assert meta["updated_at"]
+    assert meta["observed_at"]
 
 
 def test_long_term_three_layer_files(ltm, tmp_path) -> None:
@@ -210,6 +230,61 @@ def test_long_term_update_metadata(ltm) -> None:
     ltm.update_metadata(uid, {"type": "memory", "count": 2})
     hits_after = ltm.search("metadata test")
     assert hits_after[0]["metadata"].get("count") == 2
+
+
+def test_long_term_normalize_metadata_backfills_legacy_cards(ltm) -> None:
+    legacy_path = ltm._archive_dir / "legacy.md"
+    legacy_path.write_text(
+        "---\nid: legacy\ntype: memory\n---\n\n旧记忆内容\n",
+        encoding="utf-8",
+    )
+
+    assert ltm.normalize_metadata() == 1
+
+    item = next(i for i in ltm.list_all() if i["id"] == "legacy")
+    meta = item["metadata"]
+    assert meta["source"] == "legacy"
+    assert meta["status"] == "active"
+    assert meta["memory_key"].startswith("memory:")
+    assert meta["created_at"]
+    assert meta["observed_at"]
+    assert meta["last_seen_at"]
+
+
+def test_memory_governance_merges_duplicate_memory(ltm) -> None:
+    governance = MemoryGovernance(ltm)
+
+    first = governance.add_or_merge(
+        "用户正在准备项目汇报",
+        mem_type="memory",
+        source="fact_extraction",
+    )
+    second = governance.add_or_merge(
+        "用户正在准备项目汇报",
+        mem_type="memory",
+        source="fact_extraction",
+    )
+
+    assert first.memory_id == second.memory_id
+    assert second.action == "merged"
+    items = ltm.list_all(mem_type="memory")
+    assert len(items) == 1
+    assert items[0]["metadata"]["occurrence_count"] == 2
+    assert items[0]["metadata"]["last_seen_at"]
+
+
+def test_memory_governance_marks_expired_open_thread_stale(ltm) -> None:
+    governance = MemoryGovernance(ltm)
+    governance.add_or_merge(
+        "用户昨天要处理报告开头",
+        mem_type="open_thread",
+        extra_meta={"expires_at": "2000-01-01T00:00:00"},
+    )
+
+    assert governance.refresh_open_thread_lifecycle() == 1
+    item = ltm.list_all(mem_type="open_thread")[0]
+    assert item["metadata"]["status"] == "stale"
+    assert item["metadata"]["stale_at"]
 
 
 # =============================================================================
@@ -269,6 +344,37 @@ def test_profile_add_and_search_claims(profile_with_ltm) -> None:
     hits = profile.search_claims("周末心情", top_k=5, min_confidence=0.5)
     assert len(hits) >= 1
     assert any("周日" in h["claim"] for h in hits)
+
+
+def test_profile_add_claim_merges_duplicate_claim(profile_with_ltm) -> None:
+    profile = profile_with_ltm
+
+    cid1 = profile.add_claim("用户不喜欢空泛鼓励", confidence=0.5, evidence_ids=["turn_1"])
+    cid2 = profile.add_claim("用户不喜欢空泛鼓励", confidence=0.8, evidence_ids=["turn_2"])
+
+    assert cid1 == cid2
+    claims = profile.get_all_claims()
+    assert len(claims) == 1
+    assert claims[0]["confidence"] == 0.8
+    assert claims[0]["evidence_ids"] == ["turn_1", "turn_2"]
+
+
+def test_profile_claim_lifecycle_metadata(profile_with_ltm) -> None:
+    profile = profile_with_ltm
+
+    cid = profile.add_claim(
+        "用户不喜欢空泛鼓励",
+        confidence=0.8,
+        evidence_ids=["turn_1", "turn_2", "turn_3"],
+    )
+
+    claim = next(c for c in profile.get_all_claims() if c["sql_id"] == cid)
+    assert claim["status"] == "active"
+    assert claim["category"] == "boundary"
+    assert claim["evidence_count"] == 3
+    assert claim["evidence_days"]
+    assert claim["first_seen_at"]
+    assert claim["last_seen_at"]
 
 
 def test_profile_update_confidence(profile_with_ltm) -> None:
@@ -344,6 +450,54 @@ def test_memory_manager_prioritizes_relationship_context(tmp_path) -> None:
     assert text.index("## 未完成话题") < text.index("## 相关历史记忆")
     assert "那个没有催的晚上" in text
     assert "不喜欢被强行打鸡血" in text
+
+
+@pytest.mark.asyncio
+async def test_memory_manager_extract_uses_governance_to_merge(tmp_path) -> None:
+    engine = init_db(str(tmp_path / "manager_governance.db"))
+    cfg = Config()
+    cfg.memory.extract_after_turns = 1
+    chroma_dir = tmp_path / "manager_governance_chroma"
+    chroma_dir.mkdir()
+    ltm = LongTermMemory(
+        persist_dir=str(chroma_dir),
+        collection_name="manager_governance",
+        embedding_fn=mock_embed,
+    )
+    payload = json.dumps(
+        {
+            "facts": ["用户正在准备项目汇报"],
+            "profile_fields": {},
+            "claims": [{"claim": "用户担心项目汇报开头", "confidence": 0.6}],
+            "relationship_memories": {
+                "open_thread": [
+                    {
+                        "title": "项目汇报开头",
+                        "content": "用户还没处理项目汇报开头。",
+                        "contact_reason": "用户担心开头讲不顺",
+                        "triggers": ["项目汇报", "开头"],
+                    }
+                ]
+            },
+        },
+        ensure_ascii=False,
+    )
+    manager = MemoryManager(engine=engine, config=cfg, ltm=ltm, provider=StaticProvider(payload))
+
+    manager.record_turn("我在准备项目汇报", "我们先看开头", turn_id="turn_1")
+    assert await manager.maybe_extract() is True
+    manager.record_turn("我还是在准备项目汇报", "那继续处理开头", turn_id="turn_2")
+    assert await manager.maybe_extract() is True
+
+    memories = ltm.list_all(mem_type="memory")
+    open_threads = ltm.list_all(mem_type="open_thread")
+    claims = manager.profile.get_all_claims()
+    assert len(memories) == 1
+    assert memories[0]["metadata"]["occurrence_count"] == 2
+    assert len(open_threads) == 1
+    assert open_threads[0]["metadata"]["occurrence_count"] == 2
+    assert len(claims) == 1
+    assert claims[0]["evidence_ids"] == ["turn_1", "turn_2"]
 
 
 # =============================================================================

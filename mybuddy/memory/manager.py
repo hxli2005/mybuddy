@@ -13,6 +13,7 @@ import logging
 from typing import TYPE_CHECKING
 
 from mybuddy.memory.extractor import RELATIONSHIP_MEMORY_TYPES, FactExtractor
+from mybuddy.memory.governance import MemoryGovernance
 from mybuddy.memory.long_term import LongTermMemory
 from mybuddy.memory.profile import UserProfile
 from mybuddy.memory.short_term import ShortTermMemory
@@ -55,9 +56,12 @@ class MemoryManager:
         self._short_term = ShortTermMemory(capacity=config.memory.short_term_size)
         self._profile = UserProfile(engine, ltm)
         self._extractor = FactExtractor(provider, config.llm.small_model)
+        self._ltm.normalize_metadata()
+        self._governance = MemoryGovernance(ltm)
 
         # 用于记录最近 user+assistant 文本对,供 extractor 使用
         self._recent_turns: list[str] = []
+        self._recent_turn_ids: list[str] = []
         self._turns_since_extract = 0
 
     # ---- 短期记忆 ----
@@ -82,6 +86,7 @@ class MemoryManager:
           2. 关系线索 / 角色线索
           3. 普通长期记忆 / 用户画像 / 动态命题
         """
+        self._ensure_governance_state()
         parts: list[str] = []
         related_claim_ids: list[int] = []
 
@@ -101,6 +106,8 @@ class MemoryManager:
             ("relationship_note", "## 关系线索", 2),
             ("character_note", "## 角色侧线索", 1),
         ]
+        if self._ltm is not None:
+            self._governance.refresh_open_thread_lifecycle()
         for mem_type, title, limit in relation_sections:
             hits = self._relationship_hits(user_input, mem_type, top_k=limit)
             if hits:
@@ -155,8 +162,11 @@ class MemoryManager:
         turn_id: str | None = None,
     ) -> None:
         """记录一轮对话文本,供抽取器使用。"""
+        self._ensure_governance_state()
         self._recent_turns.append(f"USER: {user_text}")
         self._recent_turns.append(f"AI: {assistant_text}")
+        if turn_id and turn_id not in self._recent_turn_ids:
+            self._recent_turn_ids.append(turn_id)
         self._turns_since_extract += 1
         if hasattr(self._ltm, "record_conversation_turn"):
             self._ltm.record_conversation_turn(
@@ -168,6 +178,7 @@ class MemoryManager:
 
     async def maybe_extract(self) -> bool:
         """如果积累的对话轮数达到阈值,触发抽取。返回是否执行了抽取。"""
+        self._ensure_governance_state()
         threshold = self._config.memory.extract_after_turns
         if self._turns_since_extract < threshold:
             return False
@@ -177,18 +188,26 @@ class MemoryManager:
         except Exception:
             logger.exception("事实抽取失败")
             self._recent_turns.clear()
+            self._recent_turn_ids.clear()
             self._turns_since_extract = 0
             return False
 
         if result.is_empty():
             self._recent_turns.clear()
+            self._recent_turn_ids.clear()
             self._turns_since_extract = 0
             return False
 
         # 写入长期记忆
         if self._ltm is not None:
             for fact in result.facts:
-                self._ltm.add(fact, session_id=self._session_id)
+                self._governance.add_or_merge(
+                    fact,
+                    mem_type="memory",
+                    session_id=self._session_id,
+                    source="fact_extraction",
+                    extra_meta={"source_turn_ids": list(self._recent_turn_ids)},
+                )
 
         # 写入画像字段
         for key, value in result.profile_fields.items():
@@ -198,19 +217,25 @@ class MemoryManager:
         for claim_data in result.claims:
             if isinstance(claim_data, dict) and "claim" in claim_data:
                 conf = float(claim_data.get("confidence", 0.5))
-                self._profile.add_claim(claim_data["claim"], confidence=conf)
+                self._profile.add_claim(
+                    claim_data["claim"],
+                    confidence=conf,
+                    evidence_ids=list(self._recent_turn_ids),
+                )
 
         relationship_count = 0
         if self._ltm is not None:
             for mem_type in RELATIONSHIP_MEMORY_TYPES:
                 for item in result.relationship_memories.get(mem_type, []):
                     content, meta = _relation_item_to_card(item)
-                    if not content or self._looks_duplicate(mem_type, content):
+                    if not content:
                         continue
-                    self._ltm.add(
+                    meta.setdefault("source_turn_ids", list(self._recent_turn_ids))
+                    self._governance.add_or_merge(
                         content,
                         mem_type=mem_type,
                         session_id=self._session_id,
+                        source="relationship_extraction",
                         extra_meta=meta,
                     )
                     relationship_count += 1
@@ -224,6 +249,7 @@ class MemoryManager:
         )
 
         self._recent_turns.clear()
+        self._recent_turn_ids.clear()
         self._turns_since_extract = 0
         return True
 
@@ -236,6 +262,13 @@ class MemoryManager:
     @property
     def long_term(self) -> LongTermMemory:
         return self._ltm
+
+    def _ensure_governance_state(self) -> None:
+        """补齐记忆治理状态,兼容绕过 __init__ 的测试替身。"""
+        if not hasattr(self, "_recent_turn_ids"):
+            self._recent_turn_ids = []
+        if not hasattr(self, "_governance") and self._ltm is not None:
+            self._governance = MemoryGovernance(self._ltm)
 
     def _relationship_hits(
         self,
@@ -294,6 +327,9 @@ def _format_memory_hit(hit: dict) -> str:
         ("contact_reason", "由头"),
         ("callback_style", "回响方式"),
         ("emotional_color", "情绪色"),
+        ("event_time", "事件时间"),
+        ("expires_at", "过期时间"),
+        ("status", "状态"),
     ):
         value = meta.get(key)
         if value:
@@ -321,6 +357,10 @@ def _relation_item_to_card(item: dict) -> tuple[str, dict]:
         "emotional_color",
         "callback_style",
         "contact_reason",
+        "event_time",
+        "observed_at",
+        "expires_at",
+        "status",
         "source_turn_ids",
     ):
         value = item.get(key)

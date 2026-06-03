@@ -9,6 +9,7 @@ MemoryManager 统一协调三层,并触发 LLM 事实抽取。
 """
 
 from .extractor import FactExtractor, FactExtractResult
+from .governance import MemoryGovernance
 from .long_term import LongTermMemory
 from .manager import MemoryManager
 from .profile import UserProfile
@@ -18,6 +19,7 @@ __all__ = [
     "FactExtractResult",
     "FactExtractor",
     "LongTermMemory",
+    "MemoryGovernance",
     "MemoryManager",
     "ShortTermMemory",
     "UserProfile",

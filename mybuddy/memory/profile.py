@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -23,7 +24,11 @@ if TYPE_CHECKING:
     from mybuddy.memory.long_term import LongTermMemory
 
 from mybuddy._time import utcnow
+from mybuddy.memory.governance import make_memory_key
 from mybuddy.storage import ProfileClaim, ProfileField, session_scope
+
+VISIBLE_CLAIM_STATUSES = {"candidate", "active", "stable"}
+HIDDEN_CLAIM_STATUSES = {"promoted", "stale", "refuted", "archived"}
 
 
 class UserProfile:
@@ -81,14 +86,45 @@ class UserProfile:
         claim: str,
         confidence: float = 0.5,
         evidence_ids: list[str] | None = None,
+        *,
+        category: str | None = None,
+        status: str | None = None,
     ) -> int:
         """新增一条命题,返回 SQL 主键 id。同时索引到档案层。"""
-        ev_json = json.dumps(evidence_ids or [], ensure_ascii=False)
+        clean_claim = (claim or "").strip()
+        if not clean_claim:
+            raise ValueError("claim is empty")
+        memory_key = make_memory_key("claim", clean_claim)
+        claim_category = _clean_category(category) or _infer_claim_category(clean_claim)
+        claim_status = _clean_status(status) or ("active" if confidence >= 0.5 else "candidate")
+        existing_id = self._find_existing_claim_id(memory_key, clean_claim)
+        if existing_id is not None:
+            return self._merge_claim(
+                existing_id,
+                clean_claim,
+                confidence=confidence,
+                evidence_ids=evidence_ids or [],
+                memory_key=memory_key,
+                category=claim_category,
+                status=claim_status,
+            )
+
+        now = utcnow()
+        ev_ids = _merge_unique([], evidence_ids or [])
+        ev_json = json.dumps(ev_ids, ensure_ascii=False)
+        ev_days = _evidence_days_for(ev_ids, now)
+        ev_days_json = json.dumps(ev_days, ensure_ascii=False)
         with session_scope(self._engine) as s:
             pc = ProfileClaim(
-                claim=claim,
+                claim=clean_claim,
                 confidence=confidence,
                 evidence_ids_json=ev_json,
+                status=claim_status,
+                category=claim_category,
+                evidence_count=len(ev_ids),
+                evidence_days_json=ev_days_json,
+                first_seen_at=now,
+                last_seen_at=now,
             )
             s.add(pc)
             s.flush()
@@ -97,17 +133,92 @@ class UserProfile:
         # 同步到档案层(使用确定性 id,方便后续更新)
         if self._ltm is not None:
             self._ltm.add(
-                claim,
+                clean_claim,
                 mem_type="claim",
                 uid=self._claim_archive_id(sql_id),
                 extra_meta={
                     "sql_id": sql_id,
                     "confidence": confidence,
                     "evidence_ids": ev_json,
+                    "memory_key": memory_key,
+                    "source": "profile_claim",
+                    "status": claim_status,
+                    "category": claim_category,
+                    "evidence_count": len(ev_ids),
+                    "evidence_days": ev_days,
+                    "first_seen_at": now.isoformat(timespec="seconds"),
+                    "last_seen_at": now.isoformat(timespec="seconds"),
                 },
             )
 
         return sql_id
+
+    def _find_existing_claim_id(self, memory_key: str, claim: str) -> int | None:
+        if self._ltm is not None:
+            for item in self._ltm.list_all(mem_type="claim"):
+                meta = item.get("metadata") or {}
+                if meta.get("status", "active") != "active":
+                    continue
+                if meta.get("memory_key") == memory_key and isinstance(meta.get("sql_id"), int):
+                    return meta["sql_id"]
+            hits = [
+                hit for hit in self._ltm.search(claim, top_k=3, mem_type="claim")
+                if hit.get("score", 0) >= 0.9
+            ]
+            if hits:
+                sql_id = (hits[0].get("metadata") or {}).get("sql_id")
+                if isinstance(sql_id, int):
+                    return sql_id
+
+        with session_scope(self._engine) as s:
+            for row in s.query(ProfileClaim).all():
+                if make_memory_key("claim", row.claim) == memory_key:
+                    return row.id
+        return None
+
+    def _merge_claim(
+        self,
+        claim_id: int,
+        claim: str,
+        *,
+        confidence: float,
+        evidence_ids: list[str],
+        memory_key: str,
+        category: str,
+        status: str,
+    ) -> int:
+        now = utcnow()
+        with session_scope(self._engine) as s:
+            pc = s.query(ProfileClaim).filter_by(id=claim_id).one_or_none()
+            if pc is None:
+                return claim_id
+            if len(claim) > len(pc.claim) + 8:
+                pc.claim = claim
+            pc.confidence = max(pc.confidence, min(1.0, float(confidence)))
+            pc.category = pc.category or category
+            if pc.status not in HIDDEN_CLAIM_STATUSES:
+                pc.status = _stronger_status(pc.status, status)
+            pc.updated_at = now
+            pc.last_seen_at = now
+            if pc.first_seen_at is None:
+                pc.first_seen_at = now
+            ev_ids = _merge_unique(_json_list(pc.evidence_ids_json), evidence_ids)
+            pc.evidence_ids_json = json.dumps(ev_ids, ensure_ascii=False)
+            ev_days = _merge_unique(_json_list(pc.evidence_days_json), _evidence_days_for(evidence_ids, now))
+            pc.evidence_days_json = json.dumps(ev_days, ensure_ascii=False)
+            pc.evidence_count = max(len(ev_ids), pc.evidence_count or 0)
+            content = pc.claim
+            conf = pc.confidence
+            ev_json = pc.evidence_ids_json
+            meta = _claim_meta(pc, memory_key=memory_key)
+
+        if self._ltm is not None:
+            self._ltm.update(
+                self._claim_archive_id(claim_id),
+                content=content,
+                metadata={**meta, "confidence": conf, "evidence_ids": ev_json},
+            )
+        return claim_id
 
     def update_confidence(
         self,
@@ -122,24 +233,22 @@ class UserProfile:
                 return False
 
             pc.confidence = max(0.0, min(1.0, pc.confidence + delta))
-            pc.updated_at = utcnow()
+            now = utcnow()
+            pc.updated_at = now
 
             if new_evidence_id:
-                ev_ids: list[str] = json.loads(pc.evidence_ids_json or "[]")
-                if new_evidence_id not in ev_ids:
-                    ev_ids.append(new_evidence_id)
+                ev_ids = _merge_unique(_json_list(pc.evidence_ids_json), [new_evidence_id])
                 pc.evidence_ids_json = json.dumps(ev_ids, ensure_ascii=False)
+                ev_days = _merge_unique(_json_list(pc.evidence_days_json), [now.date().isoformat()])
+                pc.evidence_days_json = json.dumps(ev_days, ensure_ascii=False)
+                pc.evidence_count = max(len(ev_ids), pc.evidence_count or 0)
+                pc.last_seen_at = now
 
             # 同步更新档案层 metadata
             if self._ltm is not None:
                 self._ltm.update_metadata(
                     self._claim_archive_id(claim_id),
-                    {
-                        "type": "claim",
-                        "sql_id": claim_id,
-                        "confidence": pc.confidence,
-                        "evidence_ids": pc.evidence_ids_json or "[]",
-                    },
+                    _claim_meta(pc),
                 )
 
             return True
@@ -163,32 +272,66 @@ class UserProfile:
 
             if clean_claim is not None:
                 pc.claim = clean_claim
+                pc.category = _infer_claim_category(clean_claim)
             if confidence is not None:
                 pc.confidence = max(0.0, min(1.0, float(confidence)))
             pc.updated_at = utcnow()
 
-            evidence_ids = json.loads(pc.evidence_ids_json or "[]")
-            payload = {
-                "sql_id": pc.id,
-                "claim": pc.claim,
-                "confidence": pc.confidence,
-                "evidence_ids": evidence_ids,
-                "updated_at": pc.updated_at.isoformat() if pc.updated_at else None,
-            }
+            payload = _claim_payload(pc)
 
             if self._ltm is not None:
                 self._ltm.update(
                     self._claim_archive_id(claim_id),
                     content=pc.claim,
-                    metadata={
-                        "type": "claim",
-                        "sql_id": claim_id,
-                        "confidence": pc.confidence,
-                        "evidence_ids": pc.evidence_ids_json or "[]",
-                    },
+                    metadata=_claim_meta(pc),
                 )
 
             return payload
+
+    def mark_claim_conflicts(self, claim_ids: list[int], conflict_ids: list[int]) -> None:
+        """记录命题冲突关系,供晋升校验跳过 contested 命题。"""
+        clean_conflicts = [int(i) for i in conflict_ids if isinstance(i, int)]
+        with session_scope(self._engine) as s:
+            rows = s.query(ProfileClaim).filter(ProfileClaim.id.in_(claim_ids)).all()
+            for pc in rows:
+                existing = _json_int_list(pc.conflict_ids_json)
+                pc.conflict_ids_json = json.dumps(
+                    sorted(set(existing) | set(clean_conflicts) - {pc.id}),
+                    ensure_ascii=False,
+                )
+                pc.updated_at = utcnow()
+                if self._ltm is not None:
+                    self._ltm.update_metadata(self._claim_archive_id(pc.id), _claim_meta(pc))
+
+    def mark_claim_promotion_checked(self, claim_id: int) -> None:
+        """记录一次晋升检查。"""
+        with session_scope(self._engine) as s:
+            pc = s.query(ProfileClaim).filter_by(id=claim_id).one_or_none()
+            if pc is None:
+                return
+            pc.promotion_checked_at = utcnow()
+            if self._ltm is not None:
+                self._ltm.update_metadata(self._claim_archive_id(claim_id), _claim_meta(pc))
+
+    def mark_claim_promoted(self, claim_id: int, promoted_memory_id: str) -> bool:
+        """将动态命题标记为已晋升,前端和召回默认隐藏。"""
+        with session_scope(self._engine) as s:
+            pc = s.query(ProfileClaim).filter_by(id=claim_id).one_or_none()
+            if pc is None:
+                return False
+            now = utcnow()
+            pc.status = "promoted"
+            pc.promoted_memory_id = promoted_memory_id
+            pc.promotion_checked_at = now
+            pc.updated_at = now
+            payload = _claim_payload(pc)
+            if self._ltm is not None:
+                self._ltm.update(
+                    self._claim_archive_id(claim_id),
+                    content=pc.claim,
+                    metadata={**_claim_meta(pc), "status": "promoted"},
+                )
+            return bool(payload)
 
     def delete_claim(self, claim_id: int) -> bool:
         """删除动态命题,并同步删除档案层索引。"""
@@ -217,6 +360,8 @@ class UserProfile:
             for h in hits:
                 meta = h.get("metadata", {})
                 conf = meta.get("confidence", 0.0)
+                if meta.get("status", "active") not in VISIBLE_CLAIM_STATUSES:
+                    continue
                 if conf < min_confidence:
                     continue
                 ev_raw = meta.get("evidence_ids", "[]")
@@ -230,6 +375,11 @@ class UserProfile:
                         "claim": h["content"],
                         "confidence": conf,
                         "evidence_ids": ev_ids,
+                        "status": meta.get("status", "active"),
+                        "category": meta.get("category", "general"),
+                        "evidence_count": meta.get("evidence_count", len(ev_ids)),
+                        "first_seen_at": meta.get("first_seen_at"),
+                        "last_seen_at": meta.get("last_seen_at"),
                         "score": h["score"],
                     }
                 )
@@ -240,6 +390,7 @@ class UserProfile:
             pcs = (
                 s.query(ProfileClaim)
                 .filter(ProfileClaim.confidence >= min_confidence)
+                .filter(ProfileClaim.status.in_(VISIBLE_CLAIM_STATUSES))
                 .order_by(ProfileClaim.confidence.desc())
                 .limit(top_k)
                 .all()
@@ -249,28 +400,32 @@ class UserProfile:
                     "sql_id": pc.id,
                     "claim": pc.claim,
                     "confidence": pc.confidence,
-                    "evidence_ids": json.loads(pc.evidence_ids_json or "[]"),
+                    "evidence_ids": _json_list(pc.evidence_ids_json),
+                    "status": pc.status,
+                    "category": pc.category,
+                    "evidence_count": pc.evidence_count,
+                    "first_seen_at": _iso(pc.first_seen_at),
+                    "last_seen_at": _iso(pc.last_seen_at),
                     "score": pc.confidence,  # 降级时用置信度作为相关性分
                 }
                 for pc in pcs
             ]
 
     def get_all_claims(
-        self, min_confidence: float = 0.0
+        self,
+        min_confidence: float = 0.0,
+        *,
+        include_hidden: bool = True,
     ) -> list[dict[str, Any]]:
         """读取所有命题(按置信度降序)。"""
         with session_scope(self._engine) as s:
             q = s.query(ProfileClaim).order_by(ProfileClaim.confidence.desc())
             if min_confidence > 0:
                 q = q.filter(ProfileClaim.confidence >= min_confidence)
+            if not include_hidden:
+                q = q.filter(ProfileClaim.status.in_(VISIBLE_CLAIM_STATUSES))
             return [
-                {
-                    "sql_id": pc.id,
-                    "claim": pc.claim,
-                    "confidence": pc.confidence,
-                    "evidence_ids": json.loads(pc.evidence_ids_json or "[]"),
-                    "updated_at": pc.updated_at.isoformat() if pc.updated_at else None,
-                }
+                _claim_payload(pc)
                 for pc in q.all()
             ]
 
@@ -280,6 +435,7 @@ class UserProfile:
             low = (
                 s.query(ProfileClaim)
                 .filter(ProfileClaim.confidence < threshold)
+                .filter(ProfileClaim.status.in_(VISIBLE_CLAIM_STATUSES))
                 .all()
             )
             count = len(low)
@@ -292,3 +448,116 @@ class UserProfile:
 
     def _claim_archive_id(self, sql_id: int) -> str:
         return f"claim_{sql_id}"
+
+
+def _claim_payload(pc: ProfileClaim) -> dict[str, Any]:
+    return {
+        "sql_id": pc.id,
+        "claim": pc.claim,
+        "confidence": pc.confidence,
+        "evidence_ids": _json_list(pc.evidence_ids_json),
+        "status": pc.status or "active",
+        "category": pc.category or "general",
+        "evidence_count": pc.evidence_count or 0,
+        "evidence_days": _json_list(pc.evidence_days_json),
+        "conflict_ids": _json_int_list(pc.conflict_ids_json),
+        "first_seen_at": _iso(pc.first_seen_at),
+        "last_seen_at": _iso(pc.last_seen_at),
+        "promoted_memory_id": pc.promoted_memory_id,
+        "promotion_checked_at": _iso(pc.promotion_checked_at),
+        "updated_at": _iso(pc.updated_at),
+    }
+
+
+def _claim_meta(pc: ProfileClaim, *, memory_key: str | None = None) -> dict[str, Any]:
+    meta = _claim_payload(pc)
+    return {
+        **{k: v for k, v in meta.items() if v not in (None, "", [])},
+        "type": "claim",
+        "sql_id": pc.id,
+        "confidence": pc.confidence,
+        "evidence_ids": json.dumps(meta["evidence_ids"], ensure_ascii=False),
+        "memory_key": memory_key or make_memory_key("claim", pc.claim),
+        "source": "profile_claim",
+    }
+
+
+def _json_list(value: str | None) -> list[str]:
+    if not value:
+        return []
+    try:
+        parsed = json.loads(value)
+    except (json.JSONDecodeError, TypeError):
+        return []
+    if not isinstance(parsed, list):
+        return []
+    return [str(item) for item in parsed if str(item).strip()]
+
+
+def _json_int_list(value: str | None) -> list[int]:
+    out: list[int] = []
+    for item in _json_list(value):
+        try:
+            out.append(int(item))
+        except ValueError:
+            continue
+    return out
+
+
+def _merge_unique(old: list[str], new: list[str]) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in [*old, *new]:
+        clean = str(item).strip()
+        if not clean or clean in seen:
+            continue
+        seen.add(clean)
+        out.append(clean)
+    return out
+
+
+def _evidence_days_for(evidence_ids: list[str], now: datetime) -> list[str]:
+    return [now.date().isoformat()] if evidence_ids else []
+
+
+def _iso(value: datetime | None) -> str | None:
+    return value.isoformat(timespec="seconds") if value else None
+
+
+def _clean_status(value: str | None) -> str | None:
+    if not value:
+        return None
+    clean = value.strip()
+    allowed = VISIBLE_CLAIM_STATUSES | HIDDEN_CLAIM_STATUSES
+    return clean if clean in allowed else None
+
+
+def _clean_category(value: str | None) -> str | None:
+    if not value:
+        return None
+    clean = value.strip()
+    allowed = {"general", "fact", "preference", "relationship", "emotion_pattern", "task", "boundary"}
+    return clean if clean in allowed else None
+
+
+def _stronger_status(old: str | None, new: str) -> str:
+    order = {"candidate": 0, "active": 1, "stable": 2}
+    old_clean = old if old in order else "candidate"
+    return new if order.get(new, 0) > order.get(old_clean, 0) else old_clean
+
+
+def _infer_claim_category(claim: str) -> str:
+    text = claim or ""
+    if any(k in text for k in ("明天", "今天", "截止", "报告", "任务", "要做", "计划", "ddl", "DDL")):
+        return "task"
+    if any(k in text for k in ("不喜欢", "讨厌", "反感", "不要", "别", "边界", "越界")):
+        return "boundary"
+    if any(k in text for k in ("喜欢", "偏好", "更接受", "习惯", "倾向", "适合")):
+        return "preference"
+    if any(k in text for k in ("情绪", "焦虑", "低落", "压力", "崩溃", "累", "拖延")):
+        return "emotion_pattern"
+    if any(k in text for k in ("关系", "默契", "陪伴", "信任", "暗号")):
+        return "relationship"
+    if any(k in text for k in ("叫", "生日", "住在", "工作", "过敏", "不吃")):
+        return "fact"
+    return "general"
