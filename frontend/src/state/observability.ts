@@ -44,6 +44,7 @@ export const queryKeys = {
   status: ["status"],
   persona: ["persona"],
   profile: ["profile"],
+  messages: ["messages"],
   memory: ["memory"],
   reminders: ["reminders"],
   skills: ["skills"],

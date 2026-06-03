@@ -33,7 +33,7 @@ from mybuddy.emotion import build_emotional_support, support_system_hint
 from mybuddy.learning import Trajectory, TrajectoryLogger, TrajectoryStep
 from mybuddy.llm import BaseLLMProvider, Message, Role
 from mybuddy.memory import MemoryManager
-from mybuddy.storage import enqueue
+from mybuddy.storage import append_message, enqueue
 from mybuddy.tools import ToolRegistry
 
 from .context import build_messages, build_system_prompt
@@ -158,6 +158,14 @@ class Agent:
             traj.meta["related_claim_ids"] = list(related_claim_ids)
 
         # 4. 用户消息入记
+        self._persist_chat_message(
+            Role.USER,
+            user_input,
+            meta={
+                "turn_id": traj.turn_id,
+                "source": "chat",
+            },
+        )
         self._memory.add_message(Message(role=Role.USER, content=user_input))
 
         final_text = ""
@@ -184,6 +192,17 @@ class Agent:
             )
 
             if resp.text or resp.tool_calls:
+                self._persist_chat_message(
+                    Role.ASSISTANT,
+                    resp.text or "",
+                    meta={
+                        "turn_id": traj.turn_id,
+                        "step_index": _step,
+                        "finish_reason": resp.finish_reason,
+                        "tool_calls": [tc.model_dump() for tc in resp.tool_calls],
+                        "usage": resp.usage,
+                    },
+                )
                 self._memory.add_message(
                     Message(
                         role=Role.ASSISTANT,
@@ -200,6 +219,17 @@ class Agent:
 
             for tc in resp.tool_calls:
                 result_text = await self._registry.execute(tc.name, tc.arguments)
+                self._persist_chat_message(
+                    Role.TOOL,
+                    result_text,
+                    meta={
+                        "turn_id": traj.turn_id,
+                        "step_index": _step,
+                        "tool_call_id": tc.id,
+                        "tool_name": tc.name,
+                        "arguments": tc.arguments,
+                    },
+                )
                 for record in tool_call_records:
                     if record["id"] == tc.id:
                         record["result"] = result_text
@@ -220,6 +250,15 @@ class Agent:
         else:
             finish_reason = "max_steps"
             final_text = final_text or "(已达到最大推理步数)"
+            self._persist_chat_message(
+                Role.ASSISTANT,
+                final_text,
+                meta={
+                    "turn_id": traj.turn_id,
+                    "source": "agent_guard",
+                    "finish_reason": finish_reason,
+                },
+            )
 
         traj.final_response = final_text
         traj.finish_reason = finish_reason
@@ -247,6 +286,27 @@ class Agent:
     # -----------------------------------------------------------------
     # 情绪辅助
     # -----------------------------------------------------------------
+
+    def _persist_chat_message(
+        self,
+        role: Role,
+        content: str,
+        *,
+        meta: dict[str, Any] | None = None,
+    ) -> None:
+        """写入 SQLite 原始聊天主日志。"""
+        if self._engine is None:
+            return
+        try:
+            append_message(
+                self._engine,
+                session_id=self._session_id,
+                role=role.value,
+                content=content,
+                meta=meta,
+            )
+        except Exception:
+            logger.exception("persist chat message failed")
 
     async def _detect_emotion(self, user_input: str) -> EmotionResult | None:
         """跑情绪分类,写入 tracker,必要时触发离线 nudge。"""

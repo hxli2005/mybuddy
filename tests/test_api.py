@@ -15,7 +15,15 @@ from mybuddy.api import (
 from mybuddy.config import Config, load_config
 from mybuddy.learning import SkillRegistry
 from mybuddy.memory import LongTermMemory, UserProfile
-from mybuddy.storage import Note, ProfileClaim, ProfileField, Reminder, init_db, session_scope
+from mybuddy.storage import (
+    Message,
+    Note,
+    ProfileClaim,
+    ProfileField,
+    Reminder,
+    init_db,
+    session_scope,
+)
 from mybuddy.tools import set_context
 
 
@@ -220,6 +228,36 @@ def test_profile_claim_update_and_delete_payload_syncs_archive(tmp_path) -> None
 
     assert deleted["ok"] is True
     assert not ltm.search("开头讲不顺", mem_type="claim")
+
+
+def test_messages_payload_returns_raw_chat_log(tmp_path) -> None:
+    engine = init_db(str(tmp_path / "messages.db"))
+    state = AppState(config_path="config.yaml")
+    state.engine = engine
+    with session_scope(engine) as s:
+        s.add(
+            Message(
+                session_id="s1",
+                role="user",
+                content="你好",
+                meta_json='{"turn_id":"t1"}',
+            )
+        )
+        s.add(
+            Message(
+                session_id="s1",
+                role="assistant",
+                content="我在。",
+                meta_json='{"turn_id":"t1"}',
+            )
+        )
+
+    payload = state.messages_payload(limit=1)
+
+    assert len(payload["messages"]) == 1
+    assert payload["messages"][0]["role"] == "assistant"
+    assert payload["messages"][0]["content"] == "我在。"
+    assert payload["messages"][0]["meta"]["turn_id"] == "t1"
 
 
 def test_memory_update_and_delete_payload(tmp_path) -> None:

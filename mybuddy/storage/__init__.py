@@ -1,6 +1,7 @@
 """存储层:SQLite + SQLAlchemy。"""
 
 from .db import init_db, make_engine, session_scope
+from .messages import append_message, list_messages
 from .models import (
     Base,
     Message,
@@ -20,9 +21,11 @@ __all__ = [
     "ProfileClaim",
     "ProfileField",
     "Reminder",
+    "append_message",
     "drain_pending",
     "enqueue",
     "init_db",
+    "list_messages",
     "list_undelivered",
     "make_engine",
     "session_scope",

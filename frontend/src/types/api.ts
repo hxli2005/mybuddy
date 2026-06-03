@@ -65,6 +65,19 @@ export type ChatResponse = {
   pending_messages?: PendingMessage[];
 };
 
+export type ChatLogMessage = {
+  id: number;
+  session_id: string;
+  role: "user" | "assistant" | "tool" | "system" | string;
+  content: string;
+  meta?: Record<string, unknown>;
+  created_at?: string | null;
+};
+
+export type MessagesPayload = {
+  messages: ChatLogMessage[];
+};
+
 export type ProfileClaim = {
   sql_id?: number;
   claim: string;

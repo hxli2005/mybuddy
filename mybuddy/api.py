@@ -37,6 +37,7 @@ from mybuddy.storage import (
     Reminder,
     drain_pending,
     init_db,
+    list_messages,
     list_undelivered,
     session_scope,
 )
@@ -290,6 +291,10 @@ class AppState:
             "fields": p.get_all_fields(),
             "claims": p.get_all_claims(min_confidence=0.0, include_hidden=False)[:20],
         }
+
+    def messages_payload(self, *, limit: int = 100, session_id: str | None = None) -> dict[str, Any]:
+        engine = _require(self.engine)
+        return {"messages": list_messages(engine, limit=limit, session_id=session_id)}
 
     def update_profile_field_payload(self, key: str, value: str) -> dict[str, Any]:
         clean_key = key.strip()
@@ -604,6 +609,10 @@ def create_app(config_path: str = "config.yaml", max_steps: int = 6):
         if state.agent is None:
             raise HTTPException(status_code=400, detail="LLM api_key 未配置,无法对话")
         return await state.chat_payload(req.message)
+
+    @app.get("/api/messages")
+    async def messages(limit: int = 100, session_id: str | None = None) -> dict[str, Any]:
+        return state.messages_payload(limit=limit, session_id=session_id)
 
     @app.post("/api/feedback")
     async def feedback(req: FeedbackRequest) -> dict[str, Any]:

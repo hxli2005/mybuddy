@@ -12,7 +12,7 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import unquote
+from urllib.parse import parse_qs, unquote, urlparse
 
 from mybuddy.api import AppState, _frontend_index_path
 
@@ -29,34 +29,45 @@ class DemoHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:  # noqa: N802
         try:
-            if self.path == "/":
+            parsed = urlparse(self.path)
+            path = parsed.path
+            query = parse_qs(parsed.query)
+            if path == "/":
                 self._send_file(_frontend_index_path(self.server.frontend_dir))
                 return
-            if self.path.startswith("/static/"):
-                name = unquote(self.path.removeprefix("/static/"))
+            if path.startswith("/static/"):
+                name = unquote(path.removeprefix("/static/"))
                 dist_path = self.server.frontend_dir / "dist" / name
                 legacy_path = self.server.frontend_dir / name
                 self._send_file(dist_path if dist_path.exists() else legacy_path)
                 return
-            if self.path == "/api/status":
+            if path == "/api/status":
                 self._send_json(self.server.state.status_payload())
                 return
-            if self.path == "/api/persona":
+            if path == "/api/persona":
                 self._send_json(self.server.state.persona_payload())
                 return
-            if self.path == "/api/profile":
+            if path == "/api/profile":
                 self._send_json(self.server.state.profile_payload())
                 return
-            if self.path == "/api/memory":
+            if path == "/api/messages":
+                self._send_json(
+                    self.server.state.messages_payload(
+                        limit=_first_int(query.get("limit"), default=100),
+                        session_id=_first_str(query.get("session_id")),
+                    )
+                )
+                return
+            if path == "/api/memory":
                 self._send_json(self.server.state.memory_payload())
                 return
-            if self.path == "/api/reminders":
+            if path == "/api/reminders":
                 self._send_json(self.server.state.reminders_payload())
                 return
-            if self.path == "/api/skills":
+            if path == "/api/skills":
                 self._send_json(self.server.state.skills_payload())
                 return
-            if self.path == "/api/notes":
+            if path == "/api/notes":
                 self._send_json(self.server.state.notes_payload())
                 return
             self._send_error(HTTPStatus.NOT_FOUND, "not found")
@@ -251,3 +262,19 @@ def serve(
     finally:
         state.shutdown()
         server.server_close()
+
+
+def _first_int(values: list[str] | None, *, default: int) -> int:
+    if not values:
+        return default
+    try:
+        return int(values[0])
+    except (TypeError, ValueError):
+        return default
+
+
+def _first_str(values: list[str] | None) -> str | None:
+    if not values:
+        return None
+    clean = values[0].strip()
+    return clean or None

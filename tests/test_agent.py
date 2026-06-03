@@ -14,7 +14,8 @@ from mybuddy.config import Config
 from mybuddy.learning import TrajectoryLogger
 from mybuddy.llm import BaseLLMProvider, LLMResponse, Message, ToolCall, ToolSpec
 from mybuddy.memory import MemoryManager, ShortTermMemory, UserProfile
-from mybuddy.storage import init_db
+from mybuddy.storage import Message as DBMessage
+from mybuddy.storage import init_db, session_scope
 from mybuddy.tools import ToolRegistry, set_context, tool
 
 
@@ -101,6 +102,7 @@ async def test_agent_runs_tool_call_then_finishes(tmp_path) -> None:
         memory=memory,
         trajectory_logger=logger,
         max_steps=4,
+        engine=engine,
     )
 
     result = await agent.run("北京天气怎么样?")
@@ -120,6 +122,43 @@ async def test_agent_runs_tool_call_then_finishes(tmp_path) -> None:
     tool_msg = [m for m in second_call_msgs if m.role.value == "tool"]
     assert len(tool_msg) == 1
     assert "晴" in tool_msg[0].content
+
+    with session_scope(engine) as s:
+        rows = s.query(DBMessage).order_by(DBMessage.id.asc()).all()
+        assert [r.role for r in rows] == ["user", "assistant", "tool", "assistant"]
+        assert rows[0].content == "北京天气怎么样?"
+        assert rows[1].content == ""
+        assert rows[2].content
+        assert rows[3].content == "北京今天天气晴好~"
+
+
+@pytest.mark.asyncio
+async def test_agent_persists_plain_chat_messages(tmp_path) -> None:
+    cfg = Config()
+    engine = init_db(str(tmp_path / "plain_messages.db"))
+    set_context(engine=engine, config=cfg)
+
+    provider = ScriptedProvider([LLMResponse(text="你好，我在。", finish_reason="stop")])
+    memory = _make_memory(engine, cfg, provider)
+    logger = TrajectoryLogger(tmp_path / "traj")
+    agent = Agent(
+        provider=provider,
+        config=cfg,
+        registry=ToolRegistry(),
+        memory=memory,
+        trajectory_logger=logger,
+        engine=engine,
+    )
+
+    result = await agent.run("你好")
+
+    assert result.text == "你好，我在。"
+    with session_scope(engine) as s:
+        rows = s.query(DBMessage).order_by(DBMessage.id.asc()).all()
+        assert [r.role for r in rows] == ["user", "assistant"]
+        assert rows[0].content == "你好"
+        assert rows[1].content == "你好，我在。"
+        assert rows[0].session_id == agent.session_id
 
 
 @pytest.mark.asyncio

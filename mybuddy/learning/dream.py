@@ -435,8 +435,8 @@ class DreamJob:
     def _collect_today_messages(self) -> list[str]:
         """读 messages 表当天的 user/assistant 消息文本。
 
-        messages 表目前还没被 agent 写入(短期记忆在内存里),因此返回为空也正常;
-        未来 agent 持久化到 DB 后这里自动有数据。
+        SQLite messages 是原始聊天主日志;长期记忆 conversations/raw 是整理后的
+        记忆素材和可追溯档案。
         """
         today_start = utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
         with session_scope(self._engine) as s:

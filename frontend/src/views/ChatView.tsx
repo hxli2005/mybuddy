@@ -1,9 +1,10 @@
 import { CornerDownLeft, Send, ThumbsDown, ThumbsUp } from "lucide-react";
-import { useMutation } from "@tanstack/react-query";
-import { FormEvent, KeyboardEvent, useMemo, useState } from "react";
-import { sendChat, sendFeedback } from "../api/client";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { FormEvent, KeyboardEvent, useEffect, useMemo, useState } from "react";
+import { fetchMessages, sendChat, sendFeedback } from "../api/client";
 import { EmptyState, PageHeader, Panel } from "../components/Primitives";
-import type { ChatResponse, PendingMessage } from "../types/api";
+import { queryKeys } from "../state/observability";
+import type { ChatLogMessage, ChatResponse, PendingMessage } from "../types/api";
 
 type ChatMessage = {
   id: string;
@@ -18,10 +19,20 @@ type ChatViewProps = {
 const quickPrompts = ["帮我整理今天的状态", "提醒我晚点复盘", "把这段话记下来"];
 
 export function ChatView({ onChatResult }: ChatViewProps) {
+  const queryClient = useQueryClient();
   const [message, setMessage] = useState("");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [lastTurnId, setLastTurnId] = useState<string | null>(null);
   const [pendingBroadcasts, setPendingBroadcasts] = useState<PendingMessage[]>([]);
+  const historyQuery = useQuery({ queryKey: queryKeys.messages, queryFn: () => fetchMessages(100) });
+
+  useEffect(() => {
+    if (!historyQuery.data?.messages.length) return;
+    setMessages((current) => {
+      if (current.length) return current;
+      return historyQuery.data.messages.flatMap(historyMessageToChatMessage);
+    });
+  }, [historyQuery.data]);
 
   const chatMutation = useMutation({
     mutationFn: sendChat,
@@ -33,6 +44,7 @@ export function ChatView({ onChatResult }: ChatViewProps) {
         createMessage("assistant", data.text || "没有文本响应。"),
         ...(data.pending_messages || []).map((item) => createMessage("system", `${item.source}: ${item.content}`)),
       ]);
+      queryClient.invalidateQueries({ queryKey: queryKeys.messages });
       onChatResult(data);
     },
     onError: (error) => {
@@ -129,8 +141,8 @@ export function ChatView({ onChatResult }: ChatViewProps) {
               messages.map((item) => <MessageBubble item={item} key={item.id} />)
             ) : (
               <EmptyState
-                title="还没有开始"
-                text="先写一句话、一个念头，或直接选一个起手式。"
+                title={historyQuery.isLoading ? "正在读取历史" : "还没有开始"}
+                text={historyQuery.isLoading ? "正在从本地日志恢复对话。" : "先写一句话、一个念头，或直接选一个起手式。"}
                 action={
                   <div className="quick-prompts">
                     {quickPrompts.map((prompt) => (
@@ -225,6 +237,18 @@ function createMessage(role: ChatMessage["role"], text: string): ChatMessage {
     role,
     text,
   };
+}
+
+function historyMessageToChatMessage(item: ChatLogMessage): ChatMessage[] {
+  if (item.role !== "user" && item.role !== "assistant") return [];
+  if (!item.content.trim()) return [];
+  return [
+    {
+      id: `history-${item.id}`,
+      role: item.role,
+      text: item.content,
+    },
+  ];
 }
 
 function messageLabel(role: ChatMessage["role"]): string {

@@ -1,5 +1,6 @@
 import type {
   ChatResponse,
+  MessagesPayload,
   MemoryPayload,
   MemoryItem,
   Note,
@@ -151,6 +152,10 @@ export function sendChat(message: string): Promise<ChatResponse> {
     method: "POST",
     body: JSON.stringify({ message }),
   });
+}
+
+export function fetchMessages(limit = 100): Promise<MessagesPayload> {
+  return request<MessagesPayload>(`/api/messages?limit=${limit}`);
 }
 
 export function sendFeedback(label: string, turnId: string): Promise<{ ok: boolean }> {
