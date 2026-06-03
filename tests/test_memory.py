@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import sqlite3
 from typing import Any
 
 import pytest
@@ -21,7 +22,7 @@ from mybuddy.memory import (
     ShortTermMemory,
     UserProfile,
 )
-from mybuddy.storage import init_db
+from mybuddy.storage import ProfileClaim, init_db, session_scope
 
 # =============================================================================
 # Mock embedding function:旧接口兼容,当前文本存储不使用
@@ -375,6 +376,43 @@ def test_profile_claim_lifecycle_metadata(profile_with_ltm) -> None:
     assert claim["evidence_days"]
     assert claim["first_seen_at"]
     assert claim["last_seen_at"]
+
+
+def test_init_db_backfills_legacy_claim_evidence_metadata(tmp_path) -> None:
+    db_path = tmp_path / "legacy_claims.db"
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        "CREATE TABLE profile_claims ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "claim TEXT, "
+        "confidence FLOAT, "
+        "evidence_ids_json TEXT, "
+        "updated_at DATETIME)"
+    )
+    conn.execute(
+        "INSERT INTO profile_claims "
+        "(claim, confidence, evidence_ids_json, updated_at) "
+        "VALUES (?, ?, ?, ?)",
+        (
+            "用户不喜欢空泛鼓励",
+            0.7,
+            json.dumps(["turn_1", "turn_2"], ensure_ascii=False),
+            "2026-05-01 09:00:00",
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+    engine = init_db(str(db_path))
+
+    with session_scope(engine) as s:
+        claim = s.query(ProfileClaim).one()
+        assert claim.status == "active"
+        assert claim.category == "general"
+        assert claim.evidence_count == 2
+        assert json.loads(claim.evidence_days_json or "[]") == ["2026-05-01"]
+        assert claim.first_seen_at is not None
+        assert claim.last_seen_at is not None
 
 
 def test_profile_update_confidence(profile_with_ltm) -> None:

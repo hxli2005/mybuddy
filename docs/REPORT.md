@@ -14,9 +14,9 @@
 
 ## 1. 项目是什么(30 秒电梯陈述)
 
-- Python 3.12 + CLI 交互 + SQLite / Chroma 本地存储
-- 技术路线:**Hermes tool-call 协议 + OpenManus ReAct 循环 + 自研分层记忆 + Hermes Agent 四要素自学习**
-- 覆盖 **M1–M7** 七个里程碑,当前 MVP 状态,日常可自用
+- Python 3.12 + CLI + 本地 Web 前端 + SQLite / 文本 archive 本地存储
+- 技术路线:**Hermes tool-call 协议 + ReAct 循环 + 自研分层记忆 + 关系编排 + 动态命题治理**
+- 当前是单用户本地可演示版本,日常可自用
 
 > 这东西跑在我自己机器上,每天能用。底座是 Claude API,LLM 层做了 provider 抽象,未来本地 Hermes 模型(vLLM / llama.cpp)零改动就能切。
 
@@ -30,7 +30,7 @@
 - 给自己用 → 闭环反馈 → 能持续演化
 
 **技术判断**
-- Hermes / OpenManus / Letta / mem0 这些开源项目**思路值得借鉴,但直接 fork 的成本大于收益**:基础设施可以直接用(Chroma / APScheduler / embedding model),核心循环自研保证可控
+- Hermes / OpenManus / Letta / mem0 这些开源项目**思路值得借鉴,但直接 fork 的成本大于收益**:基础设施可以直接用(APScheduler / SQLite / 文本档案),核心循环自研保证可控
 - 选 Python + CLI 不是因为简单,是因为**交互链路最短,测试最容易**
 
 > 不想再做一个 ChatGPT 套壳。差异点不是 prompt,是**记忆结构 + 主动性 + 反馈回流** —— 这三件事决定了它是不是"一个小伙伴",而不是"又一个聊天框"。
@@ -45,15 +45,15 @@
 |---|---|
 | M1 基础骨架 | Provider 抽象 + SQLite + CLI |
 | M2 Agent 闭环 | ReAct 循环 + 工具注册表 + trajectory 采集 |
-| M3 分层记忆 | 短期 + Chroma 长期 + 混合画像 + 事实自抽取 |
+| M3 分层记忆 | 短期 + raw/conversations/archive 文本长期记忆 + 混合画像 + 事实自抽取 |
 | M4 调度 + Dream Job | APScheduler + 每日早安 + 夜间五件事 |
 | M5 情绪 + 反馈总线 | 情绪分类 + consecutive-negative nudge + FeedbackBus |
 | M6 Skills 子系统 | 自生长 skill + 自动归档 + curator 复盘 |
-| M7 MVP 收尾 | 8 个工具 + 3 组 admin CLI |
+| M7 MVP 收尾 | 8 个工具 + 3 组 admin CLI + 本地 Web 管理界面 |
+| 关系/记忆治理 | 乙女式关系编排 + 关系记忆 + 动态命题生命周期与晋升 |
 
 **关键数字**
-- 主代码 **4984 行**,测试代码 **2856 行**
-- **118 个测试用例全绿**
+- 当前测试基线:**162 个测试用例全绿**
 - 8 个工具:`weather / set_reminder / recall_memory / write_note / search_notes / translate / web_search / list_skills`
 - 7 个顶级命令:`version / init / chat / dream / profile / reminders / skills`
 
@@ -66,10 +66,10 @@
 ### (a) 分层记忆
 
 - **短期** `deque(maxlen=N)` — 滚动窗口
-- **长期** Chroma + BGE-M3 嵌入 — 语义检索
-- **用户画像** = 核心字段(hard facts,SQLite KV) + 动态命题(soft claims,带置信度 + 证据链,**同步索引到 Chroma**)
+- **长期** `raw/` + `conversations/` + `archive/` 文本档案 — 可追溯、可人工审查
+- **用户画像** = 核心字段(hard facts,SQLite KV) + 动态命题(soft claims,带置信度、证据时间、冲突关系和晋升状态,**同步写入 archive**)
 
-命题的 `confidence` 随证据增减,新来 `+0.05` / 无新证据 `-0.05`,低于 0.3 被 Dream Job 归档。
+命题的 `confidence` 随证据增减,近期证据 `+0.05` / 无近期证据 `-0.05`,低于 0.3 被 Dream Job 归档;满足证据数、跨日证据、置信度和无冲突条件后,会晋升为长期记忆或关系规则。
 
 > 不做"一个大 vector DB 装一切"—— 因为结构化字段(名字、过敏、生日)就该是 KV,推测性的"这人可能周日情绪低"才是带置信度的命题。两种东西混在一起的系统最后都会崩。
 
@@ -111,7 +111,7 @@
   - `MockEmbedding` —— 128 维确定性 hash,绕开 BGE-M3 下载(~2GB)
   - `httpx.MockTransport` —— 伪造 open-meteo / DuckDuckGo 响应
   - `typer.testing.CliRunner` —— 子命令端到端
-- **容错**:外部 API 全部有降级;LLM 失败不阻塞主对话;Chroma 不一致时 SQLite 是 source of truth;Dream Job 每一步 try/except 隔离
+- **容错**:外部 API 全部有降级;LLM 失败不阻塞主对话;画像以 SQLite 为 source of truth,archive 作为可检索档案;Dream Job 每一步 try/except 隔离
 - **可观测**:trajectory 全量 JSONL 按天落盘;emotion / triggered_skills / related_claim_ids 都写到轨迹 meta
 - **配置外置**:YAML + `${ENV_VAR}` 展开;`tools.weather_mock` / `api_key` 等开关分离
 
@@ -140,7 +140,7 @@
 - **BGE-M3 首次加载 ~2GB**:真机第一次启动慢,后续缓存 OK;已有测试用 MockEmbedding 绕开
 - **单进程 CLI 假设**:多用户 / 并发场景没设计;skill 的 `.md` 文件并发写有风险
 - **抄思路不 fork 的代价**:上游 bugfix 享受不到,换来的是可控小内核
-- **M8 没做**:HTTP API、本地 Hermes 适配层、轨迹导出 DPO/SFT 格式 —— 这三件事是"下一步选项",不是漏做
+- **多用户没做**:当前仍是单用户本地流程;多用户、多角色、权限隔离和并发写入还没有设计
 
 > 不是所有东西都做了。该做但没做的事情我都写在这里,不藏。
 

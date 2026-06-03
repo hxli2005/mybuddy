@@ -11,14 +11,16 @@
 
 from __future__ import annotations
 
-from mybuddy.learning import FeedbackEvent, make_skill_subscriber
+import pytest
+
+from mybuddy.learning import FeedbackEvent, SkillCurator, make_skill_subscriber
 from mybuddy.learning.skills import (
     ARCHIVE_MIN_SAMPLES,
     CONFIDENCE_ARCHIVE_FLOOR,
     Skill,
     SkillRegistry,
 )
-
+from mybuddy.learning.trajectory import Trajectory, TrajectoryStep
 
 # =============================================================================
 # Skill 序列化
@@ -316,11 +318,6 @@ def test_feedback_subscriber_unknown_skill_is_silent(tmp_path) -> None:
 # =============================================================================
 # SkillCurator
 # =============================================================================
-
-import pytest
-
-from mybuddy.learning import SkillCurator
-from mybuddy.learning.trajectory import Trajectory, TrajectoryStep
 
 
 class _ScriptedProvider:

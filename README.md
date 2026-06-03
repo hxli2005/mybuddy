@@ -1,6 +1,6 @@
 # MyBuddy
 
-生活陪伴型 AI 小伙伴。借鉴 [NousResearch Hermes Agent](https://github.com/nousresearch/hermes-agent) 的自学习机制 + 自研分层记忆系统。
+生活陪伴型 AI 小伙伴。借鉴 [NousResearch Hermes Agent](https://github.com/nousresearch/hermes-agent) 的自学习机制,并加入角色关系编排、分层文本记忆、动态命题治理和本地前端。
 
 ## 设计文档
 
@@ -26,4 +26,9 @@ uv run mybuddy web
 
 ## 项目状态
 
-CLI 形态 MVP 已完成,并提供本地演示前端。
+当前是单用户本地可演示版本:
+
+- CLI + Web 前端均可运行。
+- 长期记忆使用 `raw/`、`conversations/`、`archive/` 三层文本档案。
+- 用户画像包含稳定字段和动态命题,动态命题支持证据时间、置信度、冲突检查和晋升为长期记忆。
+- 角色陪伴链路已接入关系记忆、私人暗号、未完成话题和事件式主动消息。

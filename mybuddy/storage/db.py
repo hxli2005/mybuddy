@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterator
 from contextlib import contextmanager
+from datetime import datetime
 from pathlib import Path
 
 from sqlalchemy import Engine, create_engine, inspect, text
 from sqlalchemy.orm import Session, sessionmaker
+
+from mybuddy._time import utcnow
 
 from .models import Base
 
@@ -75,3 +79,50 @@ def _ensure_profile_claim_columns(engine: Engine) -> None:
                 f"last_seen_at = COALESCE(last_seen_at, {now_expr})"
             )
         )
+        rows = conn.execute(
+            text(
+                "SELECT id, evidence_ids_json, evidence_count, evidence_days_json, updated_at "
+                "FROM profile_claims"
+            )
+        ).mappings()
+        for row in rows:
+            evidence_ids = _json_list(row.get("evidence_ids_json"))
+            if not evidence_ids:
+                continue
+            updates: dict[str, object] = {}
+            if not row.get("evidence_count"):
+                updates["evidence_count"] = len(evidence_ids)
+            if not _json_list(row.get("evidence_days_json")):
+                updates["evidence_days_json"] = json.dumps(
+                    [_date_string(row.get("updated_at"))],
+                    ensure_ascii=False,
+                )
+            if not updates:
+                continue
+            updates["id"] = row["id"]
+            assignments = ", ".join(f"{key} = :{key}" for key in updates if key != "id")
+            conn.execute(text(f"UPDATE profile_claims SET {assignments} WHERE id = :id"), updates)
+
+
+def _json_list(value: object) -> list[str]:
+    if not value:
+        return []
+    try:
+        parsed = json.loads(str(value))
+    except (json.JSONDecodeError, TypeError):
+        return []
+    if not isinstance(parsed, list):
+        return []
+    return [str(item) for item in parsed if str(item).strip()]
+
+
+def _date_string(value: object) -> str:
+    if isinstance(value, datetime):
+        return value.date().isoformat()
+    text = str(value or "").strip()
+    if not text:
+        return utcnow().date().isoformat()
+    try:
+        return datetime.fromisoformat(text).date().isoformat()
+    except ValueError:
+        return text[:10]

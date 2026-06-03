@@ -17,7 +17,6 @@ from mybuddy.storage import init_db
 
 from .test_memory import mock_embed
 
-
 # ---- bus ----
 
 def test_bus_publishes_to_all_subscribers() -> None:

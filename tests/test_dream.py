@@ -7,10 +7,12 @@ LLM 用 ScriptedProvider,Chroma 用 MockEmbedding;验证的是执行后观察到
 from __future__ import annotations
 
 import json
+from datetime import timedelta
 from typing import Any
 
 import pytest
 
+from mybuddy._time import utcnow
 from mybuddy.config import Config
 from mybuddy.learning import DreamJob
 from mybuddy.llm import BaseLLMProvider, LLMResponse, Message, ToolSpec
@@ -93,18 +95,37 @@ async def test_dedup_merges_similar_memories(dream_env) -> None:
 async def test_recompute_confidence_decays_old_claims(dream_env) -> None:
     engine, cfg, ltm, profile = dream_env
 
-    # 新命题(刚写入,updated_at=now) → 应 +BOOST
-    # 无法伪造"旧"命题(SQLAlchemy onupdate=utcnow),但验证新命题 confidence 变化即可
-    cid = profile.add_claim("用户周日情绪偏低", confidence=0.5)
+    cid = profile.add_claim("用户周日情绪偏低", confidence=0.5, evidence_ids=["turn_1"])
+    old_seen = utcnow() - timedelta(days=30)
+    with session_scope(engine) as s:
+        row = s.query(ProfileClaim).filter_by(id=cid).one()
+        row.last_seen_at = old_seen
+        row.evidence_days_json = json.dumps([old_seen.date().isoformat()], ensure_ascii=False)
 
-    provider = ScriptedProvider(["[]", "[]", "[]"])
+    provider = ScriptedProvider([])
     job = DreamJob(engine=engine, config=cfg, provider=provider, ltm=ltm, profile=profile)
     report = await job.run()
 
     assert report.confidence_updates >= 1
     claims_after = profile.get_all_claims()
-    # 新命题 last_update 在 cutoff 内 → +BOOST,应 > 0.5
     match = next((c for c in claims_after if c["sql_id"] == cid), None)
+    assert match is not None
+    assert match["confidence"] < 0.5
+    assert match["last_seen_at"].startswith(old_seen.date().isoformat())
+
+
+@pytest.mark.asyncio
+async def test_recompute_confidence_boosts_recent_evidence(dream_env) -> None:
+    engine, cfg, ltm, profile = dream_env
+
+    cid = profile.add_claim("用户周日情绪偏低", confidence=0.5, evidence_ids=["turn_1"])
+
+    provider = ScriptedProvider([])
+    job = DreamJob(engine=engine, config=cfg, provider=provider, ltm=ltm, profile=profile)
+    report = await job.run()
+
+    assert report.confidence_updates >= 1
+    match = next((c for c in profile.get_all_claims() if c["sql_id"] == cid), None)
     assert match is not None
     assert match["confidence"] > 0.5
 
@@ -141,6 +162,32 @@ async def test_insights_generated_and_added(dream_env) -> None:
     assert report.insights_added == 2
     after = len(profile.get_all_claims())
     assert after - before == 2
+
+
+@pytest.mark.asyncio
+async def test_insights_generation_has_hard_limit(dream_env) -> None:
+    engine, cfg, ltm, profile = dream_env
+
+    profile.add_claim("用户偏好简洁沟通", confidence=0.6)
+    profile.add_claim("用户对海鲜过敏", confidence=0.8)
+
+    from mybuddy.storage import Message as DBMessage
+
+    with session_scope(engine) as s:
+        s.add(DBMessage(session_id="t", role="user", content="今天聊了很多近况"))
+
+    items = [
+        {"claim": f"用户观察 {i}", "confidence": 0.4}
+        for i in range(5)
+    ]
+    provider = ScriptedProvider(["[]", json.dumps(items, ensure_ascii=False)])
+
+    before = len(profile.get_all_claims())
+    job = DreamJob(engine=engine, config=cfg, provider=provider, ltm=ltm, profile=profile)
+    report = await job.run()
+
+    assert report.insights_added == 3
+    assert len(profile.get_all_claims()) - before == 3
 
 
 @pytest.mark.asyncio

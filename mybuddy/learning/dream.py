@@ -44,6 +44,7 @@ CONFIDENCE_BOOST = 0.05     # 有新证据时的加强量
 CONFLICT_PENALTY = 0.2
 NUDGE_COUNT = 2
 DYNAMIC_COUNT = 1
+INSIGHT_COUNT = 3
 CLAIM_PROMOTION_LIMIT = 3
 PROMOTION_CONFIDENCE = 0.75
 PROMOTION_EVIDENCE_COUNT = 3
@@ -200,15 +201,10 @@ class DreamJob:
         updated = 0
 
         for c in claims:
-            # updated_at 近期 = 最近有新证据写入 → +BOOST
+            # last_seen_at / evidence_days 近期 = 最近有新证据写入 → +BOOST
             # 否则 → -DECAY
-            updated_iso = c.get("updated_at")
-            try:
-                last_update = datetime.fromisoformat(updated_iso) if updated_iso else None
-            except (TypeError, ValueError):
-                last_update = None
-
-            has_recent = last_update is not None and last_update >= cutoff
+            # 注意: updated_at 会被置信度重算本身刷新,不能作为证据时间。
+            has_recent = _has_recent_claim_evidence(c, cutoff)
             delta = CONFIDENCE_BOOST if has_recent else -CONFIDENCE_DECAY
 
             if self._profile.update_confidence(c["sql_id"], delta):
@@ -331,7 +327,7 @@ class DreamJob:
             return
 
         added = 0
-        for it in items:
+        for it in items[:INSIGHT_COUNT]:
             if not isinstance(it, dict):
                 continue
             claim = it.get("claim")
@@ -518,6 +514,43 @@ def _first_contact_reason(items: list[dict[str, Any]]) -> str:
         if reason:
             return str(reason)
     return "open_thread"
+
+
+def _has_recent_claim_evidence(claim: dict[str, Any], cutoff: datetime) -> bool:
+    evidence_time = _latest_claim_evidence_time(claim)
+    return evidence_time is not None and evidence_time >= cutoff
+
+
+def _latest_claim_evidence_time(claim: dict[str, Any]) -> datetime | None:
+    times: list[datetime] = []
+    evidence_days = claim.get("evidence_days")
+    if isinstance(evidence_days, list):
+        for value in evidence_days:
+            parsed = _parse_claim_time(value)
+            if parsed is not None:
+                times.append(parsed)
+
+    last_seen = _parse_claim_time(claim.get("last_seen_at"))
+    if last_seen is not None:
+        times.append(last_seen)
+
+    return max(times) if times else None
+
+
+def _parse_claim_time(value: Any) -> datetime | None:
+    if not value:
+        return None
+    if isinstance(value, datetime):
+        return value
+    text = str(value).strip()
+    if not text:
+        return None
+    if len(text) == 10:
+        text = f"{text}T23:59:59"
+    try:
+        return datetime.fromisoformat(text)
+    except ValueError:
+        return None
 
 
 def _claim_passes_promotion_checks(claim: dict[str, Any]) -> bool:

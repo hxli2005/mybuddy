@@ -223,7 +223,7 @@ function ClaimCard({
     <article className="list-card claim-card">
       <header>
         <ConfidenceMeter value={claim.confidence || 0} />
-        <span>claim</span>
+        <span>观察</span>
       </header>
       {id && editing ? (
         <>
