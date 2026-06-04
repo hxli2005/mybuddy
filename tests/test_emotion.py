@@ -11,12 +11,13 @@ from mybuddy.emotion import (
     build_emotional_support,
     support_system_hint,
 )
-from mybuddy.llm import BaseLLMProvider, LLMResponse, Message, ToolSpec
+from mybuddy.llm import BaseLLMProvider, LLMResponse, Message, Role, ToolSpec
 
 
 class ScriptedProvider(BaseLLMProvider):
     def __init__(self, texts: list[str]) -> None:
         self._texts = list(texts)
+        self.calls: list[dict] = []
 
     async def generate(
         self,
@@ -28,6 +29,7 @@ class ScriptedProvider(BaseLLMProvider):
         max_tokens: int | None = None,
         system: str | None = None,
     ) -> LLMResponse:
+        self.calls.append({"messages": list(messages), "system": system})
         text = self._texts.pop(0) if self._texts else "{}"
         return LLMResponse(text=text, finish_reason="stop")
 
@@ -44,6 +46,29 @@ async def test_detector_parses_valid_json() -> None:
     assert r.label == "negative"
     assert r.strength == 0.7
     assert r.is_negative
+
+
+@pytest.mark.asyncio
+async def test_detector_includes_recent_context_when_available() -> None:
+    provider = ScriptedProvider([
+        '{"label": "negative", "strength": 0.6, "reason": "延续受挫"}'
+    ])
+    det = EmotionDetector(provider)
+
+    r = await det.classify(
+        "算了",
+        context=[
+            Message(role=Role.USER, content="昨天汇报又卡住了"),
+            Message(role=Role.ASSISTANT, content="先别急,我们拆小一点。"),
+        ],
+    )
+
+    prompt_text = provider.calls[0]["messages"][0].content
+    assert r.label == "negative"
+    assert "最近对话上下文" in prompt_text
+    assert "昨天汇报又卡住了" in prompt_text
+    assert "当前用户消息" in prompt_text
+    assert "算了" in prompt_text
 
 
 @pytest.mark.asyncio
@@ -115,7 +140,7 @@ async def test_detector_disables_after_auth_error() -> None:
 
         async def generate(self, *a, **k):
             self.calls += 1
-            raise AuthError("invalid api_key sk-testsecret123")
+            raise AuthError("invalid credentials")
 
     provider = AuthProvider()
     det = EmotionDetector(provider)

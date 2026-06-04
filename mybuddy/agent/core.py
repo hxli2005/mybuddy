@@ -37,6 +37,13 @@ from mybuddy.storage import append_message, enqueue
 from mybuddy.tools import ToolRegistry
 
 from .context import build_messages, build_system_prompt
+from .search import (
+    build_search_context,
+    build_unavailable_search_context,
+    classify_search_need,
+    extract_search_sources,
+    search_result_count,
+)
 
 if TYPE_CHECKING:
     from sqlalchemy import Engine
@@ -61,6 +68,7 @@ class AgentResult:
     emotional_support: dict[str, Any] | None
     related_claim_ids: list[int]
     triggered_skills: list[str]
+    search_sources: list[dict[str, str]]
 
     def __init__(
         self,
@@ -73,6 +81,7 @@ class AgentResult:
         emotional_support: dict[str, Any] | None = None,
         related_claim_ids: list[int] | None = None,
         triggered_skills: list[str] | None = None,
+        search_sources: list[dict[str, str]] | None = None,
     ) -> None:
         self.text = text
         self.steps = steps
@@ -83,6 +92,7 @@ class AgentResult:
         self.emotional_support = emotional_support
         self.related_claim_ids = related_claim_ids or []
         self.triggered_skills = triggered_skills or []
+        self.search_sources = search_sources or []
 
 
 class Agent:
@@ -132,6 +142,7 @@ class Agent:
         emotion_hint = self._emotion_system_hint(emotion)
         emotional_support = build_emotional_support(user_input, emotion)
         support_hint = support_system_hint(emotional_support)
+        all_tool_calls: list[dict[str, Any]] = []
 
         # 2. 检索记忆上下文(text + 本轮相关 claim_ids)
         memory_context, related_claim_ids = self._memory.build_context_section(user_input)
@@ -139,9 +150,22 @@ class Agent:
         # 3. Skill 匹配(可选)
         skill_hint, triggered_skills = self._match_skills(user_input, emotion)
 
-        # 4. 合并 system prompt:人设 + 记忆 + 情绪 + skill
+        # 4. 时效事实预检索:不要把新闻/最新信息完全交给模型自由决定是否调用工具
+        search_context, search_call, search_sources = await self._prefetch_web_search(user_input)
+        if search_call is not None:
+            all_tool_calls.append(search_call)
+
+        # 5. 合并 system prompt:人设 + 记忆 + 情绪 + skill + 外部资料
         extras = "\n\n".join(
-            x for x in (memory_context, emotion_hint, support_hint, skill_hint) if x
+            x
+            for x in (
+                memory_context,
+                search_context,
+                emotion_hint,
+                support_hint,
+                skill_hint,
+            )
+            if x
         )
         system = build_system_prompt(self._config.persona, extras)
         traj = self._logger.start(
@@ -156,8 +180,15 @@ class Agent:
             traj.meta["triggered_skills"] = list(triggered_skills)
         if related_claim_ids:
             traj.meta["related_claim_ids"] = list(related_claim_ids)
+        if search_call is not None:
+            traj.meta["search"] = {
+                "level": search_call.get("decision_level"),
+                "reason": search_call.get("decision_reason"),
+                "topic": search_call.get("decision_topic"),
+                "result_count": search_call.get("result_count", 0),
+            }
 
-        # 4. 用户消息入记
+        # 6. 用户消息入记
         self._persist_chat_message(
             Role.USER,
             user_input,
@@ -170,7 +201,6 @@ class Agent:
 
         final_text = ""
         finish_reason = "stop"
-        all_tool_calls: list[dict[str, Any]] = []
 
         for _step in range(self._max_steps):
             messages = build_messages(self._memory.get_recent_messages())
@@ -201,6 +231,11 @@ class Agent:
                         "finish_reason": resp.finish_reason,
                         "tool_calls": [tc.model_dump() for tc in resp.tool_calls],
                         "usage": resp.usage,
+                        **(
+                            {"search_sources": search_sources}
+                            if search_sources and not resp.tool_calls
+                            else {}
+                        ),
                     },
                 )
                 self._memory.add_message(
@@ -281,6 +316,7 @@ class Agent:
             emotional_support=emotional_support.to_dict(),
             related_claim_ids=related_claim_ids,
             triggered_skills=triggered_skills,
+            search_sources=search_sources,
         )
 
     # -----------------------------------------------------------------
@@ -312,7 +348,10 @@ class Agent:
         """跑情绪分类,写入 tracker,必要时触发离线 nudge。"""
         if self._emotion_detector is None:
             return None
-        result = await self._emotion_detector.classify(user_input)
+        result = await self._emotion_detector.classify(
+            user_input,
+            context=self._memory.get_recent_messages(),
+        )
         if self._emotion_tracker is not None:
             self._emotion_tracker.add(result)
             if (
@@ -337,6 +376,57 @@ class Agent:
             else "用户这句话情绪偏低。用角色内表达放轻话题,避免模板化共情句。"
         )
         return f"## 内部情绪提示\n{extra}"
+
+    async def _prefetch_web_search(
+        self,
+        user_input: str,
+    ) -> tuple[str, dict[str, Any] | None, list[dict[str, str]]]:
+        interest_topics = self._interest_topics()
+        decision = classify_search_need(user_input, interest_topics=interest_topics)
+        if decision.level == "none":
+            return "", None, []
+
+        if self._registry.get("web_search") is None:
+            if decision.level == "must":
+                return build_unavailable_search_context(decision, query=user_input), None, []
+            return "", None, []
+
+        args = {
+            "query": user_input,
+            "max_results": self._config.tools.web_search_max_results,
+        }
+        result_text = await self._registry.execute("web_search", args)
+        context = build_search_context(
+            decision,
+            query=user_input,
+            result_text=result_text,
+            max_items=self._config.tools.web_search_max_results,
+        )
+        sources = extract_search_sources(
+            result_text,
+            max_items=self._config.tools.web_search_max_results,
+        )
+        return context, {
+            "id": "prefetch_web_search",
+            "name": "web_search",
+            "arguments": args,
+            "result": result_text,
+            "source": "backend_search_prefetch",
+            "decision_level": decision.level,
+            "decision_reason": decision.reason,
+            "decision_topic": decision.topic,
+            "result_count": search_result_count(result_text),
+        }, sources
+
+    def _interest_topics(self) -> list[str]:
+        getter = getattr(self._memory, "interest_topics", None)
+        if getter is None:
+            return []
+        try:
+            return list(getter())
+        except Exception:
+            logger.exception("collect interest topics failed")
+            return []
 
     # -----------------------------------------------------------------
     # M6 Skill 匹配 & curator 触发
@@ -380,7 +470,11 @@ class Agent:
             return
         if finish_reason != "stop":
             return
-        if len(all_tool_calls) < CURATOR_TOOL_CALL_THRESHOLD:
+        eligible_tool_calls = [
+            call for call in all_tool_calls
+            if call.get("source") != "backend_search_prefetch"
+        ]
+        if len(eligible_tool_calls) < CURATOR_TOOL_CALL_THRESHOLD:
             return
         try:
             asyncio.create_task(self._skill_curator.maybe_curate(traj))

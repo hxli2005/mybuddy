@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import TYPE_CHECKING
 
 from mybuddy.memory.extractor import RELATIONSHIP_MEMORY_TYPES, FactExtractor
@@ -263,6 +264,33 @@ class MemoryManager:
     def long_term(self) -> LongTermMemory:
         return self._ltm
 
+    def interest_topics(self, *, limit: int = 12) -> list[str]:
+        """从画像和长期记忆中提取用户明确表达过兴趣的主题词。"""
+        topics: list[str] = []
+        if hasattr(self, "_profile") and self._profile is not None:
+            fields = self._profile.get_all_fields()
+            for key, value in fields.items():
+                if _interest_key(key):
+                    topics.extend(_split_topic_candidates(value))
+                topics.extend(_extract_interest_topics_from_text(f"{key}:{value}"))
+
+            for claim in self._profile.get_all_claims(
+                min_confidence=0.45,
+                include_hidden=False,
+            ):
+                text = str(claim.get("claim") or "")
+                category = str(claim.get("category") or "")
+                if category == "preference" or _interest_text(text):
+                    topics.extend(_extract_interest_topics_from_text(text))
+
+        if self._ltm is not None:
+            for item in self._ltm.list_all(mem_type="memory")[:80]:
+                text = str(item.get("content") or "")
+                if _interest_text(text):
+                    topics.extend(_extract_interest_topics_from_text(text))
+
+        return _dedupe_topics(topics, limit=limit)
+
     def _ensure_governance_state(self) -> None:
         """补齐记忆治理状态,兼容绕过 __init__ 的测试替身。"""
         if not hasattr(self, "_recent_turn_ids"):
@@ -376,6 +404,89 @@ def _relation_item_to_card(item: dict) -> tuple[str, dict]:
         meta["keywords"] = keywords[:12]
         meta["tags"] = keywords[:6]
     return content, meta
+
+
+_INTEREST_KEYWORDS = (
+    "喜欢",
+    "感兴趣",
+    "关注",
+    "在玩",
+    "正在玩",
+    "常聊",
+    "沉迷",
+    "追",
+    "爱看",
+    "爱玩",
+    "想玩",
+)
+_INTEREST_KEY_RE = re.compile(r"(兴趣|爱好|喜欢|关注|游戏|作品|番剧|漫画|模型|产品)")
+_NEGATIVE_INTEREST_RE = re.compile(r"(不喜欢|讨厌|反感|不感兴趣|不要|避雷)")
+_INTEREST_PHRASE_RE = re.compile(
+    r"(?:用户|我|他|她)?(?:最近|一直|正在|现在|平时|可能)?"
+    r"(?:喜欢|感兴趣|关注|在玩|正在玩|常聊|沉迷|追|爱看|爱玩|想玩|偏好)"
+    r"[:：]?(?P<topic>[^,，。；;\n]{2,36})"
+)
+_TOPIC_SPLIT_RE = re.compile(r"[、,/，;；\n]|和|以及|还有")
+
+
+def _interest_key(key: str) -> bool:
+    return bool(_INTEREST_KEY_RE.search(key or ""))
+
+
+def _interest_text(text: str) -> bool:
+    clean = text or ""
+    if _NEGATIVE_INTEREST_RE.search(clean):
+        return False
+    return any(marker in clean for marker in _INTEREST_KEYWORDS)
+
+
+def _extract_interest_topics_from_text(text: str) -> list[str]:
+    if not _interest_text(text):
+        return []
+    topics: list[str] = []
+    for match in _INTEREST_PHRASE_RE.finditer(text):
+        topics.extend(_split_topic_candidates(match.group("topic")))
+    return topics
+
+
+def _split_topic_candidates(text: str) -> list[str]:
+    candidates: list[str] = []
+    for part in _TOPIC_SPLIT_RE.split(text or ""):
+        clean = _clean_topic(part)
+        if clean:
+            candidates.append(clean)
+    return candidates
+
+
+def _clean_topic(value: str) -> str:
+    clean = re.sub(
+        r"^(用户|我|他|她)?(最近|一直|正在|现在|平时|可能)?",
+        "",
+        value or "",
+    ).strip(" ：:，,。；;、")
+    clean = re.sub(r"(这类|相关|内容|游戏|作品)?(的话题|相关内容|这件事)$", "", clean).strip()
+    if not (2 <= len(clean) <= 24):
+        return ""
+    if _NEGATIVE_INTEREST_RE.search(clean):
+        return ""
+    if clean in {"用户", "自己", "事情", "东西", "内容", "话题"}:
+        return ""
+    return clean
+
+
+def _dedupe_topics(topics: list[str], *, limit: int) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for topic in topics:
+        clean = _clean_topic(topic)
+        key = re.sub(r"\s+", "", clean).lower()
+        if not clean or key in seen:
+            continue
+        seen.add(key)
+        out.append(clean)
+        if len(out) >= limit:
+            break
+    return out
 
 
 def _clamp_float(value: object, low: float, high: float) -> float:

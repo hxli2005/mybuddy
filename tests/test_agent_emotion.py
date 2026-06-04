@@ -187,6 +187,50 @@ async def test_single_negative_doesnt_trigger_nudge(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_agent_passes_recent_dialogue_to_emotion_detector(tmp_path) -> None:
+    cfg = Config()
+    engine = init_db(str(tmp_path / "ctx.db"))
+    set_context(engine=engine, config=cfg)
+
+    provider = StubProvider()
+    provider.emotion_responses = [
+        '{"label": "negative", "strength": 0.6, "reason": "受挫"}',
+        '{"label": "negative", "strength": 0.7, "reason": "延续"}',
+    ]
+    provider.chat_responses = [
+        LLMResponse(text="先停一下。", finish_reason="stop"),
+        LLMResponse(text="我懂。", finish_reason="stop"),
+    ]
+
+    memory = _make_memory(engine, cfg, provider)
+    logger = TrajectoryLogger(tmp_path / "traj")
+    agent = Agent(
+        provider=provider,
+        config=cfg,
+        registry=ToolRegistry(),
+        memory=memory,
+        trajectory_logger=logger,
+        emotion_detector=EmotionDetector(provider),
+        emotion_tracker=EmotionTracker(),
+        engine=engine,
+    )
+
+    await agent.run("昨天汇报又卡住了")
+    await agent.run("算了")
+
+    emotion_calls = [
+        call for call in provider.calls
+        if "情绪识别" in call["system"]
+    ]
+    second_input = emotion_calls[1]["messages"][0].content
+    assert "最近对话上下文" in second_input
+    assert "昨天汇报又卡住了" in second_input
+    assert "先停一下。" in second_input
+    assert "当前用户消息" in second_input
+    assert "算了" in second_input
+
+
+@pytest.mark.asyncio
 async def test_agent_without_emotion_system_still_works(tmp_path) -> None:
     """没传 emotion_detector 时,Agent 依然能正常 run(兼容旧行为)。"""
     cfg = Config()

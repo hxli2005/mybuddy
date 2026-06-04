@@ -18,19 +18,21 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from mybuddy.llm import BaseLLMProvider
+    from mybuddy.llm import BaseLLMProvider, Message
 
 logger = logging.getLogger(__name__)
 
 
-EMOTION_PROMPT = """你是一个情绪识别助手。判断以下用户消息的情绪,严格输出 JSON:
+EMOTION_PROMPT = """你是一个情绪识别助手。判断当前用户消息的情绪,严格输出 JSON:
 
 {"label": "positive|neutral|negative", "strength": 0.0-1.0, "reason": "不超过 15 字的判断依据"}
 
 规则:
 - label 必须是三选一
 - strength 表示强度:中性话题给 0.0-0.2,轻度情绪给 0.3-0.5,强烈情绪给 0.6-1.0
-- 只看用户当前这条消息,不揣测外部信息
+- 可以参考最近对话上下文理解省略、短句和延续情绪,但当前用户消息权重最高
+- 不要把已经缓和的旧负面情绪强加到当前消息;如果上下文与当前消息冲突,以当前消息为准
+- 不揣测外部信息,不做诊断
 - 不要输出 JSON 以外的任何文本
 """
 
@@ -66,7 +68,12 @@ class EmotionDetector:
         self._small_model = small_model
         self._disabled_after_auth_error = False
 
-    async def classify(self, text: str) -> EmotionResult:
+    async def classify(
+        self,
+        text: str,
+        *,
+        context: list[Message] | None = None,
+    ) -> EmotionResult:
         if not text or not text.strip():
             return EmotionResult()
         if self._disabled_after_auth_error:
@@ -76,7 +83,7 @@ class EmotionDetector:
 
         try:
             resp = await self._provider.generate(
-                messages=[Message(role=Role.USER, content=text)],
+                messages=[Message(role=Role.USER, content=_build_input(text, context))],
                 system=EMOTION_PROMPT,
                 temperature=0.0,
                 model=self._small_model or None,
@@ -98,6 +105,40 @@ class EmotionDetector:
             return EmotionResult()
 
         return _parse(resp.text)
+
+
+def _build_input(text: str, context: list[Message] | None = None) -> str:
+    context_lines = _format_context(context or [])
+    current = (text or "").strip()
+    if not context_lines:
+        return f"当前用户消息:\n{current}"
+    return (
+        "最近对话上下文(仅用于理解省略和情绪延续):\n"
+        f"{context_lines}\n\n"
+        "当前用户消息:\n"
+        f"{current}"
+    )
+
+
+def _format_context(context: list[Message]) -> str:
+    from mybuddy.llm import Role
+
+    lines: list[str] = []
+    for msg in context[-8:]:
+        if msg.role not in {Role.USER, Role.ASSISTANT}:
+            continue
+        content = " ".join((msg.content or "").split())
+        if not content:
+            continue
+        label = "用户" if msg.role == Role.USER else "小布"
+        lines.append(f"- {label}:{_clip(content, 120)}")
+    return "\n".join(lines[-6:])
+
+
+def _clip(text: str, limit: int) -> str:
+    if len(text) <= limit:
+        return text
+    return text[:limit] + "..."
 
 
 def _parse(text: str) -> EmotionResult:

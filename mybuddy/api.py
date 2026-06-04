@@ -265,6 +265,7 @@ class AppState:
             "emotional_support": result.emotional_support,
             "related_claim_ids": result.related_claim_ids,
             "triggered_skills": result.triggered_skills,
+            "search_sources": result.search_sources,
             "pending_messages": pending_before + pending_after,
         }
 

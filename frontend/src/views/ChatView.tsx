@@ -4,12 +4,13 @@ import { FormEvent, KeyboardEvent, useEffect, useMemo, useState } from "react";
 import { fetchMessages, sendChat, sendFeedback } from "../api/client";
 import { EmptyState, PageHeader, Panel } from "../components/Primitives";
 import { queryKeys } from "../state/observability";
-import type { ChatLogMessage, ChatResponse, PendingMessage } from "../types/api";
+import type { ChatLogMessage, ChatResponse, PendingMessage, SearchSource } from "../types/api";
 
 type ChatMessage = {
   id: string;
   role: "user" | "assistant" | "system";
   text: string;
+  sources?: SearchSource[];
 };
 
 type ChatViewProps = {
@@ -17,12 +18,18 @@ type ChatViewProps = {
 };
 
 const quickPrompts = ["帮我整理今天的状态", "提醒我晚点复盘", "把这段话记下来"];
+const defaultPendingStatus = "正在组织回复。";
+const explicitSearchPattern = /(查一下|搜一下|搜索|上网|新闻|热搜|热点|链接|出处|来源|引用|官网|官方|current|latest|news|search|source|link)/i;
+const timeSensitivePattern =
+  /(最新|最近|现在|目前|当前|今天|昨天|刚刚|实时|今年).*(政策|法规|价格|股价|汇率|版本|发布|比赛|赛程|榜单|公司|产品|模型|论文|事件|事故|争议|口碑|趋势)|(政策|法规|价格|股价|汇率|版本|发布会|比赛|赛程|榜单|CEO|总统|总理|产品|模型|论文|口碑|趋势)/i;
+const interestFactPattern = /(剧情|设定|角色|卡牌|卡池|活动|机制|攻略|技能|数值|时间线|结局|主线|支线|声优|讲什么|哪张|哪个)/i;
 
 export function ChatView({ onChatResult }: ChatViewProps) {
   const queryClient = useQueryClient();
   const [message, setMessage] = useState("");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [lastTurnId, setLastTurnId] = useState<string | null>(null);
+  const [pendingStatus, setPendingStatus] = useState(defaultPendingStatus);
   const [pendingBroadcasts, setPendingBroadcasts] = useState<PendingMessage[]>([]);
   const historyQuery = useQuery({ queryKey: queryKeys.messages, queryFn: () => fetchMessages(100) });
 
@@ -41,7 +48,7 @@ export function ChatView({ onChatResult }: ChatViewProps) {
       setPendingBroadcasts(data.pending_messages || []);
       setMessages((current) => [
         ...current,
-        createMessage("assistant", data.text || "没有文本响应。"),
+        createMessage("assistant", data.text || "没有文本响应。", data.search_sources || []),
         ...(data.pending_messages || []).map((item) => createMessage("system", `${item.source}: ${item.content}`)),
       ]);
       queryClient.invalidateQueries({ queryKey: queryKeys.messages });
@@ -52,6 +59,9 @@ export function ChatView({ onChatResult }: ChatViewProps) {
         ...current,
         createMessage("system", error instanceof Error ? error.message : String(error)),
       ]);
+    },
+    onSettled: () => {
+      setPendingStatus(defaultPendingStatus);
     },
   });
 
@@ -84,6 +94,7 @@ export function ChatView({ onChatResult }: ChatViewProps) {
     const clean = nextMessage.trim();
     if (!clean || chatMutation.isPending) return;
     setMessage("");
+    setPendingStatus(pendingStatusFor(clean));
     setMessages((current) => [...current, createMessage("user", clean)]);
     chatMutation.mutate(clean);
   }
@@ -157,7 +168,7 @@ export function ChatView({ onChatResult }: ChatViewProps) {
             {chatMutation.isPending ? (
               <article className="message assistant pending">
                 <span className="message-meta">MyBuddy</span>
-                <p>正在组织回复。</p>
+                <p>{pendingStatus}</p>
               </article>
             ) : null}
           </div>
@@ -218,6 +229,26 @@ function MessageBubble({ item }: { item: ChatMessage }) {
     <article className={`message ${item.role}`}>
       <span className="message-meta">{messageLabel(item.role)}</span>
       <p>{item.text}</p>
+      {item.role === "assistant" && item.sources?.length ? (
+        <details className="message-sources">
+          <summary>资料来源</summary>
+          <ol>
+            {item.sources.map((source, index) => (
+              <li key={`${source.url}-${index}`}>
+                {source.url ? (
+                  <a href={source.url} rel="noreferrer" target="_blank">
+                    {source.title || source.url}
+                  </a>
+                ) : (
+                  <strong>{source.title}</strong>
+                )}
+                {source.date ? <span>{source.date}</span> : null}
+                {source.snippet ? <p>{source.snippet}</p> : null}
+              </li>
+            ))}
+          </ol>
+        </details>
+      ) : null}
     </article>
   );
 }
@@ -231,12 +262,18 @@ function ThreadCount({ label, value }: { label: string; value: number }) {
   );
 }
 
-function createMessage(role: ChatMessage["role"], text: string): ChatMessage {
+function createMessage(role: ChatMessage["role"], text: string, sources: SearchSource[] = []): ChatMessage {
   return {
     id: `${role}-${Date.now()}-${Math.random().toString(36).slice(2)}`,
     role,
     text,
+    sources,
   };
+}
+
+function pendingStatusFor(text: string): string {
+  if (explicitSearchPattern.test(text) || timeSensitivePattern.test(text) || interestFactPattern.test(text)) return "正在看资料。";
+  return defaultPendingStatus;
 }
 
 function historyMessageToChatMessage(item: ChatLogMessage): ChatMessage[] {
@@ -247,8 +284,25 @@ function historyMessageToChatMessage(item: ChatLogMessage): ChatMessage[] {
       id: `history-${item.id}`,
       role: item.role,
       text: item.content,
+      sources: normalizeSearchSources(item.meta?.search_sources),
     },
   ];
+}
+
+function normalizeSearchSources(value: unknown): SearchSource[] {
+  if (!Array.isArray(value)) return [];
+  const sources: SearchSource[] = [];
+  for (const item of value) {
+    if (!item || typeof item !== "object") continue;
+    const raw = item as Record<string, unknown>;
+    const title = String(raw.title || "").trim();
+    const url = String(raw.url || "").trim();
+    const snippet = String(raw.snippet || "").trim();
+    const date = String(raw.date || "").trim();
+    if (!url && !title) continue;
+    sources.push({ title: title || url, url, snippet, date });
+  }
+  return sources;
 }
 
 function messageLabel(role: ChatMessage["role"]): string {

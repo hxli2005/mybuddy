@@ -5,11 +5,18 @@ M3:接入 MemoryManager,每次推理前检索长期记忆和用户画像,注入 
 
 from __future__ import annotations
 
+from datetime import datetime
+
 from mybuddy.config import PersonaConfig
 from mybuddy.llm import Message
 
 
-def build_system_prompt(persona: PersonaConfig, memory_context: str = "") -> str:
+def build_system_prompt(
+    persona: PersonaConfig,
+    memory_context: str = "",
+    *,
+    now: datetime | None = None,
+) -> str:
     """把人设配置拼成 system prompt。
 
     memory_context 为 MemoryManager.build_context_section() 的输出,
@@ -18,6 +25,7 @@ def build_system_prompt(persona: PersonaConfig, memory_context: str = "") -> str
     role = persona.roleplay_style
     life = persona.character_life
     relationship = persona.relationship_model
+    time_block = _time_block(now)
     habits_block = _list_block("回应习惯", persona.response_habits)
     trait_block = _list_block("性格质感", role.personality_traits)
     speech_block = _list_block("说话方式", role.speech_style)
@@ -40,6 +48,7 @@ def build_system_prompt(persona: PersonaConfig, memory_context: str = "") -> str
         f"称呼用户:{persona.address_user}\n"
         f"整体风格:{persona.style}\n"
         f"语气细节:{persona.tone}\n"
+        f"{time_block}"
         f"\n角色此刻的生活状态:\n"
         f"- 今天状态:{life.today_status}\n"
         f"- 当前心情:{life.current_mood}\n"
@@ -62,11 +71,24 @@ def build_system_prompt(persona: PersonaConfig, memory_context: str = "") -> str
         f"边界:{persona.boundaries}\n"
         "\n工具使用:\n"
         "- 用户请求设置提醒、查询天气等具体事项时,调用对应工具。\n"
+        "- 涉及新闻、最新事实、价格、政策、版本、职位变动或其他时效信息时,优先依据外部资料检索段;没有资料就不要装作确认。\n"
         "- 日常对话直接回答即可,不要为了展示能力强行使用工具。"
     )
     if memory_context:
         return base + "\n\n" + memory_context
     return base
+
+
+def _time_block(now: datetime | None = None) -> str:
+    current = now or datetime.now().astimezone()
+    tz_name = current.tzname() or "local"
+    return (
+        "\n当前时间:\n"
+        f"- 日期:{current.date().isoformat()}\n"
+        f"- 时间:{current.strftime('%H:%M')}\n"
+        f"- 时区:{tz_name}\n"
+        f"- 星期:{_weekday_zh(current.weekday())}\n"
+    )
 
 
 def build_messages(history: list[Message]) -> list[Message]:
@@ -82,6 +104,13 @@ def _list_block(title: str, items: list[str]) -> str:
     if not lines:
         return ""
     return "\n" + title + ":\n" + "\n".join(f"- {line}" for line in lines) + "\n"
+
+
+def _weekday_zh(index: int) -> str:
+    names = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
+    if 0 <= index < len(names):
+        return names[index]
+    return "未知"
 
 
 def _examples_block(examples: list) -> str:

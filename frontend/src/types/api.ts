@@ -29,6 +29,13 @@ export type ToolCall = {
   source?: string;
 };
 
+export type SearchSource = {
+  title: string;
+  url: string;
+  snippet?: string;
+  date?: string;
+};
+
 export type Emotion = {
   label?: string;
   strength?: number;
@@ -62,6 +69,7 @@ export type ChatResponse = {
   emotional_support?: EmotionalSupport | null;
   related_claim_ids?: number[];
   triggered_skills?: string[];
+  search_sources?: SearchSource[];
   pending_messages?: PendingMessage[];
 };
 
