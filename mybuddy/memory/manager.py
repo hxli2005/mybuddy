@@ -79,13 +79,16 @@ class MemoryManager:
         """构建注入 system prompt 的记忆上下文文本块。
 
         返回 (text, related_claim_ids):
-          text:包含长期记忆 / 用户画像 / 命题三段,空段自动省略
-          related_claim_ids:本轮命中的命题 sql_id 列表,供 FeedbackBus 反馈回写使用
+          text:包含少量相关长期记忆和用户画像字段,空段自动省略
+          related_claim_ids:兼容旧反馈链路;最简记忆下通常为空
 
-        关系陪伴优先级:
-          1. 未完成话题 / 共同经历 / 私人暗号 / 避免事项
-          2. 关系线索 / 角色线索
-          3. 普通长期记忆 / 用户画像 / 动态命题
+        最简记忆优先级:
+          1. 未完成话题(open_thread):最多 1 条,必须有具体由头。
+          2. 共同经历(shared_moment):最多 1 条,用于轻轻回响。
+          3. 偏好与避雷(preference):最多 2 条,包含旧 anti_preference。
+          4. 关于用户(profile/memory/profile_fields):最多 2 条,只取相关内容。
+
+        动态命题保留在后台画像中,不再直接注入主 prompt,避免给用户贴标签。
         """
         self._ensure_governance_state()
         parts: list[str] = []
@@ -99,56 +102,33 @@ class MemoryManager:
                 "- 使用记忆时要像自然想起旧事,不要把记忆条目逐条汇报给用户。"
             )
 
-        relation_sections = [
-            ("open_thread", "## 未完成话题(有具体由头才提)", 2),
-            ("shared_moment", "## 共同经历(可轻轻回响)", 2),
-            ("private_code", "## 私人暗号", 2),
-            ("anti_preference", "## 避免事项", 3),
-            ("relationship_note", "## 关系线索", 2),
-            ("character_note", "## 角色侧线索", 1),
-        ]
         if self._ltm is not None:
             self._governance.refresh_open_thread_lifecycle()
-        for mem_type, title, limit in relation_sections:
-            hits = self._relationship_hits(user_input, mem_type, top_k=limit)
+
+        core_sections = [
+            (("open_thread",), "## 未完成话题(有具体由头才提)", 1),
+            (("shared_moment",), "## 共同经历(可轻轻回响)", 1),
+            (
+                ("preference", "anti_preference"),
+                "## 偏好与避雷",
+                2,
+            ),
+            (("profile", "memory"), "## 关于用户", 2),
+        ]
+        for mem_types, title, limit in core_sections:
+            hits = self._memory_hits(user_input, mem_types, top_k=limit)
             if hits:
                 lines = [title]
                 lines.extend(f"- {_format_memory_hit(h)}" for h in hits)
                 parts.append("\n".join(lines))
 
-        # 1. 长期记忆检索
-        mem_hits = self._ltm.search(
-            user_input,
-            top_k=self._config.memory.long_term_top_k,
-            mem_type="memory",
-        ) if self._ltm is not None else []
-        if mem_hits:
-            mem_lines = ["## 相关历史记忆"]
-            for h in mem_hits:
-                if h["score"] < 0.3:
-                    continue
-                mem_lines.append(f"- {h['content']}")
-            if len(mem_lines) > 1:
-                parts.append("\n".join(mem_lines))
-
-        # 2. 用户画像核心字段
         fields = self._profile.get_all_fields()
-        if fields:
+        relevant_fields = _relevant_profile_fields(fields, user_input, limit=2)
+        if relevant_fields:
             field_lines = ["## 用户画像"]
-            for k, v in fields.items():
+            for k, v in relevant_fields.items():
                 field_lines.append(f"- {k}: {v}")
             parts.append("\n".join(field_lines))
-
-        # 3. 与当前话题相关的命题(语义搜索, confidence >= 0.5)
-        claim_hits = self._profile.search_claims(user_input, top_k=5, min_confidence=0.5)
-        if claim_hits:
-            claim_lines = ["## 关于用户的认知(仅供参考)"]
-            for c in claim_hits:
-                claim_lines.append(f"- {c['claim']} (置信度 {c['confidence']:.0%})")
-                sid = c.get("sql_id")
-                if isinstance(sid, int):
-                    related_claim_ids.append(sid)
-            parts.append("\n".join(claim_lines))
 
         text = "\n\n".join(parts) if parts else ""
         return text, related_claim_ids
@@ -204,7 +184,7 @@ class MemoryManager:
             for fact in result.facts:
                 self._governance.add_or_merge(
                     fact,
-                    mem_type="memory",
+                    mem_type="profile",
                     session_id=self._session_id,
                     source="fact_extraction",
                     extra_meta={"source_turn_ids": list(self._recent_turn_ids)},
@@ -218,6 +198,8 @@ class MemoryManager:
         for claim_data in result.claims:
             if isinstance(claim_data, dict) and "claim" in claim_data:
                 conf = float(claim_data.get("confidence", 0.5))
+                if conf < 0.65 or not self._recent_turn_ids:
+                    continue
                 self._profile.add_claim(
                     claim_data["claim"],
                     confidence=conf,
@@ -227,6 +209,9 @@ class MemoryManager:
         relationship_count = 0
         if self._ltm is not None:
             for mem_type in RELATIONSHIP_MEMORY_TYPES:
+                target_type = _core_memory_type(mem_type)
+                if target_type is None:
+                    continue
                 for item in result.relationship_memories.get(mem_type, []):
                     content, meta = _relation_item_to_card(item)
                     if not content:
@@ -234,7 +219,7 @@ class MemoryManager:
                     meta.setdefault("source_turn_ids", list(self._recent_turn_ids))
                     self._governance.add_or_merge(
                         content,
-                        mem_type=mem_type,
+                        mem_type=target_type,
                         session_id=self._session_id,
                         source="relationship_extraction",
                         extra_meta=meta,
@@ -284,10 +269,11 @@ class MemoryManager:
                     topics.extend(_extract_interest_topics_from_text(text))
 
         if self._ltm is not None:
-            for item in self._ltm.list_all(mem_type="memory")[:80]:
-                text = str(item.get("content") or "")
-                if _interest_text(text):
-                    topics.extend(_extract_interest_topics_from_text(text))
+            for mem_type in ("profile", "memory", "preference"):
+                for item in self._ltm.list_all(mem_type=mem_type)[:80]:
+                    text = str(item.get("content") or "")
+                    if _interest_text(text):
+                        topics.extend(_extract_interest_topics_from_text(text))
 
         return _dedupe_topics(topics, limit=limit)
 
@@ -298,27 +284,57 @@ class MemoryManager:
         if not hasattr(self, "_governance") and self._ltm is not None:
             self._governance = MemoryGovernance(self._ltm)
 
-    def _relationship_hits(
+    def _memory_hits(
         self,
         user_input: str,
-        mem_type: str,
+        mem_types: tuple[str, ...],
         *,
         top_k: int,
     ) -> list[dict]:
         if self._ltm is None:
             return []
-        hits = [
-            h for h in self._ltm.search(user_input, top_k=top_k, mem_type=mem_type)
-            if h.get("score", 0) >= 0.25
-        ]
+        hits_by_id: dict[str, dict] = {}
+        for mem_type in mem_types:
+            for hit in self._ltm.search(user_input, top_k=top_k, mem_type=mem_type):
+                if hit.get("score", 0) < 0.25:
+                    continue
+                uid = str(hit.get("id") or "")
+                if not uid or uid in hits_by_id:
+                    continue
+                hits_by_id[uid] = hit
+        hits = sorted(
+            hits_by_id.values(),
+            key=lambda h: (
+                h.get("score", 0),
+                (h.get("metadata") or {}).get("importance", 0),
+                (h.get("metadata") or {}).get("updated_at", ""),
+            ),
+            reverse=True,
+        )
         if hits:
             return hits[:top_k]
-        if mem_type not in {"open_thread", "shared_moment", "anti_preference", "private_code"}:
+
+        fallback_types = {
+            "open_thread",
+            "shared_moment",
+            "preference",
+            "anti_preference",
+        }
+        if not any(mem_type in fallback_types for mem_type in mem_types):
             return []
-        fallback = [
-            item for item in self._ltm.list_all(mem_type=mem_type)
-            if (item.get("metadata") or {}).get("status", "active") == "active"
-        ]
+        fallback: list[dict] = []
+        seen: set[str] = set()
+        for mem_type in mem_types:
+            if mem_type not in fallback_types:
+                continue
+            for item in self._ltm.list_all(mem_type=mem_type):
+                if (item.get("metadata") or {}).get("status", "active") != "active":
+                    continue
+                uid = str(item.get("id") or "")
+                if not uid or uid in seen:
+                    continue
+                seen.add(uid)
+                fallback.append(item)
         fallback.sort(
             key=lambda item: (item.get("metadata") or {}).get("updated_at", ""),
             reverse=True,
@@ -341,6 +357,43 @@ def _infer_scene(user_input: str) -> str:
     if any(k in text for k in ("提醒", "天气", "查", "帮我")):
         return "用户有现实任务;完成任务时保持角色口吻,不要变成工具播报。"
     return ""
+
+
+def _core_memory_type(mem_type: str) -> str | None:
+    if mem_type in {"profile", "preference", "shared_moment", "open_thread"}:
+        return mem_type
+    if mem_type in {"anti_preference", "relationship_note"}:
+        return "preference"
+    if mem_type == "memory":
+        return "profile"
+    return None
+
+
+def _relevant_profile_fields(
+    fields: dict[str, str],
+    user_input: str,
+    *,
+    limit: int,
+) -> dict[str, str]:
+    if not fields:
+        return {}
+    q_tokens = set(_simple_tokens(user_input))
+    scored: list[tuple[int, str, str]] = []
+    stable_keys = {"名字", "称呼", "生日", "职业", "身份", "过敏"}
+    for key, value in fields.items():
+        text = f"{key} {value}"
+        tokens = set(_simple_tokens(text))
+        score = len(q_tokens & tokens)
+        if key in stable_keys:
+            score += 1
+        if score > 0:
+            scored.append((score, key, value))
+    scored.sort(key=lambda item: item[0], reverse=True)
+    return {key: value for _, key, value in scored[:limit]}
+
+
+def _simple_tokens(text: str) -> list[str]:
+    return re.findall(r"[\u4e00-\u9fff]{1,2}|[a-zA-Z0-9_]+", text or "")
 
 
 def _format_memory_hit(hit: dict) -> str:

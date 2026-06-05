@@ -10,17 +10,15 @@ import {
   LoadingState,
   PageHeader,
   Panel,
-  SegmentedControl,
   Tags,
 } from "../components/Primitives";
 import { queryKeys } from "../state/observability";
 import type { MemoryItem } from "../types/api";
 
-type MemoryTab = "archive" | "conversations" | "raw";
+type MemoryKind = "profile" | "preference" | "shared_moment" | "open_thread";
 
 export function MemoryView() {
   const queryClient = useQueryClient();
-  const [tab, setTab] = useState<MemoryTab>("archive");
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draftContent, setDraftContent] = useState("");
   const query = useQuery({ queryKey: queryKeys.memory, queryFn: fetchMemory });
@@ -43,12 +41,7 @@ export function MemoryView() {
   if (query.isLoading) return <LoadingState label="正在读取记忆" />;
   if (query.error) return <ErrorState error={query.error} />;
   const data = query.data;
-
-  const tabItems = [
-    { value: "archive" as const, label: "档案", count: data?.archive.length || 0 },
-    { value: "conversations" as const, label: "会话原文", count: data?.conversations.length || 0 },
-    { value: "raw" as const, label: "原始记录", count: data?.raw.length || 0 },
-  ];
+  const groups = memoryGroups(data?.archive || []);
 
   function startEdit(id: string, content: string) {
     setEditingId(id);
@@ -64,38 +57,39 @@ export function MemoryView() {
   return (
     <section className="view">
       <PageHeader
-        actions={<SegmentedControl items={tabItems} label="记忆分类" onChange={setTab} value={tab} />}
-        description="长期记忆是后续回复的素材；这里优先暴露可校正内容。"
+        description="这里只放会影响后续回复的少量长期记忆。改掉或删除后，小布就不会继续按旧内容回应。"
         title="记忆"
       />
 
-      {tab === "archive" ? (
-        <Panel title="档案记忆" description="编辑或删除会影响后续画像与召回。">
-          {data?.archive.length ? (
-            <div className="memory-grid">
-              {data.archive.map((item) => (
-                <MemoryCard
-                  deletePending={deleteMutation.isPending}
-                  editing={editingId === item.id}
-                  item={item}
-                  key={item.id}
-                  onCancel={() => setEditingId(null)}
-                  onDelete={() => deleteMutation.mutate(item.id)}
-                  onDraft={setDraftContent}
-                  onEdit={() => startEdit(item.id, item.content)}
-                  onSave={() => saveEdit(item.id)}
-                  savePending={updateMutation.isPending}
-                  value={draftContent}
-                />
-              ))}
-            </div>
-          ) : (
-            <EmptyState title="暂无档案记忆" text="有价值的长期上下文会在这里聚合。" />
-          )}
-        </Panel>
+      {groups.some((group) => group.items.length) ? (
+        groups.map((group) => (
+          <Panel description={group.description} key={group.id} title={group.title}>
+            {group.items.length ? (
+              <div className="memory-grid">
+                {group.items.map((item) => (
+                  <MemoryCard
+                    deletePending={deleteMutation.isPending}
+                    editing={editingId === item.id}
+                    item={item}
+                    key={item.id}
+                    onCancel={() => setEditingId(null)}
+                    onDelete={() => deleteMutation.mutate(item.id)}
+                    onDraft={setDraftContent}
+                    onEdit={() => startEdit(item.id, item.content)}
+                    onSave={() => saveEdit(item.id)}
+                    savePending={updateMutation.isPending}
+                    value={draftContent}
+                  />
+                ))}
+              </div>
+            ) : (
+              <EmptyState title="暂时为空" text="相关内容出现后会自动沉淀到这里。" />
+            )}
+          </Panel>
+        ))
       ) : (
-        <Panel title={tab === "conversations" ? "会话原文" : "原始记录"} description="只读调试视图，用于核对提取来源。">
-          <pre className="json-panel">{JSON.stringify(data?.[tab] || [], null, 2)}</pre>
+        <Panel title="还没有长期记忆" description="普通聊天不会全部进入记忆，只有明确、可复用的内容才会留下。">
+          <EmptyState title="暂无记忆" text="继续聊天后，小布会逐渐记住少量重要信息。" />
         </Panel>
       )}
     </section>
@@ -131,7 +125,7 @@ function MemoryCard({
   return (
     <article className="list-card memory-card">
       <header>
-        <strong>{String(item.metadata?.type || "memory")}</strong>
+        <strong>{memoryKindLabel(memoryKind(item))}</strong>
         {typeof item.score === "number" ? <span>{item.score.toFixed(2)}</span> : null}
       </header>
       {editing ? (
@@ -175,6 +169,66 @@ function MemoryCard({
       )}
     </article>
   );
+}
+
+function memoryGroups(items: MemoryItem[]) {
+  const groups: Array<{
+    id: MemoryKind;
+    title: string;
+    description: string;
+    items: MemoryItem[];
+  }> = [
+    {
+      id: "profile",
+      title: "关于你",
+      description: "稳定事实和明确背景，不放临时情绪。",
+      items: [] as MemoryItem[],
+    },
+    {
+      id: "preference",
+      title: "你的偏好",
+      description: "喜欢、不喜欢、避雷和更适合你的回应方式。",
+      items: [] as MemoryItem[],
+    },
+    {
+      id: "shared_moment",
+      title: "我们经历过的事",
+      description: "之后可以轻轻想起的共同片段。",
+      items: [] as MemoryItem[],
+    },
+    {
+      id: "open_thread",
+      title: "小布正在惦记的事",
+      description: "有具体由头、还没收尾的话题。",
+      items: [] as MemoryItem[],
+    },
+  ];
+  const byId = Object.fromEntries(groups.map((group) => [group.id, group])) as Record<MemoryKind, (typeof groups)[number]>;
+  for (const item of items) {
+    byId[memoryKind(item)].items.push(item);
+  }
+  return groups;
+}
+
+function memoryKind(item: MemoryItem): MemoryKind {
+  const type = String(item.metadata?.type || "profile");
+  if (type === "open_thread" || type === "shared_moment" || type === "preference" || type === "profile") {
+    return type;
+  }
+  if (type === "anti_preference" || type === "relationship_note" || type === "character_note") {
+    return "preference";
+  }
+  return "profile";
+}
+
+function memoryKindLabel(kind: MemoryKind): string {
+  const labels = {
+    profile: "关于你",
+    preference: "偏好",
+    shared_moment: "共同经历",
+    open_thread: "惦记的事",
+  };
+  return labels[kind];
 }
 
 function memoryMeta(item: MemoryItem): string[] {

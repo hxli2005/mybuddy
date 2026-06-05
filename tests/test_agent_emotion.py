@@ -109,6 +109,10 @@ async def test_emotion_written_to_trajectory_meta(tmp_path) -> None:
     assert result.emotional_support is not None
     assert result.emotional_support["mode"] == "strong_support"
     assert "emotional_support" in result.trajectory.meta
+    chat_system = provider.calls[-1]["system"]
+    assert "## 当前场景" in chat_system
+    assert "内部情绪提示" not in chat_system
+    assert "内部情绪场景线索" not in chat_system
 
 
 @pytest.mark.asyncio

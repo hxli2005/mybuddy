@@ -228,6 +228,19 @@ def test_support_hint_not_empty_for_negative() -> None:
     )
 
     hint = support_system_hint(support)
-    assert "内部情绪场景线索" in hint
-    assert "低压行动" in hint
+    assert "## 当前场景" in hint
+    assert "用户状态" in hint
+    assert "可用动作" in hint
     assert "固定三段式" in hint
+
+
+def test_support_hint_marks_consecutive_negative_compactly() -> None:
+    support = build_emotional_support(
+        "今天还是好累",
+        EmotionResult(label="negative", strength=0.6, reason="累"),
+    )
+
+    hint = support_system_hint(support, consecutive_negative=True)
+
+    assert "连续低落" in hint
+    assert "内部情绪提示" not in hint

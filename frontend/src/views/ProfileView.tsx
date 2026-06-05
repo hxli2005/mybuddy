@@ -92,18 +92,18 @@ export function ProfileView() {
   return (
     <section className="view profile-view">
       <PageHeader
-        description="画像是 MyBuddy 对你的稳定理解；字段偏确定，命题偏推断。"
+        description="这里只放明确字段；候选观察不会直接进入聊天，证据足够后才会转成长期记忆。"
         title="画像"
       />
       <div className="dashboard-grid">
-        <Panel title="核心字段" description={`${fields.length} 个稳定字段`}>
+        <Panel title="关于你" description={`${fields.length} 个明确字段`}>
           {fields.length ? (
             <div className="table-list">
               {fields.map(([key, value]) => (
                 <article className="list-card field-card" key={key}>
                   <header>
                     <strong>{key}</strong>
-                    <span>field</span>
+                    <span>已确认</span>
                   </header>
                   {editingField === key ? (
                     <>
@@ -156,11 +156,11 @@ export function ProfileView() {
               ))}
             </div>
           ) : (
-            <EmptyState title="暂无核心字段" text="字段通常来自明确资料或多轮稳定事实。" />
+            <EmptyState title="暂无明确字段" text="名字、长期偏好这类明确资料会出现在这里。" />
           )}
         </Panel>
 
-        <Panel title="动态命题" description={`${claims.length} 条可校正推断`}>
+        <Panel title="候选观察" description={`${claims.length} 条后台候选，不直接写进聊天提示`}>
           {claims.length ? (
             <div className="table-list">
               {claims.map((claim) => (
@@ -182,7 +182,7 @@ export function ProfileView() {
               ))}
             </div>
           ) : (
-            <EmptyState title="暂无动态命题" text="对话积累后，系统会在这里形成可修正推断。" />
+            <EmptyState title="暂无候选观察" text="弱线索不会马上变成记忆，重复出现后才会保留。" />
           )}
         </Panel>
       </div>

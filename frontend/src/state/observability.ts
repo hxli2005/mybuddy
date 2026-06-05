@@ -76,14 +76,14 @@ export const viewMetas: ViewMeta[] = [
   {
     id: "memory",
     label: "记忆",
-    summary: "校正长期记忆与原始记录",
+    summary: "校正少量长期记忆",
     group: "context",
     shortcut: "3",
   },
   {
     id: "profile",
     label: "画像",
-    summary: "维护核心字段与动态命题",
+    summary: "维护明确字段与候选观察",
     group: "context",
     shortcut: "4",
   },

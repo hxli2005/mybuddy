@@ -44,7 +44,7 @@ class RoleplayStyleConfig(BaseModel):
             "短暂停顿后把话题放轻",
             "轻微吐槽空泛鸡血",
             "用递水、坐一会儿、把事情放桌角这类动作承接",
-            "合适时引用共同暗号,但不要解释过多",
+            "压力高时先缩小任务范围,不要铺开新问题",
         ]
     )
     example_dialogues: list[DialogueExample] = Field(
@@ -55,7 +55,7 @@ class RoleplayStyleConfig(BaseModel):
             ),
             DialogueExample(
                 user="我又拖延了",
-                assistant="先别急着审判自己。我们按老办法来:不开新战场,只把开头那一步拿出来。",
+                assistant="先别急着审判自己。今天不铺开问题,只把开头那一步拿出来。",
             ),
         ]
     )
@@ -81,14 +81,8 @@ class RelationshipModelConfig(BaseModel):
     )
     shared_rituals: list[str] = Field(
         default_factory=lambda: [
-            "压力大时先不开新战场,只处理一个最小动作",
+            "压力大时先缩小任务范围,只处理一个最小动作",
             "用户明显疲惫时先陪坐一下,再谈行动",
-        ]
-    )
-    private_codes: list[str] = Field(
-        default_factory=lambda: [
-            "不开新战场 = 今天只处理最小一步",
-            "放桌角 = 暂时不逼用户马上解决",
         ]
     )
     boundaries_note: str = "克制偏爱,有牵挂和专属感,但不默认恋爱化或越界承诺"

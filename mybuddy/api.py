@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -28,13 +29,15 @@ from mybuddy.learning import (
     make_skill_subscriber,
     make_trajectory_subscriber,
 )
-from mybuddy.llm import make_provider
+from mybuddy.llm import Message as LLMMessage
+from mybuddy.llm import Role, make_provider
 from mybuddy.memory import LongTermMemory, MemoryManager, UserProfile
 from mybuddy.scheduler import MyBuddyScheduler
 from mybuddy.storage import (
     Note,
     ProfileClaim,
     Reminder,
+    append_message,
     drain_pending,
     init_db,
     list_messages,
@@ -244,7 +247,12 @@ class AppState:
         if self.agent is None:
             raise RuntimeError("LLM api_key 未配置,无法对话")
         engine = _require(self.engine)
-        pending_before = drain_pending(engine)
+        pending_before = _integrate_pending_messages(
+            engine,
+            session_id=self.agent.session_id,
+            items=drain_pending(engine),
+            add_to_short_term=self.agent._memory.add_message,
+        )
         result = await self.agent.run(message.strip())
         result_text = result.text
         tool_calls = list(result.tool_calls)
@@ -252,7 +260,12 @@ class AppState:
         if deterministic_tools:
             tool_calls.extend(deterministic_tools)
         result_text = _append_tool_summary(result_text, tool_calls)
-        pending_after = drain_pending(engine)
+        pending_after = _integrate_pending_messages(
+            engine,
+            session_id=self.agent.session_id,
+            items=drain_pending(engine),
+            add_to_short_term=self.agent._memory.add_message,
+        )
         self.last_turn_id = result.trajectory.turn_id
         self.last_related_claim_ids = list(result.related_claim_ids)
         self.last_triggered_skills = list(result.triggered_skills)
@@ -1141,6 +1154,47 @@ def _append_tool_summary(text: str, tool_calls: list[dict[str, Any]]) -> str:
     if text and summary in text:
         return text
     return f"{text}\n\n{summary}" if text else summary
+
+
+CONVERSATIONAL_PENDING_SOURCES = {"nudge", "dynamic", "greeting"}
+
+
+def _integrate_pending_messages(
+    engine,
+    *,
+    session_id: str,
+    items: list[dict[str, Any]],
+    add_to_short_term: Callable[[LLMMessage], None] | None = None,
+) -> list[dict[str, Any]]:
+    """把主动触达转成 assistant 对话消息,同时保留提醒类 system 语义。"""
+    integrated: list[dict[str, Any]] = []
+    for item in items:
+        enriched = dict(item)
+        source = str(enriched.get("source") or "")
+        content = str(enriched.get("content") or "")
+        if source in CONVERSATIONAL_PENDING_SOURCES and content:
+            meta = {
+                "source": "pending_message",
+                "pending_source": source,
+                "pending_message_id": enriched.get("id"),
+                "scheduled_at": enriched.get("scheduled_at"),
+                "pending_meta": enriched.get("meta") or {},
+            }
+            message_id = append_message(
+                engine,
+                session_id=session_id,
+                role=Role.ASSISTANT.value,
+                content=content,
+                meta=meta,
+            )
+            if add_to_short_term is not None:
+                add_to_short_term(LLMMessage(role=Role.ASSISTANT, content=content))
+            enriched["role"] = Role.ASSISTANT.value
+            enriched["message_id"] = message_id
+        else:
+            enriched["role"] = "system"
+        integrated.append(enriched)
+    return integrated
 
 
 def _read_jsonl_tail(directory: Path, *, limit: int) -> list[dict[str, Any]]:

@@ -10,6 +10,7 @@ from mybuddy.api import (
     AppState,
     _append_tool_summary,
     _extract_weather_city,
+    _integrate_pending_messages,
     _run_deterministic_demo_tools,
 )
 from mybuddy.config import Config, load_config
@@ -21,6 +22,7 @@ from mybuddy.storage import (
     ProfileClaim,
     ProfileField,
     Reminder,
+    enqueue,
     init_db,
     session_scope,
 )
@@ -260,18 +262,82 @@ def test_messages_payload_returns_raw_chat_log(tmp_path) -> None:
     assert payload["messages"][0]["meta"]["turn_id"] == "t1"
 
 
+def test_integrate_pending_nudge_as_assistant_message(tmp_path) -> None:
+    engine = init_db(str(tmp_path / "pending_nudge.db"))
+    pending_id = enqueue(
+        engine,
+        source="nudge",
+        content="刚才那件事,要不要接着放到桌上?",
+        meta={"origin": "silence_followup"},
+    )
+    seen = []
+
+    integrated = _integrate_pending_messages(
+        engine,
+        session_id="s1",
+        items=[
+            {
+                "id": pending_id,
+                "source": "nudge",
+                "content": "刚才那件事,要不要接着放到桌上?",
+                "scheduled_at": "2026-06-05T10:00:00",
+                "meta": {"origin": "silence_followup"},
+            }
+        ],
+        add_to_short_term=seen.append,
+    )
+
+    assert integrated[0]["role"] == "assistant"
+    assert isinstance(integrated[0]["message_id"], int)
+    assert seen[0].role.value == "assistant"
+    assert seen[0].content == "刚才那件事,要不要接着放到桌上?"
+    with session_scope(engine) as s:
+        row = s.query(Message).one()
+        assert row.session_id == "s1"
+        assert row.role == "assistant"
+        assert row.content == "刚才那件事,要不要接着放到桌上?"
+        meta = json.loads(row.meta_json)
+        assert meta["source"] == "pending_message"
+        assert meta["pending_source"] == "nudge"
+
+
+def test_integrate_pending_reminder_stays_system_side_effect(tmp_path) -> None:
+    engine = init_db(str(tmp_path / "pending_reminder.db"))
+    seen = []
+
+    integrated = _integrate_pending_messages(
+        engine,
+        session_id="s1",
+        items=[
+            {
+                "id": 1,
+                "source": "reminder",
+                "content": "提醒:开会",
+                "scheduled_at": "2026-06-05T10:00:00",
+                "meta": {"reminder_id": 1},
+            }
+        ],
+        add_to_short_term=seen.append,
+    )
+
+    assert integrated[0]["role"] == "system"
+    assert seen == []
+    with session_scope(engine) as s:
+        assert s.query(Message).count() == 0
+
+
 def test_memory_update_and_delete_payload(tmp_path) -> None:
     ltm = LongTermMemory(persist_dir=tmp_path / "memory")
-    memory_id = ltm.add("上次我们约定先不开新战场", mem_type="shared_moment")
+    memory_id = ltm.add("上次我们把任务缩到一个最小动作", mem_type="shared_moment")
     state = AppState(config_path="config.yaml")
     state.ltm = ltm
 
     updated = state.update_memory_payload(
         memory_id,
-        content="上次我们约定先不开新战场,只处理一个最小动作",
+        content="上次我们把任务缩到一个最小动作,先处理最容易开始的部分",
     )
 
-    assert updated["memory"]["content"] == "上次我们约定先不开新战场,只处理一个最小动作"
+    assert updated["memory"]["content"] == "上次我们把任务缩到一个最小动作,先处理最容易开始的部分"
     assert ltm.search("最小动作", mem_type="shared_moment")
 
     deleted = state.delete_memory_payload(memory_id)

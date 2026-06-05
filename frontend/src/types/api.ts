@@ -52,6 +52,8 @@ export type EmotionalSupport = {
 
 export type PendingMessage = {
   id?: number;
+  message_id?: number;
+  role?: "assistant" | "system" | string;
   source: string;
   content: string;
   scheduled_at?: string;

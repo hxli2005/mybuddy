@@ -48,8 +48,8 @@ export function ChatView({ onChatResult }: ChatViewProps) {
       setPendingBroadcasts(data.pending_messages || []);
       setMessages((current) => [
         ...current,
+        ...(data.pending_messages || []).map(pendingMessageToChatMessage),
         createMessage("assistant", data.text || "没有文本响应。", data.search_sources || []),
-        ...(data.pending_messages || []).map((item) => createMessage("system", `${item.source}: ${item.content}`)),
       ]);
       queryClient.invalidateQueries({ queryKey: queryKeys.messages });
       onChatResult(data);
@@ -274,6 +274,13 @@ function createMessage(role: ChatMessage["role"], text: string, sources: SearchS
 function pendingStatusFor(text: string): string {
   if (explicitSearchPattern.test(text) || timeSensitivePattern.test(text) || interestFactPattern.test(text)) return "正在看资料。";
   return defaultPendingStatus;
+}
+
+function pendingMessageToChatMessage(item: PendingMessage): ChatMessage {
+  if (item.role === "assistant") {
+    return createMessage("assistant", item.content);
+  }
+  return createMessage("system", `${item.source}: ${item.content}`);
 }
 
 function historyMessageToChatMessage(item: ChatLogMessage): ChatMessage[] {

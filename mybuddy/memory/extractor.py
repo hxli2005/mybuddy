@@ -2,15 +2,15 @@
 
 借鉴 mem0 的自动抽取思路:
   - 每 N 轮对话后,把最近的消息交给 LLM,让它判断哪些信息"值得记住"
-  - 输出三类:长期记忆片段、用户画像字段更新、动态命题候选
+  - 输出明确事实、用户画像字段和少量核心关系记忆
 
 抽取结果:
-  - facts: 要写入长期记忆的文本片段
+  - facts: 要写入 profile 记忆卡的明确事实
   - profile_fields: {"key": "value"} 类型的字段更新
-  - claims: [{"claim": ..., "confidence": float}] 命题候选
+  - claims: 少量后台候选观察,默认应为空
 
 注意:抽取是"可能产生幻觉"的操作(M3 无法完全消除,属于已知风险),
-因此新增字段/命题的置信度都较低,需要后续证据持续增强。
+因此弱推测默认不进入长期记忆,需要后续证据持续增强。
 """
 
 from __future__ import annotations
@@ -21,13 +21,21 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from mybuddy.llm import BaseLLMProvider
 
-RELATIONSHIP_MEMORY_TYPES = (
+CORE_RELATIONSHIP_MEMORY_TYPES = (
+    "preference",
     "shared_moment",
     "open_thread",
-    "private_code",
+)
+
+LEGACY_RELATIONSHIP_MEMORY_TYPES = (
     "anti_preference",
     "relationship_note",
     "character_note",
+)
+
+RELATIONSHIP_MEMORY_TYPES = (
+    *CORE_RELATIONSHIP_MEMORY_TYPES,
+    *LEGACY_RELATIONSHIP_MEMORY_TYPES,
 )
 
 
@@ -42,6 +50,14 @@ EXTRACT_PROMPT = """你是一个关系记忆管理助手。请从以下用户与
     {"claim": "关于用户的推测性命题", "confidence": 0.6}
   ],
   "relationship_memories": {
+    "preference": [
+      {
+        "title": "偏好或避雷标题",
+        "content": "用户明确表达过的偏好、禁忌或回应方式",
+        "triggers": ["再次出现时可使用的触发词"],
+        "confidence": 0.8
+      }
+    ],
     "shared_moment": [
       {
         "title": "共同经历标题",
@@ -62,11 +78,7 @@ EXTRACT_PROMPT = """你是一个关系记忆管理助手。请从以下用户与
         "triggers": ["相关触发词"],
         "confidence": 0.7
       }
-    ],
-    "private_code": [],
-    "anti_preference": [],
-    "relationship_note": [],
-    "character_note": []
+    ]
   }
 }
 
@@ -74,18 +86,17 @@ EXTRACT_PROMPT = """你是一个关系记忆管理助手。请从以下用户与
 - facts:从对话中提取明确陈述的事实(如"用户叫小明""用户喜欢美式咖啡")。无则返回空数组。
 - profile_fields:可确定为真的用户属性(如名字、生日、饮食偏好、过敏信息)。无则返回空对象。
   字段名用中文简写(如"名字""生日""咖啡偏好""过敏"等)。
-- claims:不确定但值得追踪的推测,confidence 0.3-0.7。例如"用户似乎偏爱简洁直接的沟通方式"。
-  每条 claim 10-30 字,confidence 必须给。
+- claims:默认返回空数组。只有同类线索在这段对话中反复出现、但还不足以写成事实时才输出。
+  不要把一次性的情绪、拖延、疲惫写成长期命题。
 - relationship_memories:
+  - 只使用 preference/shared_moment/open_thread 三类。不要新增其他类型。
+  - preference:用户明确表达的稳定偏好、避雷、喜欢/不喜欢的回应方式。
   - shared_moment:用户和 AI 之间形成的共同经历、回忆卡、有效陪伴片段。
   - open_thread:未来有明确由头可回访的未完成话题;必须有具体 evidence,不要泛泛关心。
     如果能判断截止或过期时间,填写 expires_at;如果能判断事件发生时间,填写 event_time。
-  - private_code:用户和 AI 形成的暗号或特殊说法。
-  - anti_preference:用户明确不喜欢的回应方式。
-  - relationship_note:关于当前关系质感、边界、默契的稳定线索。
-  - character_note:AI 角色侧表达习惯或生活状态线索,只能来自对话中已经建立的设定。
 - 不要编造对话中未出现的内容。
 - 事实和画像只针对用户(USER);relationship_memories 可以抽取用户与 AI 的互动结果,但必须有对话证据。
+- 不要记录普通寒暄、短暂情绪、一次性任务过程或 AI 自己臆测的性格标签。
 - 不要生成恋爱化、占有欲、越界承诺或医疗心理诊断。
 """
 
@@ -215,11 +226,23 @@ def _relationship_memories(data: dict[str, Any]) -> dict[str, list[dict[str, Any
     raw = data.get("relationship_memories")
     if isinstance(raw, dict):
         for mem_type in RELATIONSHIP_MEMORY_TYPES:
-            out[mem_type].extend(_normalize_memory_items(raw.get(mem_type)))
+            target = _canonical_relationship_type(mem_type)
+            if target:
+                out[target].extend(_normalize_memory_items(raw.get(mem_type)))
     # 兼容模型把新字段直接放顶层的情况。
     for mem_type in RELATIONSHIP_MEMORY_TYPES:
-        out[mem_type].extend(_normalize_memory_items(data.get(mem_type)))
+        target = _canonical_relationship_type(mem_type)
+        if target:
+            out[target].extend(_normalize_memory_items(data.get(mem_type)))
     return out
+
+
+def _canonical_relationship_type(mem_type: str) -> str | None:
+    if mem_type in CORE_RELATIONSHIP_MEMORY_TYPES:
+        return mem_type
+    if mem_type in {"anti_preference", "relationship_note"}:
+        return "preference"
+    return None
 
 
 def _normalize_memory_items(value: Any) -> list[dict[str, Any]]:

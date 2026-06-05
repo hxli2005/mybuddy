@@ -80,7 +80,7 @@ async def test_dedup_merges_similar_memories(dream_env) -> None:
     ltm.add("用户对海鲜过敏", mem_type="memory")     # 不同
 
     provider = ScriptedProvider(
-        ["[]", "[]", "[]"]  # conflict, insights, nudges 都返回空
+        ["[]", "[]"]  # conflict, nudges 都返回空
     )
     job = DreamJob(engine=engine, config=cfg, provider=provider, ltm=ltm, profile=profile)
     report = await job.run()
@@ -131,26 +131,17 @@ async def test_recompute_confidence_boosts_recent_evidence(dream_env) -> None:
 
 
 @pytest.mark.asyncio
-async def test_insights_generated_and_added(dream_env) -> None:
+async def test_insights_are_not_generated_by_default(dream_env) -> None:
     engine, cfg, ltm, profile = dream_env
 
     # 写两条 claim(>=2 让 _resolve_conflicts 能真的调 LLM,占据第 1 个脚本响应)
     profile.add_claim("用户偏好简洁沟通", confidence=0.6)
     profile.add_claim("用户对海鲜过敏", confidence=0.8)
 
-    # 写一条今日 message,让 _collect_today_messages 有东西返回
-    from mybuddy.storage import Message as DBMessage
-    from mybuddy.storage import session_scope
-
-    with session_scope(engine) as s:
-        s.add(DBMessage(session_id="t", role="user", content="今天去爬山了"))
-
-    # LLM 依次返回:conflict=空、insights 2 条、nudges=空
+    # LLM 依次返回:conflict=空、nudges=空。nightly job 不再主动制造洞察命题。
     provider = ScriptedProvider(
         [
             "[]",
-            '[{"claim": "用户喜欢户外活动", "confidence": 0.4}, '
-            '{"claim": "用户可能最近在锻炼", "confidence": 0.35}]',
             "[]",
         ]
     )
@@ -159,22 +150,17 @@ async def test_insights_generated_and_added(dream_env) -> None:
     job = DreamJob(engine=engine, config=cfg, provider=provider, ltm=ltm, profile=profile)
     report = await job.run()
 
-    assert report.insights_added == 2
+    assert report.insights_added == 0
     after = len(profile.get_all_claims())
-    assert after - before == 2
+    assert after == before
 
 
 @pytest.mark.asyncio
-async def test_insights_generation_has_hard_limit(dream_env) -> None:
+async def test_insights_generation_is_skipped_even_with_many_candidates(dream_env) -> None:
     engine, cfg, ltm, profile = dream_env
 
     profile.add_claim("用户偏好简洁沟通", confidence=0.6)
     profile.add_claim("用户对海鲜过敏", confidence=0.8)
-
-    from mybuddy.storage import Message as DBMessage
-
-    with session_scope(engine) as s:
-        s.add(DBMessage(session_id="t", role="user", content="今天聊了很多近况"))
 
     items = [
         {"claim": f"用户观察 {i}", "confidence": 0.4}
@@ -186,8 +172,8 @@ async def test_insights_generation_has_hard_limit(dream_env) -> None:
     job = DreamJob(engine=engine, config=cfg, provider=provider, ltm=ltm, profile=profile)
     report = await job.run()
 
-    assert report.insights_added == 3
-    assert len(profile.get_all_claims()) - before == 3
+    assert report.insights_added == 0
+    assert len(profile.get_all_claims()) == before
 
 
 @pytest.mark.asyncio
@@ -211,7 +197,7 @@ async def test_stable_claim_promoted_to_long_term_memory(dream_env) -> None:
     assert claim["promoted_memory_id"]
     assert profile.get_all_claims(include_hidden=False) == []
 
-    promoted = ltm.list_all(mem_type="anti_preference")
+    promoted = ltm.list_all(mem_type="preference")
     assert len(promoted) == 1
     assert promoted[0]["metadata"]["promoted_from_claim_id"] == cid
 
@@ -250,18 +236,12 @@ async def test_nudges_enqueued(dream_env) -> None:
         },
     )
 
-    # 为让 conflict 和 insights 步都调 LLM,需要 claims >= 2 且 messages 非空
+    # 为让 conflict 步调 LLM,需要 claims >= 2
     profile.add_claim("用户偏好简洁沟通", confidence=0.6)
     profile.add_claim("用户对海鲜过敏", confidence=0.8)
-    from mybuddy.storage import Message as DBMessage
-    from mybuddy.storage import session_scope
-    with session_scope(engine) as s:
-        s.add(DBMessage(session_id="t", role="user", content="随便一条"))
-
-    # conflict=空、insights=空、nudges 2 条
+    # conflict=空、nudges 2 条
     provider = ScriptedProvider(
         [
-            "[]",
             "[]",
             '["最近在上海还习惯吗?", "说起养猫的事,有什么进展没~"]',
         ]
@@ -281,12 +261,12 @@ async def test_character_dynamic_enqueued(dream_env) -> None:
     engine, cfg, ltm, profile = dream_env
 
     ltm.add(
-        "用户和小布形成了“不开新战场”的共同仪式。",
+        "用户接受了把任务缩小到一个最小动作的低压陪伴方式。",
         mem_type="shared_moment",
-        extra_meta={"title": "不开新战场"},
+        extra_meta={"title": "低压启动"},
     )
 
-    provider = ScriptedProvider(['["我把昨晚那张便签折了一下,放在桌角。今天先不急着开新战场。"]'])
+    provider = ScriptedProvider(['["我把昨晚那张便签折了一下,放在桌角。今天先拿最小那一步。"]'])
 
     job = DreamJob(engine=engine, config=cfg, provider=provider, ltm=ltm, profile=profile)
     report = await job.run()
@@ -308,11 +288,6 @@ async def test_run_collects_errors_without_crashing(dream_env) -> None:
     ltm.add("some memory", mem_type="memory")
     ltm.add("some open thread", mem_type="open_thread", extra_meta={"contact_reason": "test"})
     ltm.add("some shared moment", mem_type="shared_moment")
-    from mybuddy.storage import Message as DBMessage
-    from mybuddy.storage import session_scope
-    with session_scope(engine) as s:
-        s.add(DBMessage(session_id="t", role="user", content="x"))
-
     class BrokenProvider(BaseLLMProvider):
         async def generate(self, messages, tools=None, **kwargs):  # noqa: ANN001
             raise RuntimeError("LLM 挂了")
@@ -326,6 +301,6 @@ async def test_run_collects_errors_without_crashing(dream_env) -> None:
     )
     report = await job.run()
 
-    # LLM 相关步骤(conflict / insights / nudges / dynamics)应该进 errors,但不崩
-    assert len(report.errors) >= 4
+    # LLM 相关步骤(conflict / nudges / dynamics)应该进 errors,但不崩
+    assert len(report.errors) >= 3
     assert all("LLM" in e or "RuntimeError" in e for e in report.errors)

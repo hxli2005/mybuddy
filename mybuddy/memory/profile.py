@@ -556,7 +556,7 @@ def _infer_claim_category(claim: str) -> str:
         return "preference"
     if any(k in text for k in ("情绪", "焦虑", "低落", "压力", "崩溃", "累", "拖延")):
         return "emotion_pattern"
-    if any(k in text for k in ("关系", "默契", "陪伴", "信任", "暗号")):
+    if any(k in text for k in ("关系", "默契", "陪伴", "信任")):
         return "relationship"
     if any(k in text for k in ("叫", "生日", "住在", "工作", "过敏", "不吃")):
         return "fact"

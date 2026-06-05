@@ -51,7 +51,24 @@ def recall_memory(query: str) -> str:
     """
     ltm = _get_ltm()
     cfg = get_config()
-    hits = ltm.search(query, top_k=cfg.memory.long_term_top_k, mem_type="memory")
+    hits = []
+    seen: set[str] = set()
+    for mem_type in ("open_thread", "shared_moment", "preference", "profile", "memory"):
+        for hit in ltm.search(query, top_k=cfg.memory.long_term_top_k, mem_type=mem_type):
+            uid = str(hit.get("id") or "")
+            if not uid or uid in seen:
+                continue
+            seen.add(uid)
+            hits.append(hit)
+    hits.sort(
+        key=lambda h: (
+            h.get("score", 0),
+            (h.get("metadata") or {}).get("importance", 0),
+            (h.get("metadata") or {}).get("updated_at", ""),
+        ),
+        reverse=True,
+    )
+    hits = hits[:cfg.memory.long_term_top_k]
     if not hits:
         return "没有找到相关记忆。"
 

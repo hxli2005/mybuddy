@@ -25,6 +25,9 @@ def test_build_system_prompt_uses_detailed_persona_fields() -> None:
     assert "直接,但先接住压力" in prompt
     assert "先复述用户目标" in prompt
     assert "不替代专业咨询" in prompt
+    assert "角色契约" in prompt
+    assert "示例对话" not in prompt
+    assert "关系轴:" not in prompt
 
 
 def test_build_system_prompt_includes_current_time_context() -> None:

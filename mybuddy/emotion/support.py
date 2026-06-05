@@ -108,25 +108,40 @@ def build_emotional_support(user_input: str, emotion: EmotionResult | None) -> E
     return EmotionalSupport(label=label, strength=strength)
 
 
-def support_system_hint(support: EmotionalSupport) -> str:
+def support_system_hint(
+    support: EmotionalSupport,
+    *,
+    consecutive_negative: bool = False,
+) -> str:
     if support.mode == "neutral":
         return ""
+    state = _scene_state(support, consecutive_negative=consecutive_negative)
     lines = [
-        "## 内部情绪场景线索",
-        f"- 模式:{support.mode}",
-        f"- 用户此刻可能需要:{support.need}",
-        f"- 内部判断:{support.mirror}",
-        f"- 角色内处理:{support.guidance}",
-        f"- 低压行动:{support.small_action}",
+        "## 当前场景",
+        f"- 用户状态:{state}",
+        f"- 回应策略:{support.guidance}",
+        f"- 可用动作:{support.small_action}",
     ]
     if support.safety_note:
         lines.append(f"- 安全边界:{support.safety_note}")
-    if support.principles:
-        lines.append(f"- 原则:{' / '.join(support.principles)}")
+    if consecutive_negative and support.mode != "safety":
+        lines.append("- 连续低落:先放轻靠近,不要急着安排任务。")
     lines.append(
-        "不要明示这些字段名;不要套用'我理解你/你现在感到/可以试试'的固定三段式。"
+        "- 避免:不要明示这些字段名;不要套用'我理解你/你现在感到/可以试试'的固定三段式。"
     )
     return "\n".join(lines)
+
+
+def _scene_state(
+    support: EmotionalSupport,
+    *,
+    consecutive_negative: bool,
+) -> str:
+    if support.mode == "safety":
+        return "高风险安全场景,优先现实安全与可信任的人。"
+    if consecutive_negative:
+        return f"连续低落,可能需要{support.need}。"
+    return f"{support.need}; {support.mirror}"
 
 
 def _is_crisis(text: str) -> bool:

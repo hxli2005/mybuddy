@@ -142,9 +142,12 @@ class Agent:
     async def run(self, user_input: str) -> AgentResult:
         # 1. 情绪检测(可选)
         emotion = await self._detect_emotion(user_input)
-        emotion_hint = self._emotion_system_hint(emotion)
         emotional_support = build_emotional_support(user_input, emotion)
-        support_hint = support_system_hint(emotional_support)
+        consecutive_negative = self._has_consecutive_negative()
+        scene_hint = support_system_hint(
+            emotional_support,
+            consecutive_negative=consecutive_negative,
+        )
         all_tool_calls: list[dict[str, Any]] = []
 
         # 2. 检索记忆上下文(text + 本轮相关 claim_ids)
@@ -164,8 +167,7 @@ class Agent:
             for x in (
                 memory_context,
                 search_context,
-                emotion_hint,
-                support_hint,
+                scene_hint,
                 skill_hint,
             )
             if x
@@ -366,21 +368,11 @@ class Agent:
                 self._enqueue_empathy_nudge(user_input)
         return result
 
-    def _emotion_system_hint(self, emotion: EmotionResult | None) -> str:
-        """若情绪负面,往 system prompt 追加内部场景提示。"""
-        if emotion is None or not emotion.is_negative:
-            return ""
-        consecutive = (
+    def _has_consecutive_negative(self) -> bool:
+        return (
             self._emotion_tracker is not None
             and self._emotion_tracker.is_consecutive_negative(n=2)
         )
-        extra = (
-            "最近两轮用户情绪都偏低。把这当作低压陪伴场景:先用角色内微反应靠近,"
-            "可以引用共同仪式或具体动作,不要机械复述情绪或立刻安排任务。"
-            if consecutive
-            else "用户这句话情绪偏低。用角色内表达放轻话题,避免模板化共情句。"
-        )
-        return f"## 内部情绪提示\n{extra}"
 
     def _schedule_silence_followup(
         self,

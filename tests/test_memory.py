@@ -470,7 +470,7 @@ def test_memory_manager_prioritizes_relationship_context(tmp_path) -> None:
         },
     )
     ltm.add(
-        "用户上次不想写代码时,接受了“不开新战场”的低压启动方式。",
+        "用户上次不想写代码时,接受了把任务缩到一个最小动作的低压启动方式。",
         mem_type="shared_moment",
         extra_meta={
             "title": "那个没有催的晚上",
@@ -485,9 +485,10 @@ def test_memory_manager_prioritizes_relationship_context(tmp_path) -> None:
     text, related_claim_ids = manager.build_context_section("我又拖延了,报告开头还是没写")
 
     assert related_claim_ids == []
-    assert text.index("## 未完成话题") < text.index("## 相关历史记忆")
+    assert text.index("## 未完成话题") < text.index("## 关于用户")
     assert "那个没有催的晚上" in text
     assert "不喜欢被强行打鸡血" in text
+    assert "## 关系线索" not in text
 
 
 @pytest.mark.asyncio
@@ -506,7 +507,7 @@ async def test_memory_manager_extract_uses_governance_to_merge(tmp_path) -> None
         {
             "facts": ["用户正在准备项目汇报"],
             "profile_fields": {},
-            "claims": [{"claim": "用户担心项目汇报开头", "confidence": 0.6}],
+            "claims": [{"claim": "用户担心项目汇报开头", "confidence": 0.7}],
             "relationship_memories": {
                 "open_thread": [
                     {
@@ -527,7 +528,7 @@ async def test_memory_manager_extract_uses_governance_to_merge(tmp_path) -> None
     manager.record_turn("我还是在准备项目汇报", "那继续处理开头", turn_id="turn_2")
     assert await manager.maybe_extract() is True
 
-    memories = ltm.list_all(mem_type="memory")
+    memories = ltm.list_all(mem_type="profile")
     open_threads = ltm.list_all(mem_type="open_thread")
     claims = manager.profile.get_all_claims()
     assert len(memories) == 1
@@ -582,7 +583,7 @@ def test_extractor_parse_relationship_memories() -> None:
                     "shared_moment": [
                         {
                             "title": "那个没有催的晚上",
-                            "content": "用户不想写代码时,小布用不开新战场的方式陪用户缩小任务。",
+                            "content": "用户不想写代码时,小布陪用户把任务缩小到一个低压开头。",
                             "triggers": ["不想动", "拖延"],
                             "callback_style": "轻轻提起",
                         }
@@ -604,6 +605,26 @@ def test_extractor_parse_relationship_memories() -> None:
     assert result.relationship_memories["shared_moment"][0]["title"] == "那个没有催的晚上"
     assert len(result.relationship_memories["open_thread"]) == 1
     assert result.is_empty() is False
+
+
+def test_extractor_maps_legacy_anti_preference_only() -> None:
+    from mybuddy.memory.extractor import FactExtractor
+
+    extractor = FactExtractor.__new__(FactExtractor)
+    result = extractor._parse(
+        json.dumps(
+            {
+                "relationship_memories": {
+                    "anti_preference": ["用户不喜欢空泛鼓励"],
+                    "character_note": ["这类角色侧线索不进入最简记忆"],
+                }
+            },
+            ensure_ascii=False,
+        )
+    )
+
+    assert len(result.relationship_memories["preference"]) == 1
+    assert result.relationship_memories["character_note"] == []
 
 
 def test_extractor_parse_markdown_wrapped_json() -> None:

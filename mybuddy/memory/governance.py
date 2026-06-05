@@ -21,11 +21,12 @@ if TYPE_CHECKING:
 
 
 MERGEABLE_TYPES = {
+    "profile",
+    "preference",
     "memory",
     "claim",
     "shared_moment",
     "open_thread",
-    "private_code",
     "anti_preference",
     "relationship_note",
     "character_note",
@@ -243,10 +244,12 @@ def _choose_content(old: str, new: str) -> str:
 
 
 def _similarity_threshold(mem_type: str) -> float:
-    if mem_type in {"private_code", "anti_preference"}:
+    if mem_type in {"preference", "anti_preference"}:
         return 0.82
     if mem_type in {"open_thread", "shared_moment"}:
         return 0.84
+    if mem_type == "profile":
+        return 0.88
     return 0.88
 
 

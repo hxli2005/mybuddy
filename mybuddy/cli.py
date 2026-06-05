@@ -344,10 +344,12 @@ def _drain_pending_to_console(engine) -> None:
     if not items:
         return
     for it in items:
+        if it["source"] in {"nudge", "dynamic", "greeting"}:
+            console.print("[bold magenta]小伙伴[/bold magenta] >", end=" ")
+            console.print(Markdown(it["content"]))
+            continue
         tag = {
             "reminder": "⏰ 提醒",
-            "greeting": "🌅 问候",
-            "nudge": "💭 捎个话",
         }.get(it["source"], it["source"])
         console.print(f"[bold yellow]{tag}[/bold yellow] {it['content']}")
 
