@@ -26,6 +26,7 @@ from apscheduler.triggers.date import DateTrigger
 from mybuddy.scheduler.jobs import (
     fire_daily_greeting,
     fire_reminder,
+    fire_silence_followup,
     run_dream_job,
 )
 
@@ -38,6 +39,7 @@ logger = logging.getLogger(__name__)
 
 
 REMINDER_JOB_PREFIX = "reminder_"
+SILENCE_FOLLOWUP_JOB_PREFIX = "silence_followup_"
 DAILY_GREETING_JOB_ID = "daily_greeting"
 DREAM_JOB_ID = "dream_job"
 
@@ -93,6 +95,38 @@ class MyBuddyScheduler:
             return True
         except Exception:
             return False
+
+    def schedule_silence_followup(
+        self,
+        *,
+        session_id: str,
+        user_message_id: int,
+        user_text: str,
+        run_at: datetime,
+    ) -> None:
+        """注册一次会话沉默检查,同一 session 只保留最新检查。"""
+        settings = self._config.scheduler
+        job_id = f"{SILENCE_FOLLOWUP_JOB_PREFIX}{session_id}"
+        self._scheduler.add_job(
+            fire_silence_followup,
+            trigger=DateTrigger(run_date=run_at),
+            args=[
+                self._db_file,
+                session_id,
+                user_message_id,
+                user_text,
+                self._config.persona.name,
+                settings.silence_followup_min_gap_hours,
+                settings.silence_followup_cooldown_hours,
+                settings.silence_followup_max_per_day,
+                settings.quiet_hours.start,
+                settings.quiet_hours.end,
+            ],
+            id=job_id,
+            replace_existing=True,
+            misfire_grace_time=900,
+        )
+        logger.info("scheduled silence followup check for session %s @ %s", session_id, run_at)
 
     # ---- 周期任务 ----
 

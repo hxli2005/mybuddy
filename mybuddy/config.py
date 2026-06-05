@@ -141,6 +141,11 @@ class SchedulerConfig(BaseModel):
     daily_greeting: str = "09:17"
     dream_job: str = "02:23"
     quiet_hours: QuietHours = Field(default_factory=QuietHours)
+    silence_followup_enabled: bool = True
+    silence_followup_delay_minutes: int = 45
+    silence_followup_min_gap_hours: int = 6
+    silence_followup_cooldown_hours: int = 48
+    silence_followup_max_per_day: int = 1
 
 
 class LoggingConfig(BaseModel):

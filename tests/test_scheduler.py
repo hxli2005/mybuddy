@@ -14,8 +14,9 @@ import pytest
 from mybuddy._time import utcnow
 from mybuddy.config import Config
 from mybuddy.scheduler import MyBuddyScheduler
-from mybuddy.scheduler.jobs import fire_daily_greeting, fire_reminder
+from mybuddy.scheduler.jobs import fire_daily_greeting, fire_reminder, fire_silence_followup
 from mybuddy.storage import (
+    Message,
     Reminder,
     drain_pending,
     init_db,
@@ -82,6 +83,86 @@ def test_fire_daily_greeting(tmp_path) -> None:
     assert "小布" in drained[0]["content"]
 
 
+def test_fire_silence_followup_enqueues_when_user_stays_silent(tmp_path) -> None:
+    db_file = str(tmp_path / "silence.db")
+    engine = init_db(db_file)
+    with session_scope(engine) as s:
+        msg = Message(session_id="s1", role="user", content="我晚点继续写报告开头")
+        s.add(msg)
+        s.flush()
+        msg_id = msg.id
+
+    fire_silence_followup(
+        db_file,
+        "s1",
+        msg_id,
+        "我晚点继续写报告开头",
+        "小布",
+        6,
+        48,
+        1,
+        "00:00",
+        "00:00",
+    )
+
+    pending = list_undelivered(engine)
+    assert len(pending) == 1
+    assert pending[0]["source"] == "nudge"
+    assert "晚点继续写报告开头" in pending[0]["content"]
+
+
+def test_fire_silence_followup_skips_if_user_replied(tmp_path) -> None:
+    db_file = str(tmp_path / "silence_skip.db")
+    engine = init_db(db_file)
+    with session_scope(engine) as s:
+        msg = Message(session_id="s1", role="user", content="我晚点继续")
+        s.add(msg)
+        s.flush()
+        msg_id = msg.id
+        s.add(Message(session_id="s1", role="assistant", content="好。"))
+        s.add(Message(session_id="s1", role="user", content="我回来了"))
+
+    fire_silence_followup(
+        db_file,
+        "s1",
+        msg_id,
+        "我晚点继续",
+        "小布",
+        6,
+        48,
+        1,
+        "00:00",
+        "00:00",
+    )
+
+    assert list_undelivered(engine) == []
+
+
+def test_fire_silence_followup_skips_without_concrete_reason(tmp_path) -> None:
+    db_file = str(tmp_path / "silence_no_reason.db")
+    engine = init_db(db_file)
+    with session_scope(engine) as s:
+        msg = Message(session_id="s1", role="user", content="今天有点累")
+        s.add(msg)
+        s.flush()
+        msg_id = msg.id
+
+    fire_silence_followup(
+        db_file,
+        "s1",
+        msg_id,
+        "今天有点累",
+        "小布",
+        6,
+        48,
+        1,
+        "00:00",
+        "00:00",
+    )
+
+    assert list_undelivered(engine) == []
+
+
 @pytest.mark.asyncio
 async def test_scheduler_schedule_reminder_registers_job(tmp_path) -> None:
     """schedule_reminder 真的把 job 写进 jobstore。"""
@@ -107,6 +188,36 @@ async def test_scheduler_schedule_reminder_registers_job(tmp_path) -> None:
         assert scheduler.cancel_reminder(42)
         jobs3 = scheduler.list_jobs()
         assert not any(j["id"] == "reminder_42" for j in jobs3)
+    finally:
+        scheduler.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_scheduler_schedule_silence_followup_replaces_session_job(tmp_path) -> None:
+    db_file = str(tmp_path / "s.db")
+    init_db(db_file)
+    cfg = _make_cfg(db_file)
+
+    scheduler = MyBuddyScheduler(cfg)
+    scheduler.start()
+    try:
+        trigger = utcnow() + timedelta(hours=1)
+        scheduler.schedule_silence_followup(
+            session_id="abc",
+            user_message_id=1,
+            user_text="晚点继续",
+            run_at=trigger,
+        )
+        scheduler.schedule_silence_followup(
+            session_id="abc",
+            user_message_id=2,
+            user_text="晚点继续",
+            run_at=trigger + timedelta(minutes=5),
+        )
+
+        jobs = scheduler.list_jobs()
+        matching = [j for j in jobs if j["id"] == "silence_followup_abc"]
+        assert len(matching) == 1
     finally:
         scheduler.shutdown()
 

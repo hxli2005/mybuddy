@@ -24,7 +24,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 from mybuddy._time import utcnow
@@ -50,6 +50,7 @@ if TYPE_CHECKING:
 
     from mybuddy.emotion import EmotionDetector, EmotionResult, EmotionTracker
     from mybuddy.learning import SkillCurator, SkillRegistry
+    from mybuddy.scheduler import MyBuddyScheduler
 
 logger = logging.getLogger(__name__)
 
@@ -109,6 +110,7 @@ class Agent:
         emotion_detector: EmotionDetector | None = None,
         emotion_tracker: EmotionTracker | None = None,
         engine: Engine | None = None,
+        scheduler: MyBuddyScheduler | None = None,
         skill_registry: SkillRegistry | None = None,
         skill_curator: SkillCurator | None = None,
     ) -> None:
@@ -124,6 +126,7 @@ class Agent:
         self._emotion_tracker = emotion_tracker
         # engine 用于触发 nudge 入队;None 时跳过 nudge
         self._engine = engine
+        self._scheduler = scheduler
         # M6:skill 匹配 + 自动抽象(均可选)
         self._skill_registry = skill_registry
         self._skill_curator = skill_curator
@@ -189,7 +192,7 @@ class Agent:
             }
 
         # 6. 用户消息入记
-        self._persist_chat_message(
+        user_message_id = self._persist_chat_message(
             Role.USER,
             user_input,
             meta={
@@ -198,6 +201,7 @@ class Agent:
             },
         )
         self._memory.add_message(Message(role=Role.USER, content=user_input))
+        self._schedule_silence_followup(user_input, user_message_id)
 
         final_text = ""
         finish_reason = "stop"
@@ -329,12 +333,12 @@ class Agent:
         content: str,
         *,
         meta: dict[str, Any] | None = None,
-    ) -> None:
+    ) -> int | None:
         """写入 SQLite 原始聊天主日志。"""
         if self._engine is None:
-            return
+            return None
         try:
-            append_message(
+            return append_message(
                 self._engine,
                 session_id=self._session_id,
                 role=role.value,
@@ -343,6 +347,7 @@ class Agent:
             )
         except Exception:
             logger.exception("persist chat message failed")
+            return None
 
     async def _detect_emotion(self, user_input: str) -> EmotionResult | None:
         """跑情绪分类,写入 tracker,必要时触发离线 nudge。"""
@@ -376,6 +381,30 @@ class Agent:
             else "用户这句话情绪偏低。用角色内表达放轻话题,避免模板化共情句。"
         )
         return f"## 内部情绪提示\n{extra}"
+
+    def _schedule_silence_followup(
+        self,
+        user_input: str,
+        user_message_id: int | None,
+    ) -> None:
+        scheduler = self._scheduler
+        if scheduler is None or not scheduler.running:
+            return
+        if user_message_id is None:
+            return
+        settings = self._config.scheduler
+        if not settings.enabled or not settings.silence_followup_enabled:
+            return
+        delay = max(5, int(settings.silence_followup_delay_minutes))
+        try:
+            scheduler.schedule_silence_followup(
+                session_id=self._session_id,
+                user_message_id=user_message_id,
+                user_text=user_input,
+                run_at=datetime.now() + timedelta(minutes=delay),
+            )
+        except Exception:
+            logger.exception("schedule silence followup failed")
 
     async def _prefetch_web_search(
         self,

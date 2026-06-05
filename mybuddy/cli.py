@@ -139,6 +139,15 @@ def chat(
     feedback_bus.subscribe(make_skill_subscriber(skill_registry))
     setup_skill_tool(skill_registry)
 
+    # M4:调度器
+    scheduler: MyBuddyScheduler | None = None
+    if cfg.scheduler.enabled:
+        scheduler = MyBuddyScheduler(cfg)
+        scheduler.start()
+        _restore_reminders(scheduler, engine)
+        scheduler.schedule_daily_greeting(cfg.scheduler.daily_greeting)
+        scheduler.schedule_dream_job(cfg.scheduler.dream_job, config_path=config_path)
+
     agent = Agent(
         provider=provider,
         config=cfg,
@@ -149,18 +158,10 @@ def chat(
         emotion_detector=emotion_detector,
         emotion_tracker=emotion_tracker,
         engine=engine,
+        scheduler=scheduler,
         skill_registry=skill_registry,
         skill_curator=skill_curator,
     )
-
-    # M4:调度器
-    scheduler: MyBuddyScheduler | None = None
-    if cfg.scheduler.enabled:
-        scheduler = MyBuddyScheduler(cfg)
-        scheduler.start()
-        _restore_reminders(scheduler, engine)
-        scheduler.schedule_daily_greeting(cfg.scheduler.daily_greeting)
-        scheduler.schedule_dream_job(cfg.scheduler.dream_job, config_path=config_path)
 
     set_context(
         engine=engine,

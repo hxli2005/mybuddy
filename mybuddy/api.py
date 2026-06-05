@@ -168,6 +168,7 @@ class AppState:
                 emotion_detector=EmotionDetector(provider, cfg.llm.small_model),
                 emotion_tracker=EmotionTracker(window=5),
                 engine=engine,
+                scheduler=scheduler,
                 skill_registry=skill_registry,
                 skill_curator=SkillCurator(provider, skill_registry, model=cfg.llm.small_model),
             )
