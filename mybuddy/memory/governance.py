@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 from mybuddy._time import utcnow
@@ -232,7 +232,9 @@ def merge_metadata(old: dict[str, Any], new: dict[str, Any], *, now: str | None 
     merged = dict(old)
 
     for key, value in new.items():
-        if key in {"id", "created_at", "updated_at"}:
+        # status 不让新卡覆盖旧卡:否则再次提到一个 snoozed/stale 话题(同 memory_key)
+        # 会被新卡默认的 active 强行复活。生命周期状态只由 refresh / resolve / snooze 显式改。
+        if key in {"id", "created_at", "updated_at", "status"}:
             continue
         if key in {"tags", "keywords", "triggers", "source_turn_ids"}:
             merged[key] = _merge_list(merged.get(key), value)
@@ -283,7 +285,12 @@ def make_memory_key(mem_type: str, content: str, metadata: dict[str, Any] | None
 
 
 def _meaningful_zh_chunks(text: str) -> list[str]:
-    stop = set("用户我的我们一个这个那个最近今天明天昨天觉得可能可以需要正在")
+    # 显式词集合:set("用户我的…") 会拆成单字集合,让下面对多字 chunk 的 in 判断恒假
+    # (停用词过滤形同虚设)。
+    stop = {
+        "用户", "我的", "我们", "一个", "这个", "那个", "最近",
+        "今天", "明天", "昨天", "觉得", "可能", "可以", "需要", "正在",
+    }
     chunks = [chunk for chunk in re.split(r"[，。；、,.!?！？\s]+", text) if chunk]
     out: list[str] = []
     for chunk in chunks:
@@ -355,6 +362,12 @@ def _parse_iso(value: Any) -> datetime | None:
         return None
     text = value.strip().replace("Z", "+00:00")
     try:
-        return datetime.fromisoformat(text)
+        dt = datetime.fromisoformat(text)
     except ValueError:
         return None
+    # 统一规整为 naive-UTC,与 utcnow()(naive)同口径。否则模型产出的带时区
+    # expires_at/snooze_until(如 "...+08:00")会让 aware vs naive 比较抛 TypeError,
+    # 在 refresh_open_thread_lifecycle 的热路径上打断对话。
+    if dt.tzinfo is not None:
+        dt = dt.astimezone(UTC).replace(tzinfo=None)
+    return dt

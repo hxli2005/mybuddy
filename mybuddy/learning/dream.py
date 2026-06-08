@@ -305,7 +305,7 @@ def _tokenize_text(text: str) -> list[str]:
 
 
 def _parse_json_array(text: str) -> Any:
-    """容错解析 JSON 数组/对象,支持 ```json 围栏。"""
+    """容错解析 JSON 数组/对象,支持 ```json 围栏 + 前后白话兜底。"""
     clean = text.strip()
     if clean.startswith("```"):
         lines = clean.split("\n")
@@ -317,7 +317,44 @@ def _parse_json_array(text: str) -> Any:
     try:
         return json.loads(clean)
     except json.JSONDecodeError:
+        pass
+    # 兜底:从夹白话的输出里扫第一个配平的 [...](人设 temperature=0.7,常加引语)。
+    arr = _first_balanced(clean, "[", "]")
+    if arr:
+        try:
+            return json.loads(arr)
+        except json.JSONDecodeError:
+            return None
+    return None
+
+
+def _first_balanced(text: str, open_ch: str, close_ch: str) -> str | None:
+    """返回第一个配平的 open_ch...close_ch 子串(正确跳过字符串字面量内的括号)。"""
+    start = text.find(open_ch)
+    if start == -1:
         return None
+    depth = 0
+    in_str = False
+    escape = False
+    for i in range(start, len(text)):
+        ch = text[i]
+        if in_str:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch == open_ch:
+            depth += 1
+        elif ch == close_ch:
+            depth -= 1
+            if depth == 0:
+                return text[start : i + 1]
+    return None
 
 
 def _updated_key(item: dict[str, Any]) -> str:

@@ -17,7 +17,9 @@ class LLMConfig(BaseModel):
     small_model: str | None = None
     api_key: str = ""
     base_url: str | None = None
-    max_tokens: int = 2048
+    # 4096:抽取产出的 JSON(facts/关系记忆/entities/corrections)在热聊里可能较长,
+    # 2048 易被截断导致整批解析失败丢弃;陪伴回复本身简短,提高上限只是放宽封顶不增常态开销。
+    max_tokens: int = 4096
     temperature: float = 0.7
 
 
