@@ -39,3 +39,6 @@ htmlcov/
 *.tsbuildinfo
 
 config.yaml
+
+# QQ bot 运行日志
+botpy.log
