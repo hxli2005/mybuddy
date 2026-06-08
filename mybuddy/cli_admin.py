@@ -164,10 +164,7 @@ def users_quota(
 # ---------------------------------------------------------------------
 
 def _load_profile(config_path: str) -> tuple[UserProfile, object]:
-    """profile show/set/unset 只涉及 SQLite,不初始化长期档案层。
-
-    管理命令只需要看/改核心字段和命题表,search_claims 走 SQL 降级扫描已足够。
-    """
+    """profile show/set/unset 只涉及 SQLite 核心字段,不初始化长期档案层。"""
     cfg = load_config(config_path)
     engine = init_db(cfg.paths.db_file)
     return UserProfile(engine, None), engine
@@ -176,9 +173,8 @@ def _load_profile(config_path: str) -> tuple[UserProfile, object]:
 @profile_app.command("show")
 def profile_show(
     config_path: str = typer.Option("config.yaml", "--config"),
-    top_claims: int = typer.Option(10, "--top-claims", help="展示前 N 条命题"),
 ) -> None:
-    """打印核心字段 + 高置信度命题。"""
+    """打印核心字段。"""
     profile, _ = _load_profile(config_path)
 
     fields = profile.get_all_fields()
@@ -191,18 +187,6 @@ def profile_show(
         console.print(ft)
     else:
         console.print("[dim]还没有核心字段。[/dim]")
-
-    claims = profile.get_all_claims(min_confidence=0.3)[:top_claims]
-    if claims:
-        ct = Table(title=f"动态命题(top-{top_claims}, confidence >= 0.3)")
-        ct.add_column("id", justify="right")
-        ct.add_column("claim")
-        ct.add_column("conf", justify="right")
-        for c in claims:
-            ct.add_row(str(c["sql_id"]), c["claim"], f"{c['confidence']:.2f}")
-        console.print(ct)
-    else:
-        console.print("[dim]还没有动态命题。[/dim]")
 
 
 @profile_app.command("set")

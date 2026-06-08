@@ -19,7 +19,6 @@ from mybuddy.memory import LongTermMemory, UserProfile
 from mybuddy.storage import (
     Message,
     Note,
-    ProfileClaim,
     ProfileField,
     Reminder,
     enqueue,
@@ -206,30 +205,6 @@ def test_profile_field_update_and_delete_payload(tmp_path) -> None:
     assert deleted["ok"] is True
     with session_scope(engine) as s:
         assert s.query(ProfileField).filter_by(key="称呼").one_or_none() is None
-
-
-def test_profile_claim_update_and_delete_payload(tmp_path) -> None:
-    # 命题为 SQLite 单一真相源:更新/删除走画像命题端点,不再镜像档案层。
-    engine = init_db(str(tmp_path / "profile_claims.db"))
-    profile = UserProfile(engine)
-    claim_id = profile.add_claim("用户最近对项目汇报焦虑", confidence=0.6)
-    state = AppState(config_path="config.yaml")
-    state.profile = profile
-
-    updated = state.update_profile_claim_payload(
-        claim_id,
-        claim="用户最近担心项目汇报开头讲不顺",
-        confidence=0.8,
-    )
-
-    assert updated["claim"]["claim"] == "用户最近担心项目汇报开头讲不顺"
-    assert updated["claim"]["confidence"] == 0.8
-
-    deleted = state.delete_profile_claim_payload(claim_id)
-
-    assert deleted["ok"] is True
-    with session_scope(engine) as s:
-        assert s.query(ProfileClaim).filter(ProfileClaim.id == claim_id).one_or_none() is None
 
 
 def test_messages_payload_returns_raw_chat_log(tmp_path) -> None:

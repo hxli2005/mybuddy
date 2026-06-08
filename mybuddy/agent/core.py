@@ -5,7 +5,7 @@
   1. (M5)情绪检测 + 更新窗口,连续 negative 触发离线 nudge
   2. (M6)按用户输入 + 情绪状态匹配 skill 候选,拼进 system prompt
   3. 追加 user message 到短期记忆
-  4. 检索长期记忆 + 画像上下文(同时拿到本轮相关 claim_ids),合并情绪提示,注入 system prompt
+  4. 检索长期记忆 + 画像上下文,合并情绪提示,注入 system prompt
   5. while step < max_steps:
        a. build_messages + build_system_prompt
        b. provider.generate(messages, tools, system=...)
@@ -68,7 +68,6 @@ class AgentResult:
     tool_calls: list[dict[str, Any]]
     emotion: EmotionResult | None
     emotional_support: dict[str, Any] | None
-    related_claim_ids: list[int]
     triggered_skills: list[str]
     search_sources: list[dict[str, str]]
 
@@ -81,7 +80,6 @@ class AgentResult:
         tool_calls: list[dict[str, Any]] | None = None,
         emotion: EmotionResult | None = None,
         emotional_support: dict[str, Any] | None = None,
-        related_claim_ids: list[int] | None = None,
         triggered_skills: list[str] | None = None,
         search_sources: list[dict[str, str]] | None = None,
     ) -> None:
@@ -92,7 +90,6 @@ class AgentResult:
         self.tool_calls = tool_calls or []
         self.emotion = emotion
         self.emotional_support = emotional_support
-        self.related_claim_ids = related_claim_ids or []
         self.triggered_skills = triggered_skills or []
         self.search_sources = search_sources or []
 
@@ -152,8 +149,8 @@ class Agent:
         )
         all_tool_calls: list[dict[str, Any]] = []
 
-        # 2. 检索记忆上下文(text + 本轮相关 claim_ids)
-        memory_context, related_claim_ids = self._memory.build_context_section(user_input)
+        # 2. 检索记忆上下文
+        memory_context = self._memory.build_context_section(user_input)
 
         # 3. Skill 匹配(可选)
         skill_hint, triggered_skills = self._match_skills(user_input, emotion)
@@ -185,8 +182,6 @@ class Agent:
         traj.meta["emotional_support"] = emotional_support.to_dict()
         if triggered_skills:
             traj.meta["triggered_skills"] = list(triggered_skills)
-        if related_claim_ids:
-            traj.meta["related_claim_ids"] = list(related_claim_ids)
         if search_call is not None:
             traj.meta["search"] = {
                 "level": search_call.get("decision_level"),
@@ -325,7 +320,6 @@ class Agent:
             tool_calls=all_tool_calls,
             emotion=emotion,
             emotional_support=emotional_support.to_dict(),
-            related_claim_ids=related_claim_ids,
             triggered_skills=triggered_skills,
             search_sources=search_sources,
         )

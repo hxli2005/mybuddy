@@ -63,7 +63,7 @@ def _make_memory(engine, cfg, provider) -> MemoryManager:
     mm._extractor = None
     mm._recent_turns = []
     mm._turns_since_extract = 0
-    mm.build_context_section = lambda _: ("", [])  # type: ignore[method-assign]
+    mm.build_context_section = lambda _: ""  # type: ignore[method-assign]
 
     async def _noop() -> bool:
         return False

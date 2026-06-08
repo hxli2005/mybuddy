@@ -60,7 +60,7 @@ class MemoryManager:
         self._ltm.normalize_metadata()
         self._governance = MemoryGovernance(ltm)
 
-        # 命题已合并为 SQLite 单一真相源:清理历史遗留的 claim 档案镜像卡(幂等)。
+        # 命题层已整体移除:清理历史遗留的 claim 档案卡(幂等)。
         # 否则它们会继续被 list_all 全扫带上,并在开启 embedding 时被无谓嵌入。
         if ltm is not None:
             for item in ltm.list_all(mem_type="claim"):
@@ -139,24 +139,17 @@ class MemoryManager:
 
     # ---- 上下文构建 ----
 
-    def build_context_section(self, user_input: str) -> tuple[str, list[int]]:
-        """构建注入 system prompt 的记忆上下文文本块。
-
-        返回 (text, related_claim_ids):
-          text:包含少量相关长期记忆和用户画像字段,空段自动省略
-          related_claim_ids:兼容旧反馈链路;最简记忆下通常为空
+    def build_context_section(self, user_input: str) -> str:
+        """构建注入 system prompt 的记忆上下文文本块(空段自动省略)。
 
         最简记忆优先级:
           1. 未完成话题(open_thread):最多 1 条,必须有具体由头。
           2. 共同经历(shared_moment):最多 1 条,用于轻轻回响。
           3. 偏好与避雷(preference):最多 2 条,包含旧 anti_preference。
           4. 关于用户(profile/memory/profile_fields):最多 2 条,只取相关内容。
-
-        动态命题保留在后台画像中,不再直接注入主 prompt,避免给用户贴标签。
         """
         self._ensure_governance_state()
         parts: list[str] = []
-        related_claim_ids: list[int] = []
 
         scene = _infer_scene(user_input)
         if scene:
@@ -194,8 +187,7 @@ class MemoryManager:
                 field_lines.append(f"- {k}: {v}")
             parts.append("\n".join(field_lines))
 
-        text = "\n\n".join(parts) if parts else ""
-        return text, related_claim_ids
+        return "\n\n".join(parts) if parts else ""
 
     # ---- 事实抽取 ----
 
@@ -275,18 +267,6 @@ class MemoryManager:
         for key, value in result.profile_fields.items():
             self._profile.set_field(key, value)
 
-        # 写入命题候选(M3 中新的命题从低置信度开始)
-        for claim_data in result.claims:
-            if isinstance(claim_data, dict) and "claim" in claim_data:
-                conf = float(claim_data.get("confidence", 0.5))
-                if conf < 0.65 or not turn_ids:
-                    continue
-                self._profile.add_claim(
-                    claim_data["claim"],
-                    confidence=conf,
-                    evidence_ids=list(turn_ids),
-                )
-
         relationship_count = 0
         if self._ltm is not None:
             for mem_type in RELATIONSHIP_MEMORY_TYPES:
@@ -308,10 +288,9 @@ class MemoryManager:
                     relationship_count += 1
 
         logger.info(
-            "事实抽取完成: %d facts, %d fields, %d claims, %d relationship memories",
+            "事实抽取完成: %d facts, %d fields, %d relationship memories",
             len(result.facts),
             len(result.profile_fields),
-            len(result.claims),
             relationship_count,
         )
 
@@ -345,15 +324,6 @@ class MemoryManager:
                 if _interest_key(key):
                     topics.extend(_split_topic_candidates(value))
                 topics.extend(_extract_interest_topics_from_text(f"{key}:{value}"))
-
-            for claim in self._profile.get_all_claims(
-                min_confidence=0.45,
-                include_hidden=False,
-            ):
-                text = str(claim.get("claim") or "")
-                category = str(claim.get("category") or "")
-                if category == "preference" or _interest_text(text):
-                    topics.extend(_extract_interest_topics_from_text(text))
 
         if self._ltm is not None:
             for mem_type in ("profile", "memory", "preference"):

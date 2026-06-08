@@ -6,18 +6,15 @@ LLM 用 ScriptedProvider,Chroma 用 MockEmbedding;验证的是执行后观察到
 
 from __future__ import annotations
 
-import json
-from datetime import timedelta
 from typing import Any
 
 import pytest
 
-from mybuddy._time import utcnow
 from mybuddy.config import Config
 from mybuddy.learning import DreamJob
 from mybuddy.llm import BaseLLMProvider, LLMResponse, Message, ToolSpec
 from mybuddy.memory import LongTermMemory, UserProfile
-from mybuddy.storage import ProfileClaim, init_db, list_undelivered, session_scope
+from mybuddy.storage import init_db, list_undelivered
 
 from .test_memory import mock_embed
 
@@ -61,15 +58,6 @@ def dream_env(tmp_path):
     return engine, cfg, ltm, profile
 
 
-def _make_claim_eligible(engine, claim_id: int, *, category: str = "boundary") -> None:
-    with session_scope(engine) as s:
-        row = s.query(ProfileClaim).filter_by(id=claim_id).one()
-        row.status = "active"
-        row.category = category
-        row.evidence_count = 3
-        row.evidence_days_json = json.dumps(["2026-06-02", "2026-06-03"], ensure_ascii=False)
-
-
 @pytest.mark.asyncio
 async def test_dedup_merges_similar_memories(dream_env) -> None:
     engine, cfg, ltm, profile = dream_env
@@ -92,137 +80,6 @@ async def test_dedup_merges_similar_memories(dream_env) -> None:
 
 
 @pytest.mark.asyncio
-async def test_recompute_confidence_decays_old_claims(dream_env) -> None:
-    engine, cfg, ltm, profile = dream_env
-
-    cid = profile.add_claim("用户周日情绪偏低", confidence=0.5, evidence_ids=["turn_1"])
-    old_seen = utcnow() - timedelta(days=30)
-    with session_scope(engine) as s:
-        row = s.query(ProfileClaim).filter_by(id=cid).one()
-        row.last_seen_at = old_seen
-        row.evidence_days_json = json.dumps([old_seen.date().isoformat()], ensure_ascii=False)
-
-    provider = ScriptedProvider([])
-    job = DreamJob(engine=engine, config=cfg, provider=provider, ltm=ltm, profile=profile)
-    report = await job.run()
-
-    assert report.confidence_updates >= 1
-    claims_after = profile.get_all_claims()
-    match = next((c for c in claims_after if c["sql_id"] == cid), None)
-    assert match is not None
-    assert match["confidence"] < 0.5
-    assert match["last_seen_at"].startswith(old_seen.date().isoformat())
-
-
-@pytest.mark.asyncio
-async def test_recompute_confidence_boosts_recent_evidence(dream_env) -> None:
-    engine, cfg, ltm, profile = dream_env
-
-    cid = profile.add_claim("用户周日情绪偏低", confidence=0.5, evidence_ids=["turn_1"])
-
-    provider = ScriptedProvider([])
-    job = DreamJob(engine=engine, config=cfg, provider=provider, ltm=ltm, profile=profile)
-    report = await job.run()
-
-    assert report.confidence_updates >= 1
-    match = next((c for c in profile.get_all_claims() if c["sql_id"] == cid), None)
-    assert match is not None
-    assert match["confidence"] > 0.5
-
-
-@pytest.mark.asyncio
-async def test_insights_are_not_generated_by_default(dream_env) -> None:
-    engine, cfg, ltm, profile = dream_env
-
-    # 写两条 claim(>=2 让 _resolve_conflicts 能真的调 LLM,占据第 1 个脚本响应)
-    profile.add_claim("用户偏好简洁沟通", confidence=0.6)
-    profile.add_claim("用户对海鲜过敏", confidence=0.8)
-
-    # LLM 依次返回:conflict=空、nudges=空。nightly job 不再主动制造洞察命题。
-    provider = ScriptedProvider(
-        [
-            "[]",
-            "[]",
-        ]
-    )
-
-    before = len(profile.get_all_claims())
-    job = DreamJob(engine=engine, config=cfg, provider=provider, ltm=ltm, profile=profile)
-    report = await job.run()
-
-    assert report.insights_added == 0
-    after = len(profile.get_all_claims())
-    assert after == before
-
-
-@pytest.mark.asyncio
-async def test_insights_generation_is_skipped_even_with_many_candidates(dream_env) -> None:
-    engine, cfg, ltm, profile = dream_env
-
-    profile.add_claim("用户偏好简洁沟通", confidence=0.6)
-    profile.add_claim("用户对海鲜过敏", confidence=0.8)
-
-    items = [
-        {"claim": f"用户观察 {i}", "confidence": 0.4}
-        for i in range(5)
-    ]
-    provider = ScriptedProvider(["[]", json.dumps(items, ensure_ascii=False)])
-
-    before = len(profile.get_all_claims())
-    job = DreamJob(engine=engine, config=cfg, provider=provider, ltm=ltm, profile=profile)
-    report = await job.run()
-
-    assert report.insights_added == 0
-    assert len(profile.get_all_claims()) == before
-
-
-@pytest.mark.asyncio
-async def test_stable_claim_promoted_to_long_term_memory(dream_env) -> None:
-    engine, cfg, ltm, profile = dream_env
-
-    cid = profile.add_claim(
-        "用户不喜欢空泛鼓励",
-        confidence=0.8,
-        evidence_ids=["turn_1", "turn_2", "turn_3"],
-    )
-    _make_claim_eligible(engine, cid, category="boundary")
-
-    provider = ScriptedProvider([])
-    job = DreamJob(engine=engine, config=cfg, provider=provider, ltm=ltm, profile=profile)
-    report = await job.run()
-
-    assert report.promoted_claims == 1
-    claim = next(c for c in profile.get_all_claims() if c["sql_id"] == cid)
-    assert claim["status"] == "promoted"
-    assert claim["promoted_memory_id"]
-    assert profile.get_all_claims(include_hidden=False) == []
-
-    promoted = ltm.list_all(mem_type="preference")
-    assert len(promoted) == 1
-    assert promoted[0]["metadata"]["promoted_from_claim_id"] == cid
-
-
-@pytest.mark.asyncio
-async def test_conflicted_claim_is_not_promoted(dream_env) -> None:
-    engine, cfg, ltm, profile = dream_env
-
-    cid1 = profile.add_claim("用户喜欢直接建议", confidence=0.8, evidence_ids=["a", "b", "c"])
-    cid2 = profile.add_claim("用户不喜欢别人立刻给建议", confidence=0.8, evidence_ids=["d", "e", "f"])
-    _make_claim_eligible(engine, cid1, category="preference")
-    _make_claim_eligible(engine, cid2, category="boundary")
-
-    provider = ScriptedProvider([json.dumps([{"a": cid1, "b": cid2}], ensure_ascii=False)])
-    job = DreamJob(engine=engine, config=cfg, provider=provider, ltm=ltm, profile=profile)
-    report = await job.run()
-
-    assert report.conflicts_resolved == 1
-    assert report.promoted_claims == 0
-    claims = profile.get_all_claims()
-    assert all(c["status"] != "promoted" for c in claims)
-    assert any(c["conflict_ids"] for c in claims)
-
-
-@pytest.mark.asyncio
 async def test_nudges_enqueued(dream_env) -> None:
     engine, cfg, ltm, profile = dream_env
 
@@ -236,15 +93,9 @@ async def test_nudges_enqueued(dream_env) -> None:
         },
     )
 
-    # 为让 conflict 步调 LLM,需要 claims >= 2
-    profile.add_claim("用户偏好简洁沟通", confidence=0.6)
-    profile.add_claim("用户对海鲜过敏", confidence=0.8)
-    # conflict=空、nudges 2 条
+    # 只剩 nudges 这一步会调 LLM(返回 2 条)
     provider = ScriptedProvider(
-        [
-            "[]",
-            '["最近在上海还习惯吗?", "说起养猫的事,有什么进展没~"]',
-        ]
+        ['["最近在上海还习惯吗?", "说起养猫的事,有什么进展没~"]']
     )
 
     job = DreamJob(engine=engine, config=cfg, provider=provider, ltm=ltm, profile=profile)
@@ -282,9 +133,7 @@ async def test_run_collects_errors_without_crashing(dream_env) -> None:
     """某一步异常不应导致其他步骤失败。"""
     engine, cfg, ltm, profile = dream_env
 
-    # 补齐前置数据,让 LLM 相关步骤至少会被调用到
-    profile.add_claim("a", confidence=0.6)
-    profile.add_claim("b", confidence=0.6)
+    # 补齐前置数据,让 LLM 相关步骤(nudges / dynamics)至少会被调用到
     ltm.add("some memory", mem_type="memory")
     ltm.add("some open thread", mem_type="open_thread", extra_meta={"contact_reason": "test"})
     ltm.add("some shared moment", mem_type="shared_moment")
@@ -301,6 +150,6 @@ async def test_run_collects_errors_without_crashing(dream_env) -> None:
     )
     report = await job.run()
 
-    # LLM 相关步骤(conflict / nudges / dynamics)应该进 errors,但不崩
-    assert len(report.errors) >= 3
+    # LLM 相关步骤(nudges / dynamics)应该进 errors,但不崩
+    assert len(report.errors) >= 2
     assert all("LLM" in e or "RuntimeError" in e for e in report.errors)

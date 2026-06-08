@@ -57,8 +57,8 @@ def _make_memory(engine, config, provider) -> MemoryManager:
     mm._turns_since_extract = 0
 
     # override build_context_section to return empty(no Chroma)
-    def _empty_ctx(_user_input: str) -> tuple[str, list[int]]:
-        return "", []
+    def _empty_ctx(_user_input: str) -> str:
+        return ""
 
     mm.build_context_section = _empty_ctx  # type: ignore[method-assign]
 
@@ -325,7 +325,7 @@ async def test_agent_prefetches_search_for_interest_topic_fact_detail(tmp_path) 
 
     provider = ScriptedProvider([LLMResponse(text="这段我查了一下。", finish_reason="stop")])
     memory = _make_memory(engine, cfg, provider)
-    memory.profile.add_claim("用户喜欢恋与深空", confidence=0.8)
+    memory.profile.set_field("喜欢的游戏", "恋与深空")
     logger = TrajectoryLogger(tmp_path / "traj")
     agent = Agent(
         provider=provider,

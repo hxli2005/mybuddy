@@ -57,12 +57,6 @@ def _extraction_payload() -> str:
         {
             "facts": ["用户这周在准备项目报告，报告开头一直拖着没写。"],
             "profile_fields": {"当前项目": "周五项目报告"},
-            "claims": [
-                {
-                    "claim": "用户可能经常拖延写作任务",
-                    "confidence": 0.5,
-                }
-            ],
             "relationship_memories": {
                 "preference": [
                     {
@@ -150,7 +144,6 @@ async def test_daily_conversation_generates_minimal_memory_and_uses_it(tmp_path)
     assert len(ltm.list_all(mem_type="shared_moment")) == 1
     assert len(ltm.list_all(mem_type="open_thread")) == 1
     assert memory.profile.get_all_fields() == {"当前项目": "周五项目报告"}
-    assert memory.profile.get_all_claims() == []
 
     result = await agent.run("我又不想写报告开头了。")
     system_prompt = provider.chat_systems[-1]
@@ -160,6 +153,5 @@ async def test_daily_conversation_generates_minimal_memory_and_uses_it(tmp_path)
     assert "## 偏好与避雷" in system_prompt
     assert "## 关于用户" in system_prompt
     assert "## 关于用户的认知" not in system_prompt
-    assert result.related_claim_ids == []
     assert "第一句话" in result.text
     assert "不打鸡血" in result.text

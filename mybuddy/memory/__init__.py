@@ -3,7 +3,7 @@
 三层结构:
   - ShortTermMemory: 进程内滚动消息窗口
   - LongTermMemory: raw/conversations/archive 三层结构化文本存储
-  - UserProfile: 核心字段(hard facts) + 动态命题集(soft claims)
+  - UserProfile: 核心字段(hard facts)
 
 MemoryManager 统一协调三层,并触发 LLM 事实抽取。
 """

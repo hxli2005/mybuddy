@@ -21,7 +21,6 @@ from mybuddy.learning import (
     SkillCurator,
     SkillRegistry,
     TrajectoryLogger,
-    make_profile_claim_subscriber,
     make_skill_subscriber,
     make_trajectory_subscriber,
 )
@@ -69,7 +68,6 @@ class ChatResponse:
     tool_calls: list[dict[str, Any]] = field(default_factory=list)
     emotion: dict[str, Any] | None = None
     emotional_support: dict[str, Any] | None = None
-    related_claim_ids: list[int] = field(default_factory=list)
     triggered_skills: list[str] = field(default_factory=list)
     search_sources: list[dict[str, str]] = field(default_factory=list)
     pending_messages: list[dict[str, Any]] = field(default_factory=list)
@@ -83,7 +81,6 @@ class ChatResponse:
             "tool_calls": self.tool_calls,
             "emotion": self.emotion,
             "emotional_support": self.emotional_support,
-            "related_claim_ids": self.related_claim_ids,
             "triggered_skills": self.triggered_skills,
             "search_sources": self.search_sources,
             "pending_messages": self.pending_messages,
@@ -105,7 +102,6 @@ class UserRuntime:
     persona_version: str = "default"
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     last_turn_id: str | None = None
-    last_related_claim_ids: list[int] = field(default_factory=list)
     last_triggered_skills: list[str] = field(default_factory=list)
 
 
@@ -200,7 +196,6 @@ class ChatService:
                 )
             increment_usage(_require_engine(self.engine), user_id=user.id, source=ctx.source)
             runtime.last_turn_id = result.trajectory.turn_id
-            runtime.last_related_claim_ids = list(result.related_claim_ids)
             runtime.last_triggered_skills = list(result.triggered_skills)
             return ChatResponse(
                 text=result.text,
@@ -210,7 +205,6 @@ class ChatService:
                 tool_calls=list(result.tool_calls),
                 emotion=result.emotion.to_dict() if result.emotion else None,
                 emotional_support=result.emotional_support,
-                related_claim_ids=list(result.related_claim_ids),
                 triggered_skills=list(result.triggered_skills),
                 search_sources=list(result.search_sources),
                 pending_messages=pending_before + pending_after,
@@ -250,7 +244,6 @@ class ChatService:
             FeedbackEvent(
                 turn_id=tid,
                 label=clean_label,
-                related_claim_ids=list(runtime.last_related_claim_ids),
                 meta={"triggered_skills": list(runtime.last_triggered_skills)},
             )
         )
@@ -362,7 +355,6 @@ class ChatService:
         memory.rehydrate_short_term()
         feedback_bus = FeedbackBus()
         feedback_bus.subscribe(make_trajectory_subscriber(logger))
-        feedback_bus.subscribe(make_profile_claim_subscriber(profile))
         feedback_bus.subscribe(make_skill_subscriber(skill_registry))
         emotion_detector = (
             EmotionDetector(provider, user_cfg.llm.small_model) if self._enable_emotion else None

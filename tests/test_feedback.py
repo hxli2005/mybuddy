@@ -2,20 +2,13 @@
 
 from __future__ import annotations
 
-import pytest
-
 from mybuddy.learning import (
     FeedbackBus,
     FeedbackEvent,
     detect_implicit_negative,
-    make_profile_claim_subscriber,
     make_trajectory_subscriber,
 )
 from mybuddy.learning.trajectory import TrajectoryLogger
-from mybuddy.memory import LongTermMemory, UserProfile
-from mybuddy.storage import init_db
-
-from .test_memory import mock_embed
 
 # ---- bus ----
 
@@ -62,75 +55,6 @@ def test_trajectory_subscriber_writes_label(tmp_path) -> None:
     content = files[0].read_text(encoding="utf-8").strip()
     assert "turn-abc" in content
     assert '"label": "good"' in content
-
-
-# ---- profile claim subscriber ----
-
-@pytest.fixture
-def profile_env(tmp_path):
-    engine = init_db(str(tmp_path / "p.db"))
-    (tmp_path / "chroma").mkdir()
-    ltm = LongTermMemory(
-        persist_dir=str(tmp_path / "chroma"),
-        collection_name=f"fb_{tmp_path.name}",
-        embedding_fn=mock_embed,
-    )
-    return engine, UserProfile(engine, ltm)
-
-
-def test_claim_subscriber_boosts_on_good(profile_env) -> None:
-    _, profile = profile_env
-    cid = profile.add_claim("用户爱晨跑", confidence=0.5)
-
-    bus = FeedbackBus()
-    bus.subscribe(make_profile_claim_subscriber(profile))
-    bus.publish(FeedbackEvent(turn_id="t", label="good", related_claim_ids=[cid]))
-
-    claims = profile.get_all_claims()
-    match = next(c for c in claims if c["sql_id"] == cid)
-    assert match["confidence"] > 0.5  # 被 +delta_good(默认 0.05)
-
-
-def test_claim_subscriber_penalizes_on_bad(profile_env) -> None:
-    _, profile = profile_env
-    cid = profile.add_claim("用户讨厌咖啡", confidence=0.5)
-
-    bus = FeedbackBus()
-    bus.subscribe(make_profile_claim_subscriber(profile))
-    bus.publish(FeedbackEvent(turn_id="t", label="bad", related_claim_ids=[cid]))
-
-    claims = profile.get_all_claims()
-    match = next(c for c in claims if c["sql_id"] == cid)
-    assert match["confidence"] < 0.5  # 被 +delta_bad(默认 -0.1)
-
-
-def test_claim_subscriber_skips_without_related(profile_env) -> None:
-    _, profile = profile_env
-    cid = profile.add_claim("x", confidence=0.5)
-
-    bus = FeedbackBus()
-    bus.subscribe(make_profile_claim_subscriber(profile))
-    # 无 related_claim_ids
-    bus.publish(FeedbackEvent(turn_id="t", label="bad"))
-
-    claims = profile.get_all_claims()
-    match = next(c for c in claims if c["sql_id"] == cid)
-    assert match["confidence"] == 0.5
-
-
-def test_claim_subscriber_treats_implicit_negative_as_negative(profile_env) -> None:
-    _, profile = profile_env
-    cid = profile.add_claim("x", confidence=0.5)
-
-    bus = FeedbackBus()
-    bus.subscribe(make_profile_claim_subscriber(profile))
-    bus.publish(
-        FeedbackEvent(turn_id="t", label="implicit:negative", related_claim_ids=[cid])
-    )
-
-    claims = profile.get_all_claims()
-    match = next(c for c in claims if c["sql_id"] == cid)
-    assert match["confidence"] < 0.5
 
 
 # ---- 隐式反馈关键词 ----

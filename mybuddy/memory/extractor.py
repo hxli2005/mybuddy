@@ -7,7 +7,6 @@
 抽取结果:
   - facts: 要写入 profile 记忆卡的明确事实
   - profile_fields: {"key": "value"} 类型的字段更新
-  - claims: 少量后台候选观察,默认应为空
 
 注意:抽取是"可能产生幻觉"的操作(M3 无法完全消除,属于已知风险),
 因此弱推测默认不进入长期记忆,需要后续证据持续增强。
@@ -46,9 +45,6 @@ EXTRACT_PROMPT = """你是一个关系记忆管理助手。请从以下用户与
 {
   "facts": ["值得记住的事实 1", "值得记住的事实 2"],
   "profile_fields": {"字段名": "字段值"},
-  "claims": [
-    {"claim": "关于用户的推测性命题", "confidence": 0.6}
-  ],
   "relationship_memories": {
     "preference": [
       {
@@ -86,8 +82,6 @@ EXTRACT_PROMPT = """你是一个关系记忆管理助手。请从以下用户与
 - facts:从对话中提取明确陈述的事实(如"用户叫小明""用户喜欢美式咖啡")。无则返回空数组。
 - profile_fields:可确定为真的用户属性(如名字、生日、饮食偏好、过敏信息)。无则返回空对象。
   字段名用中文简写(如"名字""生日""咖啡偏好""过敏"等)。
-- claims:默认返回空数组。只有同类线索在这段对话中反复出现、但还不足以写成事实时才输出。
-  不要把一次性的情绪、拖延、疲惫写成长期命题。
 - relationship_memories:
   - 只使用 preference/shared_moment/open_thread 三类。不要新增其他类型。
   - preference:用户明确表达的稳定偏好、避雷、喜欢/不喜欢的回应方式。
@@ -108,12 +102,10 @@ class FactExtractResult:
         self,
         facts: list[str] | None = None,
         profile_fields: dict[str, str] | None = None,
-        claims: list[dict[str, Any]] | None = None,
         relationship_memories: dict[str, list[dict[str, Any]]] | None = None,
     ) -> None:
         self.facts: list[str] = facts or []
         self.profile_fields: dict[str, str] = profile_fields or {}
-        self.claims: list[dict[str, Any]] = claims or []
         self.relationship_memories: dict[str, list[dict[str, Any]]] = (
             relationship_memories or {k: [] for k in RELATIONSHIP_MEMORY_TYPES}
         )
@@ -122,14 +114,13 @@ class FactExtractResult:
         return (
             not self.facts
             and not self.profile_fields
-            and not self.claims
             and not any(self.relationship_memories.values())
         )
 
     def __repr__(self) -> str:
         return (
             f"FactExtractResult(facts={len(self.facts)}, "
-            f"fields={len(self.profile_fields)}, claims={len(self.claims)}, "
+            f"fields={len(self.profile_fields)}, "
             f"relationship_memories={sum(len(v) for v in self.relationship_memories.values())})"
         )
 
@@ -176,7 +167,6 @@ class FactExtractor:
         return FactExtractResult(
             facts=_str_list(data.get("facts")),
             profile_fields=_str_dict(data.get("profile_fields")),
-            claims=_dict_list(data.get("claims")),
             relationship_memories=_relationship_memories(data),
         )
 
@@ -213,12 +203,6 @@ def _str_dict(value: Any) -> dict[str, str]:
         for k, v in value.items()
         if str(k).strip() and str(v).strip()
     }
-
-
-def _dict_list(value: Any) -> list[dict[str, Any]]:
-    if not isinstance(value, list):
-        return []
-    return [item for item in value if isinstance(item, dict)]
 
 
 def _relationship_memories(data: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:

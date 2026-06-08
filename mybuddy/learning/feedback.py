@@ -1,8 +1,7 @@
 """FeedbackEvent 总线。
 
-解耦三方订阅者:
+解耦订阅者:
   - trajectory logger:写 labels 文件
-  - profile claim 回写:本轮检索到的命题按反馈调置信度
   - (M6)skill success/fail 计数
 
 CLI 的 /good /bad /fix 和隐式反馈统一 publish 事件,各订阅者独立处理。
@@ -33,8 +32,6 @@ class FeedbackEvent:
 
     turn_id: str
     label: str
-    # 本轮关联的 claim ids(画像命题回写时用),CLI 发事件时填
-    related_claim_ids: list[int] = field(default_factory=list)
     # 任意附加信息(skill_name、emotion 等)
     meta: dict[str, Any] = field(default_factory=dict)
 
@@ -100,26 +97,6 @@ def make_skill_subscriber(registry) -> Subscriber:
         elif event.is_negative:
             for name in names:
                 registry.record_failure(name)
-
-    return _sub
-
-
-def make_profile_claim_subscriber(profile, *, delta_good: float = 0.05, delta_bad: float = -0.1) -> Subscriber:
-    """正反馈小幅加强、负反馈较大削弱本轮检索到的命题。
-
-    rationale:命题是"对用户的推测",reward 信号非常弱 —— 即使用户说 good,也不是在
-    肯定画像命题的正确性,更可能是肯定 AI 回复本身。因此两边 delta 都保守,
-    负向 > 正向(错得离谱比说对更值得更新)。
-    """
-
-    def _sub(event: FeedbackEvent) -> None:
-        if not event.related_claim_ids:
-            return
-        delta = delta_good if event.is_positive else (delta_bad if event.is_negative else 0.0)
-        if delta == 0.0:
-            return
-        for cid in event.related_claim_ids:
-            profile.update_confidence(cid, delta)
 
     return _sub
 

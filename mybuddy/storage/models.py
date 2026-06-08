@@ -4,14 +4,14 @@ M1 只建基础表,字段保持最小。各表将在对应里程碑开始写入:
 - messages (M2 对话历史)
 - reminders (M2 提醒工具)
 - pending_messages (M4 主动关怀队列)
-- profile_fields / profile_claims (M3 用户画像)
+- profile_fields (M3 用户画像核心字段)
 """
 
 from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from mybuddy._time import utcnow as _now
@@ -147,29 +147,6 @@ class ProfileField(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     key: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     value: Mapped[str] = mapped_column(Text)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
-
-
-class ProfileClaim(Base):
-    """用户画像动态命题(soft claims):带置信度与证据链。"""
-
-    __tablename__ = "profile_claims"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    claim: Mapped[str] = mapped_column(Text)
-    confidence: Mapped[float] = mapped_column(Float, default=0.5)
-    evidence_ids_json: Mapped[str | None] = mapped_column(Text, nullable=True)
-    # candidate | active | stable | promoted | stale | refuted | archived
-    status: Mapped[str] = mapped_column(String(16), default="active", index=True)
-    # general | fact | preference | relationship | emotion_pattern | task | boundary
-    category: Mapped[str] = mapped_column(String(32), default="general", index=True)
-    evidence_count: Mapped[int] = mapped_column(Integer, default=0)
-    evidence_days_json: Mapped[str | None] = mapped_column(Text, nullable=True)
-    conflict_ids_json: Mapped[str | None] = mapped_column(Text, nullable=True)
-    first_seen_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
-    last_seen_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
-    promoted_memory_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
-    promotion_checked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
 
 
