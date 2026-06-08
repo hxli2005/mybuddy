@@ -253,7 +253,17 @@ def _first_balanced_object(text: str) -> str | None:
 def _str_list(value: Any) -> list[str]:
     if not isinstance(value, list):
         return []
-    return [str(item).strip() for item in value if str(item).strip()]
+    out: list[str] = []
+    for item in value:
+        # 模型偶尔把事实返成 {"text": "..."} / {"fact": "..."} 而非裸字符串;
+        # 直接 str(dict) 会得到 "{'text': ...}" repr 垃圾,这里取其文本键。
+        if isinstance(item, dict):
+            s = str(item.get("text") or item.get("content") or item.get("fact") or "").strip()
+        else:
+            s = str(item).strip()
+        if s:
+            out.append(s)
+    return out
 
 
 def _entities(value: Any) -> list[dict[str, str]]:
@@ -294,11 +304,22 @@ def _corrections(value: Any) -> list[dict[str, str]]:
 def _str_dict(value: Any) -> dict[str, str]:
     if not isinstance(value, dict):
         return {}
-    return {
-        str(k).strip(): str(v).strip()
-        for k, v in value.items()
-        if str(k).strip() and str(v).strip()
-    }
+    out: dict[str, str] = {}
+    for k, v in value.items():
+        key = str(k).strip()
+        if not key:
+            continue
+        # 多值字段(过敏/兴趣等)模型常返成 list;str(list) 会写成 "['花生','海鲜']"
+        # repr 并注入提示词。list 拼成顿号分隔,复杂结构(dict)跳过避免脏数据。
+        if isinstance(v, list):
+            val = "、".join(str(x).strip() for x in v if str(x).strip())
+        elif isinstance(v, (str, int, float, bool)):
+            val = str(v).strip()
+        else:
+            continue
+        if val:
+            out[key] = val
+    return out
 
 
 def _relationship_memories(data: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:

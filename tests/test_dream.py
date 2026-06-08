@@ -142,6 +142,17 @@ async def test_nudges_skip_stale_and_respect_cooldown(dream_env) -> None:
     assert r2.nudges_enqueued == 0
 
 
+def test_parse_json_array_handles_prose_wrapped() -> None:
+    """回归(评审 #15):带前后白话的 nudge/dynamic JSON 数组应被兜底解析,而非整批丢弃。"""
+    from mybuddy.learning.dream import _parse_json_array
+
+    assert _parse_json_array('好的,这是两条:["在上海还习惯吗", "煤球还好吗"]\n希望有用') == [
+        "在上海还习惯吗",
+        "煤球还好吗",
+    ]
+    assert _parse_json_array("这不是 JSON") is None
+
+
 @pytest.mark.asyncio
 async def test_character_dynamic_enqueued(dream_env) -> None:
     engine, cfg, ltm, profile = dream_env

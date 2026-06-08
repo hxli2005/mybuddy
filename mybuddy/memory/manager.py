@@ -164,7 +164,11 @@ class MemoryManager:
             )
 
         if self._ltm is not None:
-            self._governance.refresh_open_thread_lifecycle()
+            # 生命周期刷新是后台维护,绝不能因一张坏卡(如脏时间字段)打断当前对话轮。
+            try:
+                self._governance.refresh_open_thread_lifecycle()
+            except Exception:
+                logger.exception("refresh_open_thread_lifecycle 失败,跳过本轮生命周期刷新")
 
         core_sections = [
             (("open_thread",), "## 未完成话题(有具体由头才提)", 1),
@@ -339,7 +343,9 @@ class MemoryManager:
         superseded = 0
         if self._ltm is not None:
             for corr in result.corrections:
-                target = self._find_supersede_target(str(corr.get("old") or ""))
+                target = self._find_supersede_target(
+                    str(corr.get("old") or ""), exclude_turn_ids=turn_ids
+                )
                 if target is not None and self._governance.supersede(
                     target, reason=str(corr.get("reason") or "user correction")
                 ):
@@ -408,17 +414,27 @@ class MemoryManager:
         if not hasattr(self, "_governance") and self._ltm is not None:
             self._governance = MemoryGovernance(self._ltm)
 
-    def _find_supersede_target(self, text: str) -> str | None:
+    def _find_supersede_target(
+        self, text: str, *, exclude_turn_ids: list[str] | None = None
+    ) -> str | None:
         """为一条用户纠正找要作废的旧卡:在 profile/preference/memory 里取词面最强的
-        active 命中,分数过 0.45 才动手——由显式纠正信号把关,宁可不动也不误废。"""
+        active 命中,分数过 0.45 才动手——由显式纠正信号把关,宁可不动也不误废。
+
+        exclude_turn_ids:跳过本批刚写入的卡(source_turn_ids 与之相交)。否则用户改口时
+        先写入的"改正后正确卡"会与 correction.old 共享词面,被自己反向标成 superseded。
+        """
         text = (text or "").strip()
         if not text or self._ltm is None:
             return None
+        exclude = set(exclude_turn_ids or [])
         best: dict | None = None
         best_score = 0.0
         for mem_type in ("profile", "preference", "memory"):
             for hit in self._ltm.search(text, top_k=1, mem_type=mem_type):
-                if (hit.get("metadata") or {}).get("status", "active") != "active":
+                meta = hit.get("metadata") or {}
+                if meta.get("status", "active") != "active":
+                    continue
+                if exclude and exclude & set(meta.get("source_turn_ids") or []):
                     continue
                 score = float(hit.get("score", 0))
                 if score > best_score:
@@ -667,8 +683,10 @@ def _entity_to_card(item: dict) -> tuple[str, dict]:
     meta: dict = {"importance": 0.7}
     if name:
         meta["entity_name"] = name
-        # memory_key 锚定名字:同名实体多次提到走合并而非新建。
-        meta["memory_key"] = f"entity:{name}"
+        # memory_key 锚定 关系+名字:同名实体多次提到走合并而非新建;但同名不同关系
+        # (如同名的人与宠物、朋友与同事)不再被误并成一张卡、属性混淆。
+        key_basis = f"{relation}:{name}" if relation else name
+        meta["memory_key"] = f"entity:{key_basis}"
     if relation:
         meta["relation"] = relation
     keywords = [w for w in (name, relation) if w]

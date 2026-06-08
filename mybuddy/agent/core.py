@@ -129,6 +129,9 @@ class Agent:
         self._skill_registry = skill_registry
         self._skill_curator = skill_curator
         self._warned_search_registry_fallback = False
+        # 持有后台 task 强引用:create_task 只被事件循环弱引用,挂起(await 网络)期间
+        # 无强引用会被 GC 提前回收,导致抽取/复盘静默中断(CPython 已知坑)。
+        self._bg_tasks: set[asyncio.Task] = set()
 
     @property
     def session_id(self) -> str:
@@ -522,7 +525,9 @@ class Agent:
         if len(eligible_tool_calls) < CURATOR_TOOL_CALL_THRESHOLD:
             return
         try:
-            asyncio.create_task(self._skill_curator.maybe_curate(traj))
+            task = asyncio.create_task(self._skill_curator.maybe_curate(traj))
+            self._bg_tasks.add(task)
+            task.add_done_callback(self._bg_tasks.discard)
         except RuntimeError:
             # 没有 running loop(例如在同步测试里 await agent.run 之外调用过),忽略
             logger.debug("no running loop for curator task, skipping")
@@ -530,7 +535,9 @@ class Agent:
     def _spawn_extract(self, turns: list[str], turn_ids: list[str]) -> None:
         """后台执行事实抽取,不阻塞回复;无 running loop 时静默跳过。"""
         try:
-            asyncio.create_task(self._memory.run_extract(turns, turn_ids))
+            task = asyncio.create_task(self._memory.run_extract(turns, turn_ids))
+            self._bg_tasks.add(task)
+            task.add_done_callback(self._bg_tasks.discard)
         except RuntimeError:
             logger.debug("no running loop for extract task, skipping")
 

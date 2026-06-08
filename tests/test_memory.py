@@ -330,6 +330,29 @@ def test_governance_deletes_long_stale_open_thread(ltm) -> None:
     assert ltm.list_all(mem_type="open_thread") == []
 
 
+def test_refresh_handles_timezone_aware_expires_at(ltm) -> None:
+    """回归(评审 C1):模型产出带时区的 expires_at 不应让 refresh 抛 TypeError 打断对话。"""
+    governance = MemoryGovernance(ltm)
+    governance.add_or_merge(
+        "用户周五要交报告",
+        mem_type="open_thread",
+        uid="ot_tz",
+        extra_meta={"title": "报告", "expires_at": "2000-01-01T00:00:00+08:00"},
+    )
+    # 不抛 + 已过期 → stale(aware 被规整成 naive-UTC 后能正常比较)
+    assert governance.refresh_open_thread_lifecycle() == 1
+    assert ltm.list_all(mem_type="open_thread")[0]["metadata"]["status"] == "stale"
+
+
+def test_merge_does_not_revive_snoozed_thread(ltm) -> None:
+    """回归(评审 C3):再次提到一个 snoozed 话题(同 memory_key)不该被合并复活成 active。"""
+    governance = MemoryGovernance(ltm)
+    uid = governance.add_or_merge("用户下周要交材料", mem_type="open_thread").memory_id
+    governance.snooze_open_thread(uid, "2099-01-01T00:00:00")
+    governance.add_or_merge("用户下周要交材料", mem_type="open_thread")  # 再次提到 → merge
+    assert ltm.list_all(mem_type="open_thread")[0]["metadata"]["status"] == "snoozed"
+
+
 # =============================================================================
 # UserProfile
 # =============================================================================
@@ -540,6 +563,33 @@ async def test_memory_manager_correction_without_strong_match_is_noop(tmp_path) 
 
 
 @pytest.mark.asyncio
+async def test_correction_does_not_supersede_same_batch_new_fact(tmp_path) -> None:
+    """回归(评审 C2):无历史旧卡时,corrections 不该把本批刚写入的'改正后正确卡'自己作废。"""
+    engine = init_db(str(tmp_path / "supersede3.db"))
+    cfg = Config()
+    chroma_dir = tmp_path / "supersede3_chroma"
+    chroma_dir.mkdir()
+    ltm = LongTermMemory(
+        persist_dir=str(chroma_dir), collection_name="supersede3", embedding_fn=mock_embed
+    )
+    # 没有预先存在的"喜欢咖啡"旧卡;新事实与 correction.old 词面高度相似
+    payload = json.dumps(
+        {
+            "facts": ["用户现在不喝美式咖啡了,改喝拿铁"],
+            "corrections": [{"old": "用户喜欢喝美式咖啡", "reason": "用户改口"}],
+        },
+        ensure_ascii=False,
+    )
+    manager = MemoryManager(engine=engine, config=cfg, ltm=ltm, provider=StaticProvider(payload))
+    assert await manager.run_extract(["USER: 我改喝拿铁了", "AI: 好"], ["t1"]) is True
+
+    cards = ltm.list_all(mem_type="profile")
+    assert cards, "新事实应被写入"
+    assert all(c["metadata"].get("status", "active") == "active" for c in cards)  # 没被自己作废
+    assert any("拿铁" in c["content"] for c in cards)
+
+
+@pytest.mark.asyncio
 async def test_concurrent_run_extract_merges_without_lost_update(tmp_path) -> None:
     """同一用户并发抽取写同一事实:合并成一张、occurrence_count 正确,且无残留临时文件。"""
     import asyncio as _asyncio
@@ -609,6 +659,33 @@ async def test_memory_manager_extracts_and_injects_entities(tmp_path) -> None:
     text = m1.build_context_section("煤球最近怎么样")
     assert "你身边的人和宠物" in text
     assert "煤球" in text
+
+
+@pytest.mark.asyncio
+async def test_entity_same_name_different_relation_not_merged(tmp_path) -> None:
+    """同名但不同关系(人 vs 宠物)不该被合并成一张卡、属性混淆。"""
+    engine = init_db(str(tmp_path / "ent_collide.db"))
+    cfg = Config()
+    chroma_dir = tmp_path / "ent_collide_chroma"
+    chroma_dir.mkdir()
+    ltm = LongTermMemory(
+        persist_dir=str(chroma_dir), collection_name="ec", embedding_fn=mock_embed
+    )
+    payload = json.dumps(
+        {
+            "entities": [
+                {"name": "小明", "relation": "朋友", "note": "大学同学,在北京"},
+                {"name": "小明", "relation": "猫", "note": "用户养的布偶猫"},
+            ]
+        },
+        ensure_ascii=False,
+    )
+    m = MemoryManager(engine=engine, config=cfg, ltm=ltm, provider=StaticProvider(payload))
+    assert await m.run_extract(["USER: 小明的事", "AI: 嗯"], ["t1"]) is True
+
+    ents = ltm.list_all(mem_type="entity")
+    assert len(ents) == 2  # 同名不同关系 → 两张卡
+    assert {e["metadata"].get("relation") for e in ents} == {"朋友", "猫"}
 
 
 def _golden_recall_store(tmp_path) -> MemoryManager:
@@ -796,6 +873,19 @@ def test_extractor_parse_empty_input_returns_empty() -> None:
     extractor = FactExtractor.__new__(FactExtractor)
     result = extractor._parse("not json at all")
     assert result.is_empty() is True
+
+
+def test_extractor_normalizes_nonstring_field_values() -> None:
+    """回归(评审 #14):模型把字段值返成 list / 把 fact 返成 dict 时,
+    不应写成 Python repr 垃圾再注入提示词。"""
+    from mybuddy.memory.extractor import FactExtractor
+
+    extractor = FactExtractor.__new__(FactExtractor)
+    result = extractor._parse(
+        '{"profile_fields": {"过敏": ["花生", "海鲜"]}, "facts": [{"text": "用户叫小明"}]}'
+    )
+    assert result.profile_fields == {"过敏": "花生、海鲜"}  # list → 顿号拼接,非 "['花生',...]"
+    assert result.facts == ["用户叫小明"]  # dict → 取 text 键,非 "{'text': ...}"
 
 
 # =============================================================================
