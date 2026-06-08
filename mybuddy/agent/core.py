@@ -149,8 +149,14 @@ class Agent:
         )
         all_tool_calls: list[dict[str, Any]] = []
 
-        # 2. 检索记忆上下文
-        memory_context = self._memory.build_context_section(user_input)
+        # 2. 检索记忆上下文。开 embedding 时语义查询是同步网络调用,丢到线程里跑,
+        #    避免阻塞事件循环、卡住其他并发请求(纯词法时无网络,直接同步即可)。
+        if getattr(self._memory, "semantic_enabled", False):
+            memory_context = await asyncio.to_thread(
+                self._memory.build_context_section, user_input
+            )
+        else:
+            memory_context = self._memory.build_context_section(user_input)
 
         # 3. Skill 匹配(可选)
         skill_hint, triggered_skills = self._match_skills(user_input, emotion)

@@ -287,6 +287,49 @@ def test_memory_governance_marks_expired_open_thread_stale(ltm) -> None:
     assert item["metadata"]["stale_at"]
 
 
+def test_governance_resolve_open_thread(ltm) -> None:
+    governance = MemoryGovernance(ltm)
+    uid = governance.add_or_merge("用户要写周五报告开头", mem_type="open_thread").memory_id
+
+    assert governance.resolve_open_thread(uid, reason="用户说搞定了") is True
+    item = ltm.list_all(mem_type="open_thread")[0]
+    assert item["metadata"]["status"] == "resolved"
+    assert item["metadata"]["resolved_reason"] == "用户说搞定了"
+    # resolved 非 active → 不再被检索召回
+    assert ltm.search("报告", mem_type="open_thread") == []
+    # 不存在的 id 不误操作
+    assert governance.resolve_open_thread("nonexistent") is False
+
+
+def test_governance_snooze_then_auto_wake(ltm) -> None:
+    governance = MemoryGovernance(ltm)
+    uid = governance.add_or_merge("用户下周要交材料", mem_type="open_thread").memory_id
+
+    # 压到未来:进入 snoozed,不被召回,也不被 refresh 唤醒
+    governance.snooze_open_thread(uid, "2099-01-01T00:00:00")
+    assert ltm.list_all(mem_type="open_thread")[0]["metadata"]["status"] == "snoozed"
+    assert ltm.search("材料", mem_type="open_thread") == []
+    governance.refresh_open_thread_lifecycle()
+    assert ltm.list_all(mem_type="open_thread")[0]["metadata"]["status"] == "snoozed"
+
+    # 压到过去 → refresh 自动唤醒为 active
+    governance.snooze_open_thread(uid, "2000-01-01T00:00:00")
+    assert governance.refresh_open_thread_lifecycle() == 1
+    assert ltm.list_all(mem_type="open_thread")[0]["metadata"]["status"] == "active"
+
+
+def test_governance_deletes_long_stale_open_thread(ltm) -> None:
+    governance = MemoryGovernance(ltm)
+    governance.add_or_merge(
+        "一个早就 stale 的旧话题",
+        mem_type="open_thread",
+        extra_meta={"status": "stale", "stale_at": "2000-01-01T00:00:00"},
+    )
+    assert len(ltm.list_all(mem_type="open_thread")) == 1
+    assert governance.refresh_open_thread_lifecycle() == 1  # 超 TTL → 删除
+    assert ltm.list_all(mem_type="open_thread") == []
+
+
 # =============================================================================
 # UserProfile
 # =============================================================================
@@ -440,6 +483,134 @@ async def test_memory_manager_extract_uses_governance_to_merge(tmp_path) -> None
     assert open_threads[0]["metadata"]["occurrence_count"] == 2
 
 
+@pytest.mark.asyncio
+async def test_memory_manager_supersedes_corrected_fact(tmp_path) -> None:
+    """用户显式改口 → 匹配的旧卡标 superseded、不再被召回;新事实照常写入。"""
+    engine = init_db(str(tmp_path / "supersede.db"))
+    cfg = Config()
+    cfg.memory.extract_after_turns = 1
+    chroma_dir = tmp_path / "supersede_chroma"
+    chroma_dir.mkdir()
+    ltm = LongTermMemory(
+        persist_dir=str(chroma_dir), collection_name="supersede", embedding_fn=mock_embed
+    )
+    ltm.add("用户喜欢喝美式咖啡", mem_type="profile", uid="old_coffee")
+
+    payload = json.dumps(
+        {
+            "facts": ["用户现在不喝咖啡了,改喝茶"],
+            "corrections": [{"old": "用户喜欢喝美式咖啡", "reason": "用户说现在不喝咖啡了"}],
+        },
+        ensure_ascii=False,
+    )
+    manager = MemoryManager(engine=engine, config=cfg, ltm=ltm, provider=StaticProvider(payload))
+    manager.record_turn("我现在不喝咖啡了,改喝茶", "好的", turn_id="t1")
+    assert await manager.maybe_extract() is True
+
+    old = next(i for i in ltm.list_all(mem_type="profile") if i["id"] == "old_coffee")
+    assert old["metadata"]["status"] == "superseded"
+    assert old["metadata"].get("superseded_reason")
+    assert all(h["id"] != "old_coffee" for h in ltm.search("咖啡", mem_type="profile"))
+    assert any("茶" in i["content"] for i in ltm.list_all(mem_type="profile"))
+
+
+@pytest.mark.asyncio
+async def test_memory_manager_correction_without_strong_match_is_noop(tmp_path) -> None:
+    """纠正找不到强匹配旧卡时不误废、不崩(corrections 非空仍走流程)。"""
+    engine = init_db(str(tmp_path / "supersede2.db"))
+    cfg = Config()
+    cfg.memory.extract_after_turns = 1
+    chroma_dir = tmp_path / "supersede2_chroma"
+    chroma_dir.mkdir()
+    ltm = LongTermMemory(
+        persist_dir=str(chroma_dir), collection_name="supersede2", embedding_fn=mock_embed
+    )
+    ltm.add("用户养了一只叫煤球的猫", mem_type="profile", uid="cat")
+
+    payload = json.dumps(
+        {"corrections": [{"old": "用户之前提过的某个工作职位", "reason": "改口"}]},
+        ensure_ascii=False,
+    )
+    manager = MemoryManager(engine=engine, config=cfg, ltm=ltm, provider=StaticProvider(payload))
+    manager.record_turn("随便聊聊", "嗯", turn_id="t1")
+    assert await manager.maybe_extract() is True  # corrections 非空 → 不算 empty
+
+    cat = next(i for i in ltm.list_all(mem_type="profile") if i["id"] == "cat")
+    assert cat["metadata"].get("status", "active") == "active"  # 不相关旧卡没被动
+
+
+@pytest.mark.asyncio
+async def test_concurrent_run_extract_merges_without_lost_update(tmp_path) -> None:
+    """同一用户并发抽取写同一事实:合并成一张、occurrence_count 正确,且无残留临时文件。"""
+    import asyncio as _asyncio
+
+    engine = init_db(str(tmp_path / "concurrent.db"))
+    cfg = Config()
+    chroma_dir = tmp_path / "concurrent_chroma"
+    chroma_dir.mkdir()
+    ltm = LongTermMemory(
+        persist_dir=str(chroma_dir), collection_name="concurrent", embedding_fn=mock_embed
+    )
+    payload = json.dumps({"facts": ["用户喜欢喝美式咖啡"]}, ensure_ascii=False)
+    manager = MemoryManager(engine=engine, config=cfg, ltm=ltm, provider=StaticProvider(payload))
+
+    await _asyncio.gather(
+        manager.run_extract(["USER: 我爱美式", "AI: 好"], ["t1"]),
+        manager.run_extract(["USER: 我爱美式", "AI: 好"], ["t2"]),
+    )
+
+    cards = ltm.list_all(mem_type="profile")
+    assert len(cards) == 1  # 合并成一张,而非两张重复
+    assert cards[0]["metadata"]["occurrence_count"] == 2
+    # 原子写不留临时文件:archive 目录只剩 .md
+    leftovers = [p.name for p in (chroma_dir / "archive").iterdir() if not p.name.endswith(".md")]
+    assert leftovers == []
+
+
+@pytest.mark.asyncio
+async def test_memory_manager_extracts_and_injects_entities(tmp_path) -> None:
+    """抽取的人/宠物落成 entity 卡,同名合并不堆重复,且能注入聊天上下文。"""
+    engine = init_db(str(tmp_path / "entity.db"))
+    cfg = Config()
+    chroma_dir = tmp_path / "entity_chroma"
+    chroma_dir.mkdir()
+    ltm = LongTermMemory(
+        persist_dir=str(chroma_dir), collection_name="entity", embedding_fn=mock_embed
+    )
+
+    p1 = json.dumps(
+        {
+            "entities": [
+                {"name": "煤球", "relation": "猫", "note": "用户养的橘猫,三岁,很黏人"},
+                {"name": "小敏", "relation": "妹妹", "note": "用户的妹妹,在读高三"},
+            ]
+        },
+        ensure_ascii=False,
+    )
+    m1 = MemoryManager(engine=engine, config=cfg, ltm=ltm, provider=StaticProvider(p1))
+    assert await m1.run_extract(["USER: 煤球和小敏的事", "AI: 嗯"], ["t1"]) is True
+    assert {e["metadata"].get("entity_name") for e in ltm.list_all(mem_type="entity")} == {
+        "煤球",
+        "小敏",
+    }
+
+    # 同名实体再次提到 → 合并(occurrence_count++),不堆第二张
+    p2 = json.dumps(
+        {"entities": [{"name": "煤球", "relation": "猫", "note": "煤球最近胖了不少"}]},
+        ensure_ascii=False,
+    )
+    m2 = MemoryManager(engine=engine, config=cfg, ltm=ltm, provider=StaticProvider(p2))
+    assert await m2.run_extract(["USER: 煤球胖了", "AI: 哈"], ["t2"]) is True
+    cats = [e for e in ltm.list_all(mem_type="entity") if e["metadata"].get("entity_name") == "煤球"]
+    assert len(cats) == 1
+    assert cats[0]["metadata"]["occurrence_count"] == 2
+
+    # 注入聊天上下文
+    text = m1.build_context_section("煤球最近怎么样")
+    assert "你身边的人和宠物" in text
+    assert "煤球" in text
+
+
 # =============================================================================
 # FactExtractor
 # =============================================================================
@@ -534,6 +705,34 @@ def test_extractor_parse_markdown_wrapped_json() -> None:
     )
     assert len(result.facts) == 1
     assert result.profile_fields == {"香菜": "不喜欢"}
+
+
+def test_extractor_parse_prose_wrapped_json() -> None:
+    """小模型常加客套话/解释:括号配平要能从中捞出 JSON,而非整批丢弃。"""
+    from mybuddy.memory.extractor import FactExtractor
+
+    extractor = FactExtractor.__new__(FactExtractor)
+    # 前有客套话、后有解释、无 markdown 围栏
+    result = extractor._parse(
+        '好的,以下是我提取的结果:\n'
+        '{"facts": ["用户在上海工作"], "profile_fields": {"城市": "上海"}}\n'
+        '希望对你有帮助!'
+    )
+    assert result.facts == ["用户在上海工作"]
+    assert result.profile_fields == {"城市": "上海"}
+
+
+def test_extractor_balanced_object_skips_braces_in_strings() -> None:
+    """括号配平要正确跳过字符串字面量里的花括号,不被提前截断。"""
+    from mybuddy.memory.extractor import _first_balanced_object
+
+    src = 'noise {"facts": ["这条含 } 和 { 符号"], "profile_fields": {}} trailing'
+    obj = _first_balanced_object(src)
+    assert obj is not None
+    import json
+
+    data = json.loads(obj)
+    assert data["facts"] == ["这条含 } 和 { 符号"]
 
 
 def test_extractor_parse_empty_input_returns_empty() -> None:

@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from typing import TYPE_CHECKING
@@ -98,6 +99,9 @@ class MemoryManager:
         self._recent_turns: list[str] = []
         self._recent_turn_ids: list[str] = []
         self._turns_since_extract = 0
+        # 串行化本 manager(= 本用户)的语义 reconcile:连发消息会并发 spawn 多个
+        # run_extract,两个 reconcile 同时打同一向量库会重复嵌入 + sqlite 抢锁。
+        self._reconcile_lock = asyncio.Lock()
 
     # ---- 短期记忆 ----
 
@@ -171,6 +175,7 @@ class MemoryManager:
                 2,
             ),
             (("profile", "memory"), "## 关于用户", 2),
+            (("entity",), "## 你身边的人和宠物", 2),
         ]
         for mem_types, title, limit in core_sections:
             hits = self._memory_hits(user_input, mem_types, top_k=limit)
@@ -311,22 +316,55 @@ class MemoryManager:
                     )
                     relationship_count += 1
 
+        # 用户身边重要的人/宠物 → entity 卡。memory_key 锚定名字,同一实体多次提到
+        # 走治理合并(occurrence_count++)而非堆重复。
+        entity_count = 0
+        if self._ltm is not None:
+            for ent in result.entities:
+                content, meta = _entity_to_card(ent)
+                if not content:
+                    continue
+                meta.setdefault("source_turn_ids", list(turn_ids))
+                self._governance.add_or_merge(
+                    content,
+                    mem_type="entity",
+                    session_id=self._session_id,
+                    source="entity_extraction",
+                    extra_meta=meta,
+                )
+                entity_count += 1
+
+        # 用户显式纠正/否定 → 把匹配的旧卡标 superseded(不物理删,可回溯)。
+        # 由显式纠正信号把关 + 仅取词面最强命中 + 阈值,宁可不动也不误废。
+        superseded = 0
+        if self._ltm is not None:
+            for corr in result.corrections:
+                target = self._find_supersede_target(str(corr.get("old") or ""))
+                if target is not None and self._governance.supersede(
+                    target, reason=str(corr.get("reason") or "user correction")
+                ):
+                    superseded += 1
+
         logger.info(
-            "事实抽取完成: %d facts, %d fields, %d relationship memories",
+            "事实抽取完成: %d facts, %d fields, %d relationship, %d entities, %d superseded",
             len(result.facts),
             len(result.profile_fields),
             relationship_count,
+            entity_count,
+            superseded,
         )
 
         # 语义召回:把新写入的卡片重建进向量索引。embed 是网络调用,放线程里跑,
         # 不阻塞事件循环(本方法已在后台 task 中)。reconcile 幂等,首次会嵌入整个档案。
+        # 加锁串行化:避免同一用户并发抽取时两个 reconcile 撞同一向量库。
         if self._semantic is not None and self._semantic.enabled:
-            try:
-                import asyncio
-
-                await asyncio.to_thread(self._ltm.reconcile_semantic)
-            except Exception:
-                logger.exception("语义向量重建失败")
+            lock = getattr(self, "_reconcile_lock", None) or asyncio.Lock()
+            self._reconcile_lock = lock
+            async with lock:
+                try:
+                    await asyncio.to_thread(self._ltm.reconcile_semantic)
+                except Exception:
+                    logger.exception("语义向量重建失败")
         return True
 
     # ---- 属性访问 ----
@@ -338,6 +376,11 @@ class MemoryManager:
     @property
     def long_term(self) -> LongTermMemory:
         return self._ltm
+
+    @property
+    def semantic_enabled(self) -> bool:
+        """是否启用了语义召回(决定 build_context_section 是否走同步网络嵌入)。"""
+        return getattr(self, "_semantic", None) is not None and self._semantic.enabled
 
     def interest_topics(self, *, limit: int = 12) -> list[str]:
         """从画像和长期记忆中提取用户明确表达过兴趣的主题词。"""
@@ -364,6 +407,25 @@ class MemoryManager:
             self._recent_turn_ids = []
         if not hasattr(self, "_governance") and self._ltm is not None:
             self._governance = MemoryGovernance(self._ltm)
+
+    def _find_supersede_target(self, text: str) -> str | None:
+        """为一条用户纠正找要作废的旧卡:在 profile/preference/memory 里取词面最强的
+        active 命中,分数过 0.45 才动手——由显式纠正信号把关,宁可不动也不误废。"""
+        text = (text or "").strip()
+        if not text or self._ltm is None:
+            return None
+        best: dict | None = None
+        best_score = 0.0
+        for mem_type in ("profile", "preference", "memory"):
+            for hit in self._ltm.search(text, top_k=1, mem_type=mem_type):
+                if (hit.get("metadata") or {}).get("status", "active") != "active":
+                    continue
+                score = float(hit.get("score", 0))
+                if score > best_score:
+                    best_score, best = score, hit
+        if best is not None and best_score >= 0.45:
+            return str(best.get("id") or "") or None
+        return None
 
     def _memory_hits(
         self,
@@ -584,6 +646,35 @@ def _preference_valence(hit: dict) -> str:
         return "避开"
     text = f"{meta.get('title', '')} {hit.get('content', '')}"
     return "避开" if _NEGATIVE_INTEREST_RE.search(text) else "偏好"
+
+
+def _entity_to_card(item: dict) -> tuple[str, dict]:
+    """把抽取的实体 {name, relation, note} 转成 entity 卡 (content, meta)。
+
+    content 始终以"名字(关系)"开头,保证按名字能被词法检索召回(否则 note 里
+    可能根本没出现名字,叫不出名字就等于没记住)。
+    """
+    name = str(item.get("name") or "").strip()
+    relation = str(item.get("relation") or "").strip()
+    note = str(item.get("note") or "").strip()
+    if not name and not note:
+        return "", {}
+    if name and relation:
+        label = f"{name}({relation})"
+    else:
+        label = name or relation
+    content = f"{label}:{note}" if (label and note) else (note or label)
+    meta: dict = {"importance": 0.7}
+    if name:
+        meta["entity_name"] = name
+        # memory_key 锚定名字:同名实体多次提到走合并而非新建。
+        meta["memory_key"] = f"entity:{name}"
+    if relation:
+        meta["relation"] = relation
+    keywords = [w for w in (name, relation) if w]
+    if keywords:
+        meta["keywords"] = keywords
+    return content, meta
 
 
 def _relation_item_to_card(item: dict) -> tuple[str, dict]:

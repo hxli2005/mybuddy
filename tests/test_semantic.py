@@ -145,3 +145,24 @@ def test_reconcile_is_idempotent_on_unchanged(tmp_path) -> None:
     # 无变更:第二次 reconcile 不应再调用 embed(只比对 hash)
     assert ltm.reconcile_semantic() == 0
     assert embedder.calls == calls_after_first
+
+
+def test_query_embedding_cached_across_searches(tmp_path) -> None:
+    """同一 query 一轮内按多个 mem_type 反复 search 只嵌入一次(不再 6 次打网络)。"""
+    ltm = _ltm(tmp_path)
+    ltm.add("对目前公司氛围不满", mem_type="memory")
+    ltm.add("喜欢手冲咖啡", mem_type="preference")
+    embedder = ConceptEmbedder()
+    sem = SemanticRecall(_enabled_cfg(), tmp_path / "vectors.db", client=embedder)
+    ltm.attach_semantic(sem)
+    ltm.reconcile_semantic()  # 嵌入卡片,与 query 缓存无关
+
+    base = embedder.calls
+    q = "我最近想跳槽"
+    sem.search(q, 5, mem_type="memory")
+    sem.search(q, 5, mem_type="preference")
+    sem.search(q, 5, mem_type=None)
+    assert embedder.calls == base + 1  # 三次同 query → 仅 1 次嵌入
+
+    sem.search("换个完全不同的问题", 5)
+    assert embedder.calls == base + 2  # 不同 query → 再嵌一次

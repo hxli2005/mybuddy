@@ -13,6 +13,7 @@ notes 工具不需要关心底层已从向量库切到文本档案。
 from __future__ import annotations
 
 import json
+import os
 import re
 import uuid
 from collections.abc import Callable
@@ -397,7 +398,12 @@ class LongTermMemory:
         path = self._card_path(uid)
         path.parent.mkdir(parents=True, exist_ok=True)
         frontmatter = yaml.safe_dump(meta, allow_unicode=True, sort_keys=False)
-        path.write_text(f"---\n{frontmatter}---\n\n{content.strip()}\n", encoding="utf-8")
+        body = f"---\n{frontmatter}---\n\n{content.strip()}\n"
+        # 原子写:先写同目录临时文件再 os.replace(同目录 rename 原子)。否则并发读者
+        # (to_thread 里的 build / reconcile 线程)可能读到半写状态的卡。
+        tmp = path.with_name(f".{path.stem}.{uuid.uuid4().hex}.tmp")
+        tmp.write_text(body, encoding="utf-8")
+        os.replace(tmp, path)
         self._card_cache.pop(str(path), None)
 
     def _read_card(self, uid: str) -> tuple[dict[str, Any], str] | None:

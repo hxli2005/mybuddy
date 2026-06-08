@@ -75,7 +75,13 @@ EXTRACT_PROMPT = """你是一个关系记忆管理助手。请从以下用户与
         "confidence": 0.7
       }
     ]
-  }
+  },
+  "entities": [
+    {"name": "人名或宠物名", "relation": "与用户的关系(如 母亲/猫/同事/好友)", "note": "关于 TA 的关键信息"}
+  ],
+  "corrections": [
+    {"old": "用户之前说过、现在被改口或否定的旧信息", "reason": "用户如何纠正的"}
+  ]
 }
 
 规则:
@@ -88,6 +94,11 @@ EXTRACT_PROMPT = """你是一个关系记忆管理助手。请从以下用户与
   - shared_moment:用户和 AI 之间形成的共同经历、回忆卡、有效陪伴片段。
   - open_thread:未来有明确由头可回访的未完成话题;必须有具体 evidence,不要泛泛关心。
     如果能判断截止或过期时间,填写 expires_at;如果能判断事件发生时间,填写 event_time。
+- entities:用户生活里反复或明确提到的重要的人或宠物(家人/伴侣/好友/同事/宠物)。
+  name 填名字或称呼,relation 填关系,note 填关键信息。只记真正重要、明确提到的;
+  一次性路人、泛指的人群不要记。无则返回空数组。
+- corrections:仅当用户明确改口、否定或撤回之前说过的信息时填(如"其实不是…""我之前说错了""现在不…了")。
+  old 用一句话描述要作废的旧信息;纠正后的新信息照常放 facts/profile_fields,不要放这里。无则返回空数组。
 - 不要编造对话中未出现的内容。
 - 事实和画像只针对用户(USER);relationship_memories 可以抽取用户与 AI 的互动结果,但必须有对话证据。
 - 不要记录普通寒暄、短暂情绪、一次性任务过程或 AI 自己臆测的性格标签。
@@ -103,18 +114,26 @@ class FactExtractResult:
         facts: list[str] | None = None,
         profile_fields: dict[str, str] | None = None,
         relationship_memories: dict[str, list[dict[str, Any]]] | None = None,
+        corrections: list[dict[str, str]] | None = None,
+        entities: list[dict[str, str]] | None = None,
     ) -> None:
         self.facts: list[str] = facts or []
         self.profile_fields: dict[str, str] = profile_fields or {}
         self.relationship_memories: dict[str, list[dict[str, Any]]] = (
             relationship_memories or {k: [] for k in RELATIONSHIP_MEMORY_TYPES}
         )
+        # 用户显式改口/否定:每项 {"old": 要作废的旧信息, "reason": 纠正说法}
+        self.corrections: list[dict[str, str]] = corrections or []
+        # 用户身边重要的人/宠物:每项 {"name", "relation", "note"}
+        self.entities: list[dict[str, str]] = entities or []
 
     def is_empty(self) -> bool:
         return (
             not self.facts
             and not self.profile_fields
             and not any(self.relationship_memories.values())
+            and not self.corrections
+            and not self.entities
         )
 
     def __repr__(self) -> str:
@@ -168,11 +187,18 @@ class FactExtractor:
             facts=_str_list(data.get("facts")),
             profile_fields=_str_dict(data.get("profile_fields")),
             relationship_memories=_relationship_memories(data),
+            corrections=_corrections(data.get("corrections")),
+            entities=_entities(data.get("entities")),
         )
 
 
 def _extract_json_object(text: str) -> dict[str, Any] | None:
-    """从可能夹杂了 markdown 代码块的文本中提取 JSON 对象。"""
+    """从可能夹杂了 markdown 代码块 / 客套话的文本中提取 JSON 对象。
+
+    小模型常见失败:'好的,以下是结果:{...}'、JSON 后多一句解释、漏掉 ``` 围栏。
+    依次尝试:剥围栏后整段 → 第一个括号配平的 {...}(容忍前后多余文本),
+    都失败才返回 None。避免一句客套话就让整批抽取静默丢弃。
+    """
     # 去掉 ```json ... ``` 包裹
     clean = text.strip()
     if clean.startswith("```"):
@@ -183,16 +209,86 @@ def _extract_json_object(text: str) -> dict[str, Any] | None:
             lines = lines[:-1]
         clean = "\n".join(lines)
 
-    try:
-        return json.loads(clean)
-    except json.JSONDecodeError:
+    for candidate in (clean, _first_balanced_object(clean)):
+        if not candidate:
+            continue
+        try:
+            data = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(data, dict):
+            return data
+    return None
+
+
+def _first_balanced_object(text: str) -> str | None:
+    """返回第一个括号配平的 ``{...}`` 子串(正确跳过字符串字面量内的花括号)。"""
+    start = text.find("{")
+    if start == -1:
         return None
+    depth = 0
+    in_str = False
+    escape = False
+    for i in range(start, len(text)):
+        ch = text[i]
+        if in_str:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start : i + 1]
+    return None
 
 
 def _str_list(value: Any) -> list[str]:
     if not isinstance(value, list):
         return []
     return [str(item).strip() for item in value if str(item).strip()]
+
+
+def _entities(value: Any) -> list[dict[str, str]]:
+    """规整 entities:[{name, relation, note}]。name/note 至少有一个才保留。"""
+    if not isinstance(value, list):
+        return []
+    out: list[dict[str, str]] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "").strip()
+        relation = str(item.get("relation") or "").strip()
+        note = str(item.get("note") or item.get("content") or "").strip()
+        if name or note:
+            out.append({"name": name, "relation": relation, "note": note})
+    return out
+
+
+def _corrections(value: Any) -> list[dict[str, str]]:
+    """规整 corrections:[{old, reason}],兼容裸字符串。"""
+    if not isinstance(value, list):
+        return []
+    out: list[dict[str, str]] = []
+    for item in value:
+        if isinstance(item, str):
+            old = item.strip()
+            if old:
+                out.append({"old": old, "reason": ""})
+            continue
+        if not isinstance(item, dict):
+            continue
+        old = str(item.get("old") or item.get("content") or "").strip()
+        if old:
+            out.append({"old": old, "reason": str(item.get("reason") or "").strip()})
+    return out
 
 
 def _str_dict(value: Any) -> dict[str, str]:
