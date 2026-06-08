@@ -76,6 +76,9 @@ EXTRACT_PROMPT = """你是一个关系记忆管理助手。请从以下用户与
       }
     ]
   },
+  "entities": [
+    {"name": "人名或宠物名", "relation": "与用户的关系(如 母亲/猫/同事/好友)", "note": "关于 TA 的关键信息"}
+  ],
   "corrections": [
     {"old": "用户之前说过、现在被改口或否定的旧信息", "reason": "用户如何纠正的"}
   ]
@@ -91,6 +94,9 @@ EXTRACT_PROMPT = """你是一个关系记忆管理助手。请从以下用户与
   - shared_moment:用户和 AI 之间形成的共同经历、回忆卡、有效陪伴片段。
   - open_thread:未来有明确由头可回访的未完成话题;必须有具体 evidence,不要泛泛关心。
     如果能判断截止或过期时间,填写 expires_at;如果能判断事件发生时间,填写 event_time。
+- entities:用户生活里反复或明确提到的重要的人或宠物(家人/伴侣/好友/同事/宠物)。
+  name 填名字或称呼,relation 填关系,note 填关键信息。只记真正重要、明确提到的;
+  一次性路人、泛指的人群不要记。无则返回空数组。
 - corrections:仅当用户明确改口、否定或撤回之前说过的信息时填(如"其实不是…""我之前说错了""现在不…了")。
   old 用一句话描述要作废的旧信息;纠正后的新信息照常放 facts/profile_fields,不要放这里。无则返回空数组。
 - 不要编造对话中未出现的内容。
@@ -109,6 +115,7 @@ class FactExtractResult:
         profile_fields: dict[str, str] | None = None,
         relationship_memories: dict[str, list[dict[str, Any]]] | None = None,
         corrections: list[dict[str, str]] | None = None,
+        entities: list[dict[str, str]] | None = None,
     ) -> None:
         self.facts: list[str] = facts or []
         self.profile_fields: dict[str, str] = profile_fields or {}
@@ -117,6 +124,8 @@ class FactExtractResult:
         )
         # 用户显式改口/否定:每项 {"old": 要作废的旧信息, "reason": 纠正说法}
         self.corrections: list[dict[str, str]] = corrections or []
+        # 用户身边重要的人/宠物:每项 {"name", "relation", "note"}
+        self.entities: list[dict[str, str]] = entities or []
 
     def is_empty(self) -> bool:
         return (
@@ -124,6 +133,7 @@ class FactExtractResult:
             and not self.profile_fields
             and not any(self.relationship_memories.values())
             and not self.corrections
+            and not self.entities
         )
 
     def __repr__(self) -> str:
@@ -178,6 +188,7 @@ class FactExtractor:
             profile_fields=_str_dict(data.get("profile_fields")),
             relationship_memories=_relationship_memories(data),
             corrections=_corrections(data.get("corrections")),
+            entities=_entities(data.get("entities")),
         )
 
 
@@ -243,6 +254,22 @@ def _str_list(value: Any) -> list[str]:
     if not isinstance(value, list):
         return []
     return [str(item).strip() for item in value if str(item).strip()]
+
+
+def _entities(value: Any) -> list[dict[str, str]]:
+    """规整 entities:[{name, relation, note}]。name/note 至少有一个才保留。"""
+    if not isinstance(value, list):
+        return []
+    out: list[dict[str, str]] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "").strip()
+        relation = str(item.get("relation") or "").strip()
+        note = str(item.get("note") or item.get("content") or "").strip()
+        if name or note:
+            out.append({"name": name, "relation": relation, "note": note})
+    return out
 
 
 def _corrections(value: Any) -> list[dict[str, str]]:

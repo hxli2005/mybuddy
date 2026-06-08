@@ -175,6 +175,7 @@ class MemoryManager:
                 2,
             ),
             (("profile", "memory"), "## 关于用户", 2),
+            (("entity",), "## 你身边的人和宠物", 2),
         ]
         for mem_types, title, limit in core_sections:
             hits = self._memory_hits(user_input, mem_types, top_k=limit)
@@ -315,6 +316,24 @@ class MemoryManager:
                     )
                     relationship_count += 1
 
+        # 用户身边重要的人/宠物 → entity 卡。memory_key 锚定名字,同一实体多次提到
+        # 走治理合并(occurrence_count++)而非堆重复。
+        entity_count = 0
+        if self._ltm is not None:
+            for ent in result.entities:
+                content, meta = _entity_to_card(ent)
+                if not content:
+                    continue
+                meta.setdefault("source_turn_ids", list(turn_ids))
+                self._governance.add_or_merge(
+                    content,
+                    mem_type="entity",
+                    session_id=self._session_id,
+                    source="entity_extraction",
+                    extra_meta=meta,
+                )
+                entity_count += 1
+
         # 用户显式纠正/否定 → 把匹配的旧卡标 superseded(不物理删,可回溯)。
         # 由显式纠正信号把关 + 仅取词面最强命中 + 阈值,宁可不动也不误废。
         superseded = 0
@@ -327,10 +346,11 @@ class MemoryManager:
                     superseded += 1
 
         logger.info(
-            "事实抽取完成: %d facts, %d fields, %d relationship memories, %d superseded",
+            "事实抽取完成: %d facts, %d fields, %d relationship, %d entities, %d superseded",
             len(result.facts),
             len(result.profile_fields),
             relationship_count,
+            entity_count,
             superseded,
         )
 
@@ -626,6 +646,35 @@ def _preference_valence(hit: dict) -> str:
         return "避开"
     text = f"{meta.get('title', '')} {hit.get('content', '')}"
     return "避开" if _NEGATIVE_INTEREST_RE.search(text) else "偏好"
+
+
+def _entity_to_card(item: dict) -> tuple[str, dict]:
+    """把抽取的实体 {name, relation, note} 转成 entity 卡 (content, meta)。
+
+    content 始终以"名字(关系)"开头,保证按名字能被词法检索召回(否则 note 里
+    可能根本没出现名字,叫不出名字就等于没记住)。
+    """
+    name = str(item.get("name") or "").strip()
+    relation = str(item.get("relation") or "").strip()
+    note = str(item.get("note") or "").strip()
+    if not name and not note:
+        return "", {}
+    if name and relation:
+        label = f"{name}({relation})"
+    else:
+        label = name or relation
+    content = f"{label}:{note}" if (label and note) else (note or label)
+    meta: dict = {"importance": 0.7}
+    if name:
+        meta["entity_name"] = name
+        # memory_key 锚定名字:同名实体多次提到走合并而非新建。
+        meta["memory_key"] = f"entity:{name}"
+    if relation:
+        meta["relation"] = relation
+    keywords = [w for w in (name, relation) if w]
+    if keywords:
+        meta["keywords"] = keywords
+    return content, meta
 
 
 def _relation_item_to_card(item: dict) -> tuple[str, dict]:

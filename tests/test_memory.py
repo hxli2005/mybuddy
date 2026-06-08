@@ -567,6 +567,50 @@ async def test_concurrent_run_extract_merges_without_lost_update(tmp_path) -> No
     assert leftovers == []
 
 
+@pytest.mark.asyncio
+async def test_memory_manager_extracts_and_injects_entities(tmp_path) -> None:
+    """抽取的人/宠物落成 entity 卡,同名合并不堆重复,且能注入聊天上下文。"""
+    engine = init_db(str(tmp_path / "entity.db"))
+    cfg = Config()
+    chroma_dir = tmp_path / "entity_chroma"
+    chroma_dir.mkdir()
+    ltm = LongTermMemory(
+        persist_dir=str(chroma_dir), collection_name="entity", embedding_fn=mock_embed
+    )
+
+    p1 = json.dumps(
+        {
+            "entities": [
+                {"name": "煤球", "relation": "猫", "note": "用户养的橘猫,三岁,很黏人"},
+                {"name": "小敏", "relation": "妹妹", "note": "用户的妹妹,在读高三"},
+            ]
+        },
+        ensure_ascii=False,
+    )
+    m1 = MemoryManager(engine=engine, config=cfg, ltm=ltm, provider=StaticProvider(p1))
+    assert await m1.run_extract(["USER: 煤球和小敏的事", "AI: 嗯"], ["t1"]) is True
+    assert {e["metadata"].get("entity_name") for e in ltm.list_all(mem_type="entity")} == {
+        "煤球",
+        "小敏",
+    }
+
+    # 同名实体再次提到 → 合并(occurrence_count++),不堆第二张
+    p2 = json.dumps(
+        {"entities": [{"name": "煤球", "relation": "猫", "note": "煤球最近胖了不少"}]},
+        ensure_ascii=False,
+    )
+    m2 = MemoryManager(engine=engine, config=cfg, ltm=ltm, provider=StaticProvider(p2))
+    assert await m2.run_extract(["USER: 煤球胖了", "AI: 哈"], ["t2"]) is True
+    cats = [e for e in ltm.list_all(mem_type="entity") if e["metadata"].get("entity_name") == "煤球"]
+    assert len(cats) == 1
+    assert cats[0]["metadata"]["occurrence_count"] == 2
+
+    # 注入聊天上下文
+    text = m1.build_context_section("煤球最近怎么样")
+    assert "你身边的人和宠物" in text
+    assert "煤球" in text
+
+
 # =============================================================================
 # FactExtractor
 # =============================================================================

@@ -29,6 +29,7 @@ MERGEABLE_TYPES = {
     "anti_preference",
     "relationship_note",
     "character_note",
+    "entity",
 }
 
 TERMINAL_STATUSES = {"resolved", "archived", "deleted", "superseded"}
