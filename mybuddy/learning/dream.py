@@ -18,8 +18,10 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
+from mybuddy._time import utcnow
 from mybuddy.storage import enqueue
 
 if TYPE_CHECKING:
@@ -35,6 +37,8 @@ logger = logging.getLogger(__name__)
 DEDUP_TEXT_THRESHOLD = 0.82
 NUDGE_COUNT = 2
 DYNAMIC_COUNT = 1
+# 同一个未完成话题在这么多天内不重复 nudge,避免"你上次说的那个…"连推几天打扰用户。
+NUDGE_COOLDOWN_DAYS = 3
 
 
 @dataclass
@@ -155,7 +159,15 @@ class DreamJob:
     # 5. nudge 生成
     # -----------------------------------------------------------------
     async def _generate_nudges(self, report: DreamReport) -> None:
-        items = self._ltm.list_all(mem_type="open_thread")
+        now = utcnow()
+        # 只 nudge 仍 active 的未完成话题(已 stale/resolved 的不该再翻出来),
+        # 且跳过冷却期内刚 nudge 过的,避免反复打扰同一件事。
+        items = [
+            m
+            for m in self._ltm.list_all(mem_type="open_thread")
+            if (m.get("metadata") or {}).get("status", "active") == "active"
+            and not _recently_nudged(m, now, NUDGE_COOLDOWN_DAYS)
+        ]
         if not items:
             return
 
@@ -196,6 +208,11 @@ class DreamJob:
                 },
             )
             enqueued += 1
+        # 标记本批被选中的话题已 nudge,进入冷却期,下次跳过。
+        if enqueued:
+            stamp = now.isoformat(timespec="seconds")
+            for m in picks:
+                self._ltm.update_metadata(m["id"], {"last_nudged_at": stamp})
         report.nudges_enqueued = enqueued
 
     # -----------------------------------------------------------------
@@ -204,7 +221,11 @@ class DreamJob:
     async def _generate_dynamics(self, report: DreamReport) -> None:
         items: list[dict[str, Any]] = []
         for mem_type in ("shared_moment", "preference"):
-            items.extend(self._ltm.list_all(mem_type=mem_type))
+            items.extend(
+                m
+                for m in self._ltm.list_all(mem_type=mem_type)
+                if (m.get("metadata") or {}).get("status", "active") == "active"
+            )
         if not items:
             return
         items.sort(key=_updated_key, reverse=True)
@@ -245,6 +266,23 @@ class DreamJob:
 # ---------------------------------------------------------------------
 # 辅助函数
 # ---------------------------------------------------------------------
+
+def _parse_iso(value: Any) -> datetime | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        return datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _recently_nudged(item: dict[str, Any], now: datetime, days: int) -> bool:
+    """该未完成话题是否在冷却期内已 nudge 过(用同源 utcnow 写读,时区一致)。"""
+    last = _parse_iso((item.get("metadata") or {}).get("last_nudged_at"))
+    if last is None:
+        return False
+    return (now - last).days < days
+
 
 def _text_similarity(a: str, b: str) -> float:
     ta = set(_tokenize_text(a))
