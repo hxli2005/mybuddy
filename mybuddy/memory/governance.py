@@ -31,7 +31,11 @@ MERGEABLE_TYPES = {
     "character_note",
 }
 
-TERMINAL_STATUSES = {"resolved", "archived", "deleted"}
+TERMINAL_STATUSES = {"resolved", "archived", "deleted", "superseded"}
+
+# stale open_thread 超过这么多天直接删除:话题只会开不会关会让 archive 永久膨胀,
+# 每轮 list_all 全扫都被这些早已无关的卡稀释。
+STALE_TTL_DAYS = 30
 
 
 @dataclass(frozen=True)
@@ -93,26 +97,83 @@ class MemoryGovernance:
         return GovernanceResult("created", memory_id, self._find_by_id(memory_id))
 
     def refresh_open_thread_lifecycle(self) -> int:
-        """将已过期 open_thread 标为 stale,返回更新数量。"""
+        """刷新 open_thread 生命周期,返回发生变化的条数。
+
+        - active 且 expires_at 已过 → stale
+        - snoozed 且 snooze_until 已过 → 恢复 active(自动唤醒)
+        - stale 超过 STALE_TTL_DAYS → 删除(否则只开不关,archive 永久膨胀)
+        """
         now = utcnow()
         count = 0
         for item in self._ltm.list_all(mem_type="open_thread"):
             meta = item.get("metadata") or {}
-            if meta.get("status", "active") != "active":
-                continue
-            expires_at = _parse_iso(meta.get("expires_at"))
-            if expires_at is None or expires_at > now:
-                continue
-            self._ltm.update_metadata(
-                item["id"],
-                {
-                    "status": "stale",
-                    "stale_at": now.isoformat(timespec="seconds"),
-                    "stale_reason": "expires_at passed",
-                },
-            )
-            count += 1
+            status = meta.get("status", "active")
+            uid = item["id"]
+            if status == "active":
+                expires_at = _parse_iso(meta.get("expires_at"))
+                if expires_at is not None and expires_at <= now:
+                    self._ltm.update_metadata(
+                        uid,
+                        {
+                            "status": "stale",
+                            "stale_at": now.isoformat(timespec="seconds"),
+                            "stale_reason": "expires_at passed",
+                        },
+                    )
+                    count += 1
+            elif status == "snoozed":
+                snooze_until = _parse_iso(meta.get("snooze_until"))
+                if snooze_until is None or snooze_until <= now:
+                    self._ltm.update_metadata(uid, {"status": "active", "snooze_until": ""})
+                    count += 1
+            elif status == "stale":
+                stale_at = _parse_iso(meta.get("stale_at"))
+                if stale_at is not None and (now - stale_at).days >= STALE_TTL_DAYS:
+                    self._ltm.delete(uid)
+                    count += 1
         return count
+
+    def resolve_open_thread(self, uid: str, *, reason: str = "") -> bool:
+        """显式把未完成话题标记为已了结(resolved)。话题聊完后调用,之后检索/nudge
+        都不再翻它出来(resolved ∈ TERMINAL_STATUSES,_find_existing 也会跳过)。"""
+        item = self._find_by_id(uid)
+        if item is None or (item.get("metadata") or {}).get("type") != "open_thread":
+            return False
+        updates: dict[str, Any] = {
+            "status": "resolved",
+            "resolved_at": utcnow().isoformat(timespec="seconds"),
+        }
+        if reason:
+            updates["resolved_reason"] = reason
+        self._ltm.update_metadata(uid, updates)
+        return True
+
+    def supersede(self, uid: str, *, reason: str = "") -> bool:
+        """把一张旧卡标记为 superseded(被新信息取代/用户改口作废)。
+
+        不物理删除以可回溯;superseded ∈ TERMINAL_STATUSES,检索(status!=active)
+        与 _find_existing 都会跳过它。返回是否更新成功。
+        """
+        item = self._find_by_id(uid)
+        if item is None:
+            return False
+        updates: dict[str, Any] = {
+            "status": "superseded",
+            "superseded_at": utcnow().isoformat(timespec="seconds"),
+        }
+        if reason:
+            updates["superseded_reason"] = reason
+        self._ltm.update_metadata(uid, updates)
+        return True
+
+    def snooze_open_thread(self, uid: str, until: str) -> bool:
+        """把话题暂时压下到 until(ISO 时间):期间状态为 snoozed(非 active 故不召回/
+        不 nudge),到点由 refresh_open_thread_lifecycle 自动恢复 active。"""
+        item = self._find_by_id(uid)
+        if item is None or (item.get("metadata") or {}).get("type") != "open_thread":
+            return False
+        self._ltm.update_metadata(uid, {"status": "snoozed", "snooze_until": until})
+        return True
 
     def _find_existing(
         self,

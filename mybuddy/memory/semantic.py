@@ -88,7 +88,8 @@ class VectorIndex:
             )
 
     def _conn(self) -> sqlite3.Connection:
-        return sqlite3.connect(self._path)
+        # timeout=5s 即 busy_timeout:并发 reconcile / 读写撞锁时等待而非直接报错。
+        return sqlite3.connect(self._path, timeout=5.0)
 
     def hashes(self) -> dict[str, str]:
         with self._conn() as c:
@@ -144,6 +145,9 @@ class SemanticRecall:
         self._cfg = cfg
         self._client: Embedder = client or EmbeddingClient(cfg)
         self._index = VectorIndex(index_path)
+        # 最近一次 query 的归一化向量缓存:一轮 build_context_section 会对同一 query
+        # 按多个 mem_type 反复 search,缓存把 N 次网络嵌入压成 1 次。
+        self._q_cache: tuple[str, list[float]] | None = None
 
     @property
     def enabled(self) -> bool:
@@ -192,14 +196,25 @@ class SemanticRecall:
                 embedded += 1
         return embedded
 
+    def _query_vector(self, query: str) -> list[float] | None:
+        """嵌入查询并缓存最近一次结果(同一 query 一轮多次 search 只打一次网络)。"""
+        cached = self._q_cache
+        if cached is not None and cached[0] == query:
+            return cached[1]
+        qv = self._client.embed([query])
+        if not qv:
+            return None
+        vec = _normalize(qv[0])
+        self._q_cache = (query, vec)
+        return vec
+
     def search(self, query: str, top_k: int, *, mem_type: str | None = None) -> list[tuple[str, float]]:
         """返回 [(card_id, cosine), ...],按相似度降序。失败/空返回空。"""
         if not self.enabled or not query.strip():
             return []
-        qv = self._client.embed([query])
-        if not qv:
+        q = self._query_vector(query)
+        if q is None:
             return []
-        q = _normalize(qv[0])
         scored: list[tuple[str, float]] = []
         for card_id, vec in self._index.load(mem_type=mem_type):
             if len(vec) != len(q):
