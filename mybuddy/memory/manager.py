@@ -174,10 +174,26 @@ class MemoryManager:
         ]
         for mem_types, title, limit in core_sections:
             hits = self._memory_hits(user_input, mem_types, top_k=limit)
-            if hits:
-                lines = [title]
-                lines.extend(f"- {_format_memory_hit(h)}" for h in hits)
-                parts.append("\n".join(lines))
+            if not hits:
+                continue
+            lines = [title]
+            # 偏好段同时混着"喜欢"和"避雷",逐条标出正负价,否则模型可能把
+            # "讨厌X"误读成"喜欢X"去迎合(陪伴场景直接踩雷)。
+            is_pref = "preference" in mem_types or "anti_preference" in mem_types
+            for h in hits:
+                if is_pref:
+                    lines.append(f"-【{_preference_valence(h)}】{_format_memory_hit(h)}")
+                else:
+                    lines.append(f"- {_format_memory_hit(h)}")
+            parts.append("\n".join(lines))
+
+        # 用户主动存下的笔记:显式记忆,必须能在聊天里被自然想起。阈值比关系记忆更宽
+        # (0.2),因为笔记是用户刻意保存的高精度事实——否则"记笔记→马上问"会答不上来。
+        note_hits = self._memory_hits(user_input, ("note",), top_k=2, min_score=0.2)
+        if note_hits:
+            lines = ["## 你帮我记下的笔记(用户明确存的,直接采信)"]
+            lines.extend(f"- {_format_memory_hit(h)}" for h in note_hits)
+            parts.append("\n".join(lines))
 
         fields = self._profile.get_all_fields()
         relevant_fields = _relevant_profile_fields(fields, user_input, limit=2)
@@ -187,6 +203,14 @@ class MemoryManager:
                 field_lines.append(f"- {k}: {v}")
             parts.append("\n".join(field_lines))
 
+        if logger.isEnabledFor(logging.DEBUG):
+            titles = [p.split("\n", 1)[0] for p in parts]
+            logger.debug(
+                "build_context_section q=%r -> %d 段: %s",
+                user_input[:40],
+                len(parts),
+                titles,
+            )
         return "\n\n".join(parts) if parts else ""
 
     # ---- 事实抽取 ----
@@ -347,17 +371,24 @@ class MemoryManager:
         mem_types: tuple[str, ...],
         *,
         top_k: int,
+        min_score: float | None = None,
     ) -> list[dict]:
         if self._ltm is None:
             return []
         use_sem = getattr(self, "_semantic", None) is not None and self._semantic.enabled
-        # 混合检索返回 RRF 分(量纲不同),故仅纯词法时套 0.25 词面相关度下限;
+        # 混合检索返回 RRF 分(量纲不同),故仅纯词法时套词面相关度下限(默认 0.25);
+        # 调用方可用 min_score 放宽,如笔记这类用户显式存的高精度记忆。
         # 语义路径靠融合排名 + 分段配额裁剪,不再用词法阈值砍掉换词召回。
-        floor = 0.0 if use_sem else 0.25
+        floor = 0.0 if use_sem else (0.25 if min_score is None else min_score)
+        # 召回宽、展示窄:每个 mem_type 按更宽的候选数检索,合并去重重排后再截到展示
+        # top_k。否则多类型合并段(如 preference+anti_preference)里每路只取 top_k 就
+        # 截断,某类型的"第 3 名"即便更相关也进不了候选池,白白丢召回。词法是全量扫描,
+        # 多取候选几乎零成本。
+        cand = max(top_k, 5)
         hits_by_id: dict[str, dict] = {}
         for mem_type in mem_types:
             for hit in self._ltm.search(
-                user_input, top_k=top_k, mem_type=mem_type, use_semantic=use_sem
+                user_input, top_k=cand, mem_type=mem_type, use_semantic=use_sem
             ):
                 if hit.get("score", 0) < floor:
                     continue
@@ -375,8 +406,12 @@ class MemoryManager:
             reverse=True,
         )
         if hits:
+            _log_recall(mem_types, hits[:top_k], floor=floor, use_sem=use_sem, source="search")
             return hits[:top_k]
 
+        # 零命中时按 recency 兜底的类型:open_thread/shared_moment 是"主动回响";
+        # preference/anti_preference 只对"避雷"兜底(安全栏,任何话题下都不该踩),
+        # 正向偏好与当前话题无关时硬塞只会"乱提旧事",故在下方按正负价过滤。
         fallback_types = {
             "open_thread",
             "shared_moment",
@@ -384,6 +419,7 @@ class MemoryManager:
             "anti_preference",
         }
         if not any(mem_type in fallback_types for mem_type in mem_types):
+            _log_recall(mem_types, [], floor=floor, use_sem=use_sem, source="miss")
             return []
         fallback: list[dict] = []
         seen: set[str] = set()
@@ -392,6 +428,11 @@ class MemoryManager:
                 continue
             for item in self._ltm.list_all(mem_type=mem_type):
                 if (item.get("metadata") or {}).get("status", "active") != "active":
+                    continue
+                # 正向偏好不做 recency 兜底,只兜"避雷"(安全栏)。
+                if mem_type in ("preference", "anti_preference") and (
+                    _preference_valence(item) != "避开"
+                ):
                     continue
                 uid = str(item.get("id") or "")
                 if not uid or uid in seen:
@@ -402,7 +443,34 @@ class MemoryManager:
             key=lambda item: (item.get("metadata") or {}).get("updated_at", ""),
             reverse=True,
         )
+        _log_recall(mem_types, fallback[:top_k], floor=floor, use_sem=use_sem, source="recency_fallback")
         return fallback[:top_k]
+
+
+def _log_recall(
+    mem_types: tuple[str, ...],
+    hits: list[dict],
+    *,
+    floor: float,
+    use_sem: bool,
+    source: str,
+) -> None:
+    """召回链 DEBUG 日志:本段命中了哪些卡、走的哪条路径,便于线上复盘漏召/乱召。"""
+    if not logger.isEnabledFor(logging.DEBUG):
+        return
+    picked = ", ".join(
+        f"{h.get('id', '?')}({(h.get('metadata') or {}).get('type', '?')}"
+        f",{float(h.get('score', 0)):.2f})"
+        for h in hits
+    )
+    logger.debug(
+        "recall %s [%s floor=%.2f sem=%s] -> %s",
+        "+".join(mem_types),
+        source,
+        floor,
+        use_sem,
+        f"[{picked}]" if hits else "∅",
+    )
 
 
 def _infer_scene(user_input: str) -> str:
@@ -497,13 +565,25 @@ def _format_memory_hit(hit: dict) -> str:
         ("callback_style", "回响方式"),
         ("emotional_color", "情绪色"),
         ("event_time", "事件时间"),
-        ("expires_at", "过期时间"),
-        ("status", "状态"),
     ):
         value = meta.get(key)
         if value:
             bits.append(f"{label}:{value}")
     return " / ".join(bit for bit in bits if bit)
+
+
+def _preference_valence(hit: dict) -> str:
+    """判断一条偏好卡是"偏好"还是"避开"。
+
+    抽取侧把喜欢/不喜欢都折进 mem_type=preference,价正负只在正文措辞里
+    (extractor.py 的 prompt 明确只用 preference 一类)。注入时若不标出正负,
+    模型可能把"讨厌X"误读成"喜欢X"去迎合。
+    """
+    meta = hit.get("metadata") or {}
+    if meta.get("type") == "anti_preference":
+        return "避开"
+    text = f"{meta.get('title', '')} {hit.get('content', '')}"
+    return "避开" if _NEGATIVE_INTEREST_RE.search(text) else "偏好"
 
 
 def _relation_item_to_card(item: dict) -> tuple[str, dict]:
