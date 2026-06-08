@@ -23,6 +23,8 @@ dependencies = [
     "pyyaml>=6.0.1",
     # Date parsing (for "明天下午3点" 等自然语言时间)
     "python-dateutil>=2.9.0",
+    # Web search:浏览器指纹 HTTP,绕过 DuckDuckGo 反爬(裸抓取会被 202 挑战页挡)
+    "ddgs>=9.0",
 ]
 
 [project.optional-dependencies]

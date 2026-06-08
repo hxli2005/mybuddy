@@ -107,6 +107,40 @@ def _fetch_html(query: str, timeout: float) -> str:
     return text
 
 
+def _search_ddgs(query: str, max_results: int, timeout: float) -> list[dict[str, str]] | None:
+    """主搜索路径:ddgs 库(浏览器指纹 HTTP,能绕过 DDG 反爬)。
+
+    裸 HTML 抓取会间歇性吃到 DDG 的 202 反爬挑战页 / SSL 超时,导致搜索"跑不通";
+    ddgs 用浏览器 TLS 指纹稳定拿到结果。
+
+    返回结果列表;**未安装 ddgs 或调用失败时返回 None**,由上层回退到原始 HTML 抓取。
+    返回空列表 [] 表示搜到但无结果(权威空,不回退)。
+    """
+    try:
+        from ddgs import DDGS
+    except ImportError:
+        return None
+    try:
+        with DDGS(timeout=timeout) as ddgs:
+            rows = list(ddgs.text(query, max_results=max_results))
+    except Exception:  # noqa: BLE001
+        logger.warning("ddgs 搜索失败,回退原始抓取", exc_info=True)
+        return None
+    out: list[dict[str, str]] = []
+    for r in rows:
+        url = str(r.get("href") or r.get("url") or "").strip()
+        if not url:
+            continue
+        out.append(
+            {
+                "url": url,
+                "title": _clean(str(r.get("title") or "")),
+                "snippet": _clean(str(r.get("body") or r.get("snippet") or "")),
+            }
+        )
+    return out
+
+
 @tool(
     name="web_search",
     description=(
@@ -137,15 +171,19 @@ async def web_search(query: str, max_results: int = 5) -> dict:
     if cached and (now - cached.at) < CACHE_TTL_SEC:
         return {"query": query, "results": cached.value[:max_results], "cached": True}
 
-    try:
-        html_text = await asyncio.to_thread(_fetch_html, query, cfg.tools.http_timeout)
-        results = _parse_results(html_text, max_results)
-        if not results and "result__a" in html_text:
-            raise RuntimeError("DuckDuckGo results page parser matched no items")
-    except (OSError, RuntimeError, TimeoutError) as e:
-        logger.warning("web_search 失败: %s", e)
-        return {"query": query, "results": [], "error": f"{type(e).__name__}: {e}"}
+    # 主路:ddgs(绕过 DDG 反爬)。返回 None 表示不可用/失败 → 回退原始 HTML 抓取。
+    results = await asyncio.to_thread(_search_ddgs, query, max_results, cfg.tools.http_timeout)
+    if results is None:
+        try:
+            html_text = await asyncio.to_thread(_fetch_html, query, cfg.tools.http_timeout)
+            results = _parse_results(html_text, max_results)
+            if not results and "result__a" in html_text:
+                raise RuntimeError("DuckDuckGo results page parser matched no items")
+        except (OSError, RuntimeError, TimeoutError) as e:
+            logger.warning("web_search 失败: %s", e)
+            return {"query": query, "results": [], "error": f"{type(e).__name__}: {e}"}
 
+    results = results[:max_results]
     _cache[query] = _CacheEntry(at=now, value=results)
     return {"query": query, "results": results}
 
@@ -163,5 +201,6 @@ _internals: dict[str, Any] = {
     "parse_results": _parse_results,
     "decode_ddg_redirect": _decode_ddg_redirect,
     "fetch_html": _fetch_html,
+    "search_ddgs": _search_ddgs,
     "clear_cache": _clear_cache_for_tests,
 }

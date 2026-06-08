@@ -491,6 +491,40 @@ def test_memory_manager_prioritizes_relationship_context(tmp_path) -> None:
     assert "## 关系线索" not in text
 
 
+def test_memory_manager_injects_user_notes(tmp_path) -> None:
+    """用户主动存的笔记必须能在聊天里被自然想起。
+
+    回归:之前 build_context_section 不检索 mem_type="note",
+    导致"创建笔记 地点在上海 → 聊天立刻问地点"答不上来。
+    """
+    engine = init_db(str(tmp_path / "manager_notes.db"))
+    cfg = Config()
+    chroma_dir = tmp_path / "manager_notes_chroma"
+    chroma_dir.mkdir()
+    ltm = LongTermMemory(
+        persist_dir=str(chroma_dir),
+        collection_name="manager_notes",
+        embedding_fn=mock_embed,
+    )
+    # 模拟 write_note / create_note 落档(mem_type="note", importance=0.85)
+    ltm.add(
+        "地点在上海",
+        mem_type="note",
+        uid="note_1",
+        extra_meta={"sql_id": 1, "title": "地点", "source": "user_note", "importance": 0.85},
+    )
+    manager = MemoryManager(engine=engine, config=cfg, ltm=ltm, provider=DummyProvider())
+
+    # 相关提问:笔记进聊天上下文
+    text, _ = manager.build_context_section("我的地点在哪来着")
+    assert "你帮我记下的笔记" in text
+    assert "地点在上海" in text
+
+    # 无关提问:不误注入
+    other, _ = manager.build_context_section("今天晚饭想吃什么")
+    assert "地点在上海" not in other
+
+
 @pytest.mark.asyncio
 async def test_memory_manager_extract_uses_governance_to_merge(tmp_path) -> None:
     engine = init_db(str(tmp_path / "manager_governance.db"))

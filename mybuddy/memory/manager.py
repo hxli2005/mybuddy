@@ -152,6 +152,15 @@ class MemoryManager:
                 lines.extend(f"- {_format_memory_hit(h)}" for h in hits)
                 parts.append("\n".join(lines))
 
+        # 用户主动存下的笔记:显式记忆,必须能在聊天里被自然想起。
+        # 阈值比关系记忆更宽(0.2),因为笔记是用户刻意保存的高精度事实,
+        # 边缘词面命中也值得带出来——否则"记笔记→马上问"会答不上来。
+        note_hits = self._memory_hits(user_input, ("note",), top_k=2, min_score=0.2)
+        if note_hits:
+            lines = ["## 你帮我记下的笔记(用户明确存的,直接采信)"]
+            lines.extend(f"- {_format_memory_hit(h)}" for h in note_hits)
+            parts.append("\n".join(lines))
+
         fields = self._profile.get_all_fields()
         relevant_fields = _relevant_profile_fields(fields, user_input, limit=2)
         if relevant_fields:
@@ -333,13 +342,14 @@ class MemoryManager:
         mem_types: tuple[str, ...],
         *,
         top_k: int,
+        min_score: float = 0.25,
     ) -> list[dict]:
         if self._ltm is None:
             return []
         hits_by_id: dict[str, dict] = {}
         for mem_type in mem_types:
             for hit in self._ltm.search(user_input, top_k=top_k, mem_type=mem_type):
-                if hit.get("score", 0) < 0.25:
+                if hit.get("score", 0) < min_score:
                     continue
                 uid = str(hit.get("id") or "")
                 if not uid or uid in hits_by_id:
