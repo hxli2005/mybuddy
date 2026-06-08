@@ -69,7 +69,6 @@ export type ChatResponse = {
   tool_calls?: ToolCall[];
   emotion?: Emotion | null;
   emotional_support?: EmotionalSupport | null;
-  related_claim_ids?: number[];
   triggered_skills?: string[];
   search_sources?: SearchSource[];
   pending_messages?: PendingMessage[];
@@ -88,24 +87,8 @@ export type MessagesPayload = {
   messages: ChatLogMessage[];
 };
 
-export type ProfileClaim = {
-  sql_id?: number;
-  claim: string;
-  confidence: number;
-  evidence_ids?: string[];
-  status?: string;
-  category?: string;
-  evidence_count?: number;
-  evidence_days?: string[];
-  first_seen_at?: string;
-  last_seen_at?: string;
-  promoted_memory_id?: string | null;
-  updated_at?: string;
-};
-
 export type ProfilePayload = {
   fields: Record<string, string>;
-  claims: ProfileClaim[];
 };
 
 export type MemoryItem = {

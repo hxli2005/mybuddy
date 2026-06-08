@@ -7,7 +7,6 @@ import type {
   NotesPayload,
   Persona,
   PersonaPayload,
-  ProfileClaim,
   ProfilePayload,
   Reminder,
   RemindersPayload,
@@ -60,22 +59,6 @@ export function updateProfileField(key: string, value: string): Promise<{ field:
 
 export function deleteProfileField(key: string): Promise<{ ok: boolean; key: string }> {
   return request<{ ok: boolean; key: string }>(`/api/profile/fields/${encodeURIComponent(key)}`, {
-    method: "DELETE",
-  });
-}
-
-export function updateProfileClaim(
-  id: number,
-  input: { claim?: string; confidence?: number },
-): Promise<{ claim: ProfileClaim }> {
-  return request<{ claim: ProfileClaim }>(`/api/profile/claims/${id}`, {
-    method: "PATCH",
-    body: JSON.stringify(input),
-  });
-}
-
-export function deleteProfileClaim(id: number): Promise<{ ok: boolean; id: number }> {
-  return request<{ ok: boolean; id: number }>(`/api/profile/claims/${id}`, {
     method: "DELETE",
   });
 }
