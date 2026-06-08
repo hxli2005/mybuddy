@@ -239,6 +239,8 @@ async def test_web_search_parses_results(monkeypatch) -> None:
     from mybuddy.tools import web_search as mod
 
     mod._internals["clear_cache"]()
+    # 强制走回退(HTML 抓取)路径
+    monkeypatch.setattr(mod, "_search_ddgs", lambda *a, **k: None)
 
     def fake_fetch_html(query: str, timeout: float) -> str:
         return _DDG_HTML_SAMPLE
@@ -264,6 +266,7 @@ async def test_web_search_network_failure(monkeypatch) -> None:
     from mybuddy.tools import web_search as mod
 
     mod._internals["clear_cache"]()
+    monkeypatch.setattr(mod, "_search_ddgs", lambda *a, **k: None)
 
     def fake_fetch_html(query: str, timeout: float) -> str:
         raise OSError("network down")
@@ -284,6 +287,7 @@ async def test_web_search_challenge_page_is_reported_as_error(monkeypatch) -> No
     from mybuddy.tools import web_search as mod
 
     mod._internals["clear_cache"]()
+    monkeypatch.setattr(mod, "_search_ddgs", lambda *a, **k: None)
 
     def fake_fetch_html(query: str, timeout: float) -> str:
         raise RuntimeError("DuckDuckGo returned anti-bot challenge")
@@ -305,6 +309,78 @@ def test_web_search_decode_ddg_redirect() -> None:
     assert _decode_ddg_redirect(href) == "https://example.com/x?q=1"
     # 已是 http(s) URL 原样返回
     assert _decode_ddg_redirect("https://a.com/b") == "https://a.com/b"
+
+
+@pytest.mark.asyncio
+async def test_web_search_uses_ddgs_primary(monkeypatch) -> None:
+    """ddgs 可用时走主路,不触碰原始 HTML 抓取。"""
+    from mybuddy.tools import web_search as mod
+
+    mod._internals["clear_cache"]()
+    monkeypatch.setattr(
+        mod,
+        "_search_ddgs",
+        lambda q, n, t: [{"url": "https://e.com/x", "title": "标题", "snippet": "摘要"}],
+    )
+
+    def boom(*a, **k):  # ddgs 成功时不应回退到原始抓取
+        raise AssertionError("_fetch_html should not run when ddgs succeeds")
+
+    monkeypatch.setattr(mod, "_fetch_html", boom)
+    set_context(config=Config())
+
+    result = await mod.web_search("openai", max_results=3)
+    assert result["results"] == [{"url": "https://e.com/x", "title": "标题", "snippet": "摘要"}]
+    assert "error" not in result
+
+
+@pytest.mark.asyncio
+async def test_web_search_falls_back_to_html_when_ddgs_unavailable(monkeypatch) -> None:
+    """ddgs 不可用(返回 None)时回退到原始 HTML 抓取。"""
+    from mybuddy.tools import web_search as mod
+
+    mod._internals["clear_cache"]()
+    monkeypatch.setattr(mod, "_search_ddgs", lambda *a, **k: None)
+    monkeypatch.setattr(mod, "_fetch_html", lambda q, t: _DDG_HTML_SAMPLE)
+    set_context(config=Config())
+
+    result = await mod.web_search("hello", max_results=5)
+    assert len(result["results"]) == 3
+    assert result["results"][0]["url"] == "https://example.com/a"
+
+
+def test_search_ddgs_maps_rows_and_handles_failure(monkeypatch) -> None:
+    """_search_ddgs:映射 href/title/body、过滤无链接;DDGS 抛错时返回 None 触发回退。"""
+    import ddgs
+
+    from mybuddy.tools.web_search import _search_ddgs
+
+    class FakeDDGS:
+        def __init__(self, *a, **k) -> None: ...
+        def __enter__(self):
+            return self
+        def __exit__(self, *a):
+            return False
+        def text(self, query, max_results=5):
+            return [
+                {"href": "https://a.com", "title": "A", "body": "正文 A"},
+                {"href": "", "title": "无链接", "body": "应被过滤"},
+            ]
+
+    monkeypatch.setattr(ddgs, "DDGS", FakeDDGS)
+    assert _search_ddgs("q", 5, 5.0) == [
+        {"url": "https://a.com", "title": "A", "snippet": "正文 A"}
+    ]
+
+    class BoomDDGS:
+        def __init__(self, *a, **k) -> None: ...
+        def __enter__(self):
+            raise RuntimeError("blocked")
+        def __exit__(self, *a):
+            return False
+
+    monkeypatch.setattr(ddgs, "DDGS", BoomDDGS)
+    assert _search_ddgs("q", 5, 5.0) is None  # 失败 → None → 上层回退 HTML
 
 
 # =============================================================================
