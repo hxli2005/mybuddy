@@ -108,6 +108,41 @@ async def test_nudges_enqueued(dream_env) -> None:
 
 
 @pytest.mark.asyncio
+async def test_nudges_skip_stale_and_respect_cooldown(dream_env) -> None:
+    """nudge 只取 active 话题,且冷却期内不重复打扰同一件事。"""
+    from mybuddy.learning.dream import DreamReport
+
+    engine, cfg, ltm, profile = dream_env
+    ltm.add(
+        "用户说周五要交报告,还没动。",
+        mem_type="open_thread",
+        uid="ot_active",
+        extra_meta={"title": "报告", "status": "active", "contact_reason": "周五截止"},
+    )
+    ltm.add(
+        "一个已经过期的旧话题。",
+        mem_type="open_thread",
+        uid="ot_stale",
+        extra_meta={"title": "旧", "status": "stale", "contact_reason": "x"},
+    )
+    provider = ScriptedProvider(['["在想你那个报告,开头开了吗~"]'])
+    job = DreamJob(engine=engine, config=cfg, provider=provider, ltm=ltm, profile=profile)
+
+    r1 = DreamReport()
+    await job._generate_nudges(r1)
+    assert r1.nudges_enqueued == 1  # 只 nudge active,跳过 stale
+    active = next(i for i in ltm.list_all(mem_type="open_thread") if i["id"] == "ot_active")
+    stale = next(i for i in ltm.list_all(mem_type="open_thread") if i["id"] == "ot_stale")
+    assert active["metadata"].get("last_nudged_at")  # 被打上冷却戳
+    assert not stale["metadata"].get("last_nudged_at")  # stale 完全没被碰
+
+    # 冷却期内再跑:同一话题被跳过,不再 nudge
+    r2 = DreamReport()
+    await job._generate_nudges(r2)
+    assert r2.nudges_enqueued == 0
+
+
+@pytest.mark.asyncio
 async def test_character_dynamic_enqueued(dream_env) -> None:
     engine, cfg, ltm, profile = dream_env
 
