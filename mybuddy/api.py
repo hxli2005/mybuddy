@@ -35,7 +35,6 @@ from mybuddy.memory import LongTermMemory, MemoryManager, UserProfile
 from mybuddy.scheduler import MyBuddyScheduler
 from mybuddy.storage import (
     Note,
-    ProfileClaim,
     Reminder,
     UserSummaryRecord,
     append_message,
@@ -1099,24 +1098,7 @@ def _sync_memory_backing_update(
                 tags = _clean_note_tags(meta.get("tags"))
                 row.tags_json = json.dumps(tags, ensure_ascii=False) if tags else None
         return
-
-    if mem_type == "claim":
-        claim_id = _memory_sql_id(updated, "claim") or _memory_sql_id(original, "claim")
-        if claim_id is None:
-            return
-        with session_scope(engine) as s:
-            row = s.query(ProfileClaim).filter(ProfileClaim.id == claim_id).one_or_none()
-            if row is None:
-                return
-            row.claim = updated["content"]
-            confidence = meta.get("confidence")
-            if isinstance(confidence, int | float):
-                row.confidence = max(0.0, min(1.0, float(confidence)))
-            evidence_ids = meta.get("evidence_ids")
-            if isinstance(evidence_ids, str):
-                row.evidence_ids_json = evidence_ids
-            elif isinstance(evidence_ids, list):
-                row.evidence_ids_json = json.dumps(evidence_ids, ensure_ascii=False)
+    # 命题已合并为 SQLite 单一真相源,不再以档案卡形式经记忆端点编辑。
 
 
 def _sync_memory_backing_delete(engine: Engine, item: dict[str, Any]) -> None:
@@ -1131,15 +1113,7 @@ def _sync_memory_backing_delete(engine: Engine, item: dict[str, Any]) -> None:
             if row is not None:
                 s.delete(row)
         return
-
-    if mem_type == "claim":
-        claim_id = _memory_sql_id(item, "claim")
-        if claim_id is None:
-            return
-        with session_scope(engine) as s:
-            row = s.query(ProfileClaim).filter(ProfileClaim.id == claim_id).one_or_none()
-            if row is not None:
-                s.delete(row)
+    # 命题已合并为 SQLite 单一真相源,不再以档案卡形式经记忆端点删除。
 
 
 def _restore_reminders(scheduler: MyBuddyScheduler, engine: Engine) -> None:

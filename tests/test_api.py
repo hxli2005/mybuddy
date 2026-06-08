@@ -208,10 +208,10 @@ def test_profile_field_update_and_delete_payload(tmp_path) -> None:
         assert s.query(ProfileField).filter_by(key="称呼").one_or_none() is None
 
 
-def test_profile_claim_update_and_delete_payload_syncs_archive(tmp_path) -> None:
+def test_profile_claim_update_and_delete_payload(tmp_path) -> None:
+    # 命题为 SQLite 单一真相源:更新/删除走画像命题端点,不再镜像档案层。
     engine = init_db(str(tmp_path / "profile_claims.db"))
-    ltm = LongTermMemory(persist_dir=tmp_path / "memory")
-    profile = UserProfile(engine, ltm)
+    profile = UserProfile(engine)
     claim_id = profile.add_claim("用户最近对项目汇报焦虑", confidence=0.6)
     state = AppState(config_path="config.yaml")
     state.profile = profile
@@ -224,13 +224,12 @@ def test_profile_claim_update_and_delete_payload_syncs_archive(tmp_path) -> None
 
     assert updated["claim"]["claim"] == "用户最近担心项目汇报开头讲不顺"
     assert updated["claim"]["confidence"] == 0.8
-    hits = ltm.search("开头讲不顺", mem_type="claim")
-    assert hits and hits[0]["content"] == "用户最近担心项目汇报开头讲不顺"
 
     deleted = state.delete_profile_claim_payload(claim_id)
 
     assert deleted["ok"] is True
-    assert not ltm.search("开头讲不顺", mem_type="claim")
+    with session_scope(engine) as s:
+        assert s.query(ProfileClaim).filter(ProfileClaim.id == claim_id).one_or_none() is None
 
 
 def test_messages_payload_returns_raw_chat_log(tmp_path) -> None:
@@ -427,22 +426,6 @@ def test_memory_update_and_delete_payload(tmp_path) -> None:
 
     assert deleted["ok"] is True
     assert ltm.list_all() == []
-
-
-def test_memory_delete_claim_syncs_profile_sqlite(tmp_path) -> None:
-    engine = init_db(str(tmp_path / "claim_sync.db"))
-    ltm = LongTermMemory(persist_dir=tmp_path / "memory")
-    profile = UserProfile(engine, ltm)
-    claim_id = profile.add_claim("用户不喜欢空泛鼓励", confidence=0.7)
-    state = AppState(config_path="config.yaml")
-    state.engine = engine
-    state.ltm = ltm
-
-    deleted = state.delete_memory_payload(f"claim_{claim_id}")
-
-    assert deleted["ok"] is True
-    with session_scope(engine) as s:
-        assert s.query(ProfileClaim).filter(ProfileClaim.id == claim_id).one_or_none() is None
 
 
 def test_update_reminder_payload_cancels_pending(tmp_path) -> None:

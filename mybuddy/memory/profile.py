@@ -3,10 +3,10 @@
 借鉴 Hermes Agent / Honcho 的辩证式用户建模:
   - 核心字段(hard facts):姓名、生日、偏好、禁忌等,KV 形式存 SQLite。
   - 动态命题(soft claims):带置信度和证据链,新证据持续增强/削弱旧命题。
-    命题同时写入 LongTermMemory 档案层,支持文本检索。
+    命题以 SQLite 为单一真相源(不再镜像到档案层)。
 
 用法:
-    profile = UserProfile(engine, long_term_memory)
+    profile = UserProfile(engine)
     profile.set_field("名字", "小明")
     profile.add_claim("用户周日晚上情绪较低", confidence=0.7, evidence_ids=["msg_1"])
     hits = profile.search_claims("周末心情", top_k=3)
@@ -34,12 +34,13 @@ HIDDEN_CLAIM_STATUSES = {"promoted", "stale", "refuted", "archived"}
 class UserProfile:
     """混合型用户画像:核心字段 + 动态命题集。
 
-    核心字段读写走 SQLite,命题集增删改也走 SQLite,
-    但命题文本同时索引到 LongTermMemory 档案层以支持检索。
+    核心字段与动态命题均以 SQLite 为单一真相源。命题曾镜像到 LongTermMemory 档案层
+    供文本检索,现已合并掉——命题不进对话提示,只供后台治理/晋升与 admin 查看。
     """
 
     def __init__(self, engine: Engine, ltm: LongTermMemory | None = None) -> None:
         self._engine = engine
+        # ltm 仅为向后兼容保留(命题已合并为 SQLite 单一真相源,不再使用)。
         self._ltm = ltm
 
     # ------------------------------------------------------------------
@@ -90,21 +91,20 @@ class UserProfile:
         category: str | None = None,
         status: str | None = None,
     ) -> int:
-        """新增一条命题,返回 SQL 主键 id。同时索引到档案层。"""
+        """新增一条命题,返回 SQL 主键 id(SQLite 单一真相源)。"""
         clean_claim = (claim or "").strip()
         if not clean_claim:
             raise ValueError("claim is empty")
         memory_key = make_memory_key("claim", clean_claim)
         claim_category = _clean_category(category) or _infer_claim_category(clean_claim)
         claim_status = _clean_status(status) or ("active" if confidence >= 0.5 else "candidate")
-        existing_id = self._find_existing_claim_id(memory_key, clean_claim)
+        existing_id = self._find_existing_claim_id(memory_key)
         if existing_id is not None:
             return self._merge_claim(
                 existing_id,
                 clean_claim,
                 confidence=confidence,
                 evidence_ids=evidence_ids or [],
-                memory_key=memory_key,
                 category=claim_category,
                 status=claim_status,
             )
@@ -112,8 +112,7 @@ class UserProfile:
         now = utcnow()
         ev_ids = _merge_unique([], evidence_ids or [])
         ev_json = json.dumps(ev_ids, ensure_ascii=False)
-        ev_days = _evidence_days_for(ev_ids, now)
-        ev_days_json = json.dumps(ev_days, ensure_ascii=False)
+        ev_days_json = json.dumps(_evidence_days_for(ev_ids, now), ensure_ascii=False)
         with session_scope(self._engine) as s:
             pc = ProfileClaim(
                 claim=clean_claim,
@@ -129,47 +128,10 @@ class UserProfile:
             s.add(pc)
             s.flush()
             sql_id = pc.id
-
-        # 同步到档案层(使用确定性 id,方便后续更新)
-        if self._ltm is not None:
-            self._ltm.add(
-                clean_claim,
-                mem_type="claim",
-                uid=self._claim_archive_id(sql_id),
-                extra_meta={
-                    "sql_id": sql_id,
-                    "confidence": confidence,
-                    "evidence_ids": ev_json,
-                    "memory_key": memory_key,
-                    "source": "profile_claim",
-                    "status": claim_status,
-                    "category": claim_category,
-                    "evidence_count": len(ev_ids),
-                    "evidence_days": ev_days,
-                    "first_seen_at": now.isoformat(timespec="seconds"),
-                    "last_seen_at": now.isoformat(timespec="seconds"),
-                },
-            )
-
         return sql_id
 
-    def _find_existing_claim_id(self, memory_key: str, claim: str) -> int | None:
-        if self._ltm is not None:
-            for item in self._ltm.list_all(mem_type="claim"):
-                meta = item.get("metadata") or {}
-                if meta.get("status", "active") != "active":
-                    continue
-                if meta.get("memory_key") == memory_key and isinstance(meta.get("sql_id"), int):
-                    return meta["sql_id"]
-            hits = [
-                hit for hit in self._ltm.search(claim, top_k=3, mem_type="claim")
-                if hit.get("score", 0) >= 0.9
-            ]
-            if hits:
-                sql_id = (hits[0].get("metadata") or {}).get("sql_id")
-                if isinstance(sql_id, int):
-                    return sql_id
-
+    def _find_existing_claim_id(self, memory_key: str) -> int | None:
+        """按 memory_key 在 SQLite 命题表里找同义命题(去重)。"""
         with session_scope(self._engine) as s:
             for row in s.query(ProfileClaim).all():
                 if make_memory_key("claim", row.claim) == memory_key:
@@ -183,7 +145,6 @@ class UserProfile:
         *,
         confidence: float,
         evidence_ids: list[str],
-        memory_key: str,
         category: str,
         status: str,
     ) -> int:
@@ -207,17 +168,6 @@ class UserProfile:
             ev_days = _merge_unique(_json_list(pc.evidence_days_json), _evidence_days_for(evidence_ids, now))
             pc.evidence_days_json = json.dumps(ev_days, ensure_ascii=False)
             pc.evidence_count = max(len(ev_ids), pc.evidence_count or 0)
-            content = pc.claim
-            conf = pc.confidence
-            ev_json = pc.evidence_ids_json
-            meta = _claim_meta(pc, memory_key=memory_key)
-
-        if self._ltm is not None:
-            self._ltm.update(
-                self._claim_archive_id(claim_id),
-                content=content,
-                metadata={**meta, "confidence": conf, "evidence_ids": ev_json},
-            )
         return claim_id
 
     def update_confidence(
@@ -244,13 +194,6 @@ class UserProfile:
                 pc.evidence_count = max(len(ev_ids), pc.evidence_count or 0)
                 pc.last_seen_at = now
 
-            # 同步更新档案层 metadata
-            if self._ltm is not None:
-                self._ltm.update_metadata(
-                    self._claim_archive_id(claim_id),
-                    _claim_meta(pc),
-                )
-
             return True
 
     def update_claim(
@@ -276,17 +219,7 @@ class UserProfile:
             if confidence is not None:
                 pc.confidence = max(0.0, min(1.0, float(confidence)))
             pc.updated_at = utcnow()
-
-            payload = _claim_payload(pc)
-
-            if self._ltm is not None:
-                self._ltm.update(
-                    self._claim_archive_id(claim_id),
-                    content=pc.claim,
-                    metadata=_claim_meta(pc),
-                )
-
-            return payload
+            return _claim_payload(pc)
 
     def mark_claim_conflicts(self, claim_ids: list[int], conflict_ids: list[int]) -> None:
         """记录命题冲突关系,供晋升校验跳过 contested 命题。"""
@@ -300,8 +233,6 @@ class UserProfile:
                     ensure_ascii=False,
                 )
                 pc.updated_at = utcnow()
-                if self._ltm is not None:
-                    self._ltm.update_metadata(self._claim_archive_id(pc.id), _claim_meta(pc))
 
     def mark_claim_promotion_checked(self, claim_id: int) -> None:
         """记录一次晋升检查。"""
@@ -310,8 +241,6 @@ class UserProfile:
             if pc is None:
                 return
             pc.promotion_checked_at = utcnow()
-            if self._ltm is not None:
-                self._ltm.update_metadata(self._claim_archive_id(claim_id), _claim_meta(pc))
 
     def mark_claim_promoted(self, claim_id: int, promoted_memory_id: str) -> bool:
         """将动态命题标记为已晋升,前端和召回默认隐藏。"""
@@ -324,23 +253,14 @@ class UserProfile:
             pc.promoted_memory_id = promoted_memory_id
             pc.promotion_checked_at = now
             pc.updated_at = now
-            payload = _claim_payload(pc)
-            if self._ltm is not None:
-                self._ltm.update(
-                    self._claim_archive_id(claim_id),
-                    content=pc.claim,
-                    metadata={**_claim_meta(pc), "status": "promoted"},
-                )
-            return bool(payload)
+            return bool(_claim_payload(pc))
 
     def delete_claim(self, claim_id: int) -> bool:
-        """删除动态命题,并同步删除档案层索引。"""
+        """删除动态命题。"""
         with session_scope(self._engine) as s:
             pc = s.query(ProfileClaim).filter_by(id=claim_id).one_or_none()
             if pc is None:
                 return False
-            if self._ltm is not None:
-                self._ltm.delete(self._claim_archive_id(claim_id))
             s.delete(pc)
             return True
 
@@ -350,42 +270,11 @@ class UserProfile:
         top_k: int = 5,
         min_confidence: float = 0.5,
     ) -> list[dict[str, Any]]:
-        """语义搜索相关命题,返回 [{sql_id, claim, confidence, evidence_ids, score}]。
+        """按置信度返回可见命题(SQLite 单一真相源,供 admin/API 查看 top 命题)。
 
-        先走档案层文本检索,再按置信度过滤。若无档案层则走 SQL 全表扫描。
+        命题不进对话提示;query 暂不做文本匹配,按置信度降序返回(原本依赖的命题档案
+        镜像已移除)。
         """
-        if self._ltm is not None:
-            hits = self._ltm.search(query, top_k=top_k * 2, mem_type="claim")
-            result: list[dict[str, Any]] = []
-            for h in hits:
-                meta = h.get("metadata", {})
-                conf = meta.get("confidence", 0.0)
-                if meta.get("status", "active") not in VISIBLE_CLAIM_STATUSES:
-                    continue
-                if conf < min_confidence:
-                    continue
-                ev_raw = meta.get("evidence_ids", "[]")
-                try:
-                    ev_ids = json.loads(ev_raw) if isinstance(ev_raw, str) else ev_raw
-                except (json.JSONDecodeError, TypeError):
-                    ev_ids = []
-                result.append(
-                    {
-                        "sql_id": meta.get("sql_id"),
-                        "claim": h["content"],
-                        "confidence": conf,
-                        "evidence_ids": ev_ids,
-                        "status": meta.get("status", "active"),
-                        "category": meta.get("category", "general"),
-                        "evidence_count": meta.get("evidence_count", len(ev_ids)),
-                        "first_seen_at": meta.get("first_seen_at"),
-                        "last_seen_at": meta.get("last_seen_at"),
-                        "score": h["score"],
-                    }
-                )
-            return result[:top_k]
-
-        # 降级:SQL 全表扫描(按置信度排序)
         with session_scope(self._engine) as s:
             pcs = (
                 s.query(ProfileClaim)
@@ -440,14 +329,8 @@ class UserProfile:
             )
             count = len(low)
             for pc in low:
-                if self._ltm is not None:
-                    archive_id = self._claim_archive_id(pc.id)
-                    self._ltm.delete(archive_id)
                 s.delete(pc)
             return count
-
-    def _claim_archive_id(self, sql_id: int) -> str:
-        return f"claim_{sql_id}"
 
 
 def _claim_payload(pc: ProfileClaim) -> dict[str, Any]:
@@ -466,19 +349,6 @@ def _claim_payload(pc: ProfileClaim) -> dict[str, Any]:
         "promoted_memory_id": pc.promoted_memory_id,
         "promotion_checked_at": _iso(pc.promotion_checked_at),
         "updated_at": _iso(pc.updated_at),
-    }
-
-
-def _claim_meta(pc: ProfileClaim, *, memory_key: str | None = None) -> dict[str, Any]:
-    meta = _claim_payload(pc)
-    return {
-        **{k: v for k, v in meta.items() if v not in (None, "", [])},
-        "type": "claim",
-        "sql_id": pc.id,
-        "confidence": pc.confidence,
-        "evidence_ids": json.dumps(meta["evidence_ids"], ensure_ascii=False),
-        "memory_key": memory_key or make_memory_key("claim", pc.claim),
-        "source": "profile_claim",
     }
 
 

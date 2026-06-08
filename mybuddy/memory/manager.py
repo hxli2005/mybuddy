@@ -60,6 +60,14 @@ class MemoryManager:
         self._ltm.normalize_metadata()
         self._governance = MemoryGovernance(ltm)
 
+        # 命题已合并为 SQLite 单一真相源:清理历史遗留的 claim 档案镜像卡(幂等)。
+        # 否则它们会继续被 list_all 全扫带上,并在开启 embedding 时被无谓嵌入。
+        if ltm is not None:
+            for item in ltm.list_all(mem_type="claim"):
+                cid = str(item.get("id") or "")
+                if cid:
+                    ltm.delete(cid)
+
         # 可选语义召回:enabled 时构造 SemanticRecall 并挂到 ltm。失败静默降级为纯词法。
         self._semantic = None
         emb_cfg = getattr(config.memory, "embedding", None)
