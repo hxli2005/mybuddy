@@ -55,6 +55,11 @@ class LongTermMemory:
         for d in (self._raw_dir, self._conversation_dir, self._archive_dir):
             d.mkdir(parents=True, exist_ok=True)
 
+        # 档案卡读缓存:path -> (st_mtime_ns, meta, content)。
+        # search/list_all 每轮多次全量扫描,缓存消除重复 read_text + yaml 解析。
+        # 写入/删除时按 key 失效;mtime 变化也会自动 miss,双保险。
+        self._card_cache: dict[str, tuple[int, dict[str, Any], str]] = {}
+
     # ------------------------------------------------------------------
     # L0 原始数据层
     # ------------------------------------------------------------------
@@ -187,6 +192,7 @@ class LongTermMemory:
         path = self._card_path(uid)
         if path.exists():
             path.unlink()
+        self._card_cache.pop(str(path), None)
 
     def update(
         self,
@@ -320,24 +326,40 @@ class LongTermMemory:
         path.parent.mkdir(parents=True, exist_ok=True)
         frontmatter = yaml.safe_dump(meta, allow_unicode=True, sort_keys=False)
         path.write_text(f"---\n{frontmatter}---\n\n{content.strip()}\n", encoding="utf-8")
+        self._card_cache.pop(str(path), None)
 
     def _read_card(self, uid: str) -> tuple[dict[str, Any], str] | None:
         return self._read_card_by_path(self._card_path(uid))
 
     def _read_card_by_path(self, path: Path) -> tuple[dict[str, Any], str] | None:
         if not path.exists():
+            self._card_cache.pop(str(path), None)
             return None
+        key = str(path)
+        try:
+            mtime = path.stat().st_mtime_ns
+        except OSError:
+            mtime = -1
+        cached = self._card_cache.get(key)
+        if cached is not None and cached[0] == mtime:
+            # 返回 meta 副本,避免调用方就地改动污染缓存。
+            return dict(cached[1]), cached[2]
+
         text = path.read_text(encoding="utf-8")
         if not text.startswith("---\n"):
-            return {"id": path.stem, "type": "memory"}, text.strip()
-        try:
-            _, raw_meta, body = text.split("---", 2)
-            meta = yaml.safe_load(raw_meta) or {}
-            if not isinstance(meta, dict):
-                meta = {}
-            return meta, body.strip()
-        except ValueError:
-            return {"id": path.stem, "type": "memory"}, text.strip()
+            meta: dict[str, Any] = {"id": path.stem, "type": "memory"}
+            body = text.strip()
+        else:
+            try:
+                _, raw_meta, body_raw = text.split("---", 2)
+                loaded = yaml.safe_load(raw_meta) or {}
+                meta = loaded if isinstance(loaded, dict) else {}
+                body = body_raw.strip()
+            except ValueError:
+                meta = {"id": path.stem, "type": "memory"}
+                body = text.strip()
+        self._card_cache[key] = (mtime, meta, body)
+        return dict(meta), body
 
 
 def _safe_filename(value: str) -> str:
@@ -355,15 +377,34 @@ def _normalize_list(value: Any) -> list[str]:
     return [str(value).strip()]
 
 
+# 停用词:只放真正无区分度的功能词/高频噪声。它们几乎在所有句子里都出现,留着只会
+# 稀释 token_score 的分母、拉低真正命中的相关度。不含任何有语义区分的词(如"喜欢"
+# "周末""拖延"),也不含单独的内容字,确保 1-2 字 n-gram 召回不受影响。
+_STOPWORDS = frozenset(
+    {
+        "的", "了", "是", "我", "你", "他", "她", "它", "们", "在", "有", "和", "或",
+        "就", "也", "都", "会", "要", "把", "被", "让", "给", "跟", "对", "为", "与",
+        "及", "等", "这", "那", "个", "吗", "呢", "吧", "啊", "呀", "嘛", "哦", "噢",
+        "嗯", "么", "很", "太", "挺", "啦", "哈", "呵", "嘞", "哟", "之", "其",
+        "什么", "怎么", "可以", "可能", "一个", "一下", "已经", "还是", "但是", "因为",
+        "所以", "如果", "然后", "觉得", "知道", "这个", "那个", "自己", "我们", "你们",
+        "他们", "这样", "那样", "一些", "有点", "还有", "就是", "不是", "这种", "那种",
+        "the", "a", "an", "is", "are", "was", "were", "be", "to", "of", "and", "or",
+        "in", "on", "at", "for", "it", "this", "that", "i", "you", "he", "she", "we",
+        "they", "my", "your", "with", "as", "by",
+    }
+)
+
+
 def _tokenize(text: str) -> list[str]:
-    """中文按 1-2 字片段 + 英文数字词做轻量分词。"""
+    """中文按 1-2 字片段 + 英文数字词做轻量分词,过滤停用词。"""
     tokens: list[str] = []
     for chunk in re.findall(r"[\u4e00-\u9fff]+", text):
         for length in (1, 2):
             for i in range(len(chunk) - length + 1):
                 tokens.append(chunk[i : i + length])
     tokens.extend(w.lower() for w in re.findall(r"[a-zA-Z0-9_]+", text))
-    return tokens
+    return [t for t in tokens if t not in _STOPWORDS]
 
 
 def _extract_keywords(content: str, limit: int = 12) -> list[str]:

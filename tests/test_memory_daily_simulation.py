@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 
 import pytest
@@ -95,6 +96,18 @@ def _extraction_payload() -> str:
     )
 
 
+async def _drain_pending_tasks() -> None:
+    """跑完挂起的后台任务(事实抽取现在走 asyncio.create_task,不阻塞回复)。"""
+    for _ in range(6):
+        await asyncio.sleep(0)
+        pending = [
+            t for t in asyncio.all_tasks() if t is not asyncio.current_task() and not t.done()
+        ]
+        if not pending:
+            return
+        await asyncio.gather(*pending, return_exceptions=True)
+
+
 @pytest.mark.asyncio
 async def test_daily_conversation_generates_minimal_memory_and_uses_it(tmp_path) -> None:
     cfg = Config()
@@ -121,6 +134,9 @@ async def test_daily_conversation_generates_minimal_memory_and_uses_it(tmp_path)
     await agent.run("我这周要写周五的项目报告，开头一直拖着没写。")
     await agent.run("我不喜欢那种打鸡血式鼓励，越说我越烦。")
     await agent.run("别催我，也别给我鼓劲，帮我把报告开头缩到第一句话就行。")
+
+    # 抽取走后台 task,断言前先把它跑完。
+    await _drain_pending_tasks()
 
     assert len(provider.extract_prompts) == 1
     assert sorted(item["metadata"]["type"] for item in ltm.list_all()) == [

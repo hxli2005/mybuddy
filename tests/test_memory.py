@@ -739,3 +739,44 @@ def test_relevant_profile_fields_does_not_treat_topical_keys_as_stable() -> None
     fields = {"当前项目": "周五项目报告", "工作进度": "完成 60%"}
     # 话题无关输入时,这些字段不应出现(回归:子串匹配曾把它们当稳定身份无界注入)。
     assert _relevant_profile_fields(fields, "晚上吃什么好呢", limit=2) == {}
+
+
+def test_tokenize_drops_stopwords_but_keeps_content() -> None:
+    from mybuddy.memory.long_term import _tokenize
+
+    tokens = set(_tokenize("我今天有点累，不想动"))
+    # 功能词/语气助词被过滤
+    assert "我" not in tokens
+    assert "有点" not in tokens
+    # 内容字/词保留(召回不受影响)
+    assert "累" in tokens
+    assert "今天" in tokens
+    assert "想" in tokens
+
+
+def test_rehydrate_short_term_from_messages(tmp_path) -> None:
+    from mybuddy.storage import append_message
+
+    engine = init_db(str(tmp_path / "rehydrate.db"))
+    cfg = Config()
+    cfg.memory.short_term_size = 4
+    chroma_dir = tmp_path / "rehydrate_chroma"
+    chroma_dir.mkdir()
+    ltm = LongTermMemory(persist_dir=str(chroma_dir), embedding_fn=mock_embed)
+    sid = "user-1"
+
+    append_message(engine, session_id=sid, role="user", content="第一句")
+    append_message(engine, session_id=sid, role="assistant", content="回应一")
+    append_message(engine, session_id=sid, role="tool", content="工具结果")  # 跳过
+    append_message(engine, session_id=sid, role="assistant", content="")  # 空跳过
+    append_message(engine, session_id=sid, role="user", content="第二句")
+    append_message(engine, session_id="other-session", role="user", content="别人的")  # 别的 session
+
+    mm = MemoryManager(engine=engine, config=cfg, ltm=ltm, provider=DummyProvider(), session_id=sid)
+    restored = mm.rehydrate_short_term()
+
+    assert restored == 3  # tool + 空内容被跳过,别的 session 不计
+    contents = [m.content for m in mm.get_recent_messages()]
+    assert contents == ["第一句", "回应一", "第二句"]
+    # 已有内容时不重复填充
+    assert mm.rehydrate_short_term() == 0
