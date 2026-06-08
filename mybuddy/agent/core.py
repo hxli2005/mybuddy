@@ -42,6 +42,7 @@ from .search import (
     build_unavailable_search_context,
     classify_search_need,
     extract_search_sources,
+    may_use_interest_topics,
     search_result_count,
 )
 
@@ -130,6 +131,7 @@ class Agent:
         # M6:skill 匹配 + 自动抽象(均可选)
         self._skill_registry = skill_registry
         self._skill_curator = skill_curator
+        self._warned_search_registry_fallback = False
 
     @property
     def session_id(self) -> str:
@@ -402,12 +404,17 @@ class Agent:
         self,
         user_input: str,
     ) -> tuple[str, dict[str, Any] | None, list[dict[str, str]]]:
-        interest_topics = self._interest_topics()
+        # 兴趣话题收集会读取全部长期记忆卡片,代价较高。只有当消息可能用到它时才收集,
+        # 避免每个普通寒暄轮次都做一次全量归档扫描(判定结果完全等价)。
+        interest_topics = (
+            self._interest_topics() if may_use_interest_topics(user_input) else []
+        )
         decision = classify_search_need(user_input, interest_topics=interest_topics)
         if decision.level == "none":
             return "", None, []
 
-        if self._registry.get("web_search") is None:
+        registry = self._registry_for_web_search()
+        if registry is None:
             if decision.level == "must":
                 return build_unavailable_search_context(decision, query=user_input), None, []
             return "", None, []
@@ -416,7 +423,7 @@ class Agent:
             "query": user_input,
             "max_results": self._config.tools.web_search_max_results,
         }
-        result_text = await self._registry.execute("web_search", args)
+        result_text = await registry.execute("web_search", args)
         context = build_search_context(
             decision,
             query=user_input,
@@ -438,6 +445,20 @@ class Agent:
             "decision_topic": decision.topic,
             "result_count": search_result_count(result_text),
         }, sources
+
+    def _registry_for_web_search(self) -> ToolRegistry | None:
+        if self._registry.get("web_search") is not None:
+            return self._registry
+
+        default_registry = ToolRegistry.default()
+        if default_registry is not self._registry and default_registry.get("web_search") is not None:
+            if not self._warned_search_registry_fallback:
+                logger.warning(
+                    "web_search missing from agent registry; falling back to default registry"
+                )
+                self._warned_search_registry_fallback = True
+            return default_registry
+        return None
 
     def _interest_topics(self) -> list[str]:
         getter = getattr(self._memory, "interest_topics", None)

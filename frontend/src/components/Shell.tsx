@@ -12,6 +12,7 @@ import {
   Search,
   Settings,
   Sparkles,
+  Users,
   X,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
@@ -26,6 +27,7 @@ const viewIcons: Record<ViewId, NavIcon> = {
   profile: Brain,
   reminders: Bell,
   skills: Sparkles,
+  users: Users,
   notes: NotebookText,
   persona: Settings,
 };

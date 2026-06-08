@@ -14,6 +14,9 @@ import type {
   Skill,
   SkillsPayload,
   StatusPayload,
+  TestUser,
+  UserPersonaPayload,
+  UsersPayload,
 } from "../types/api";
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
@@ -143,6 +146,57 @@ export function updateNote(
 
 export function deleteNote(id: number): Promise<{ ok: boolean; id: number }> {
   return request<{ ok: boolean; id: number }>(`/api/notes/${id}`, {
+    method: "DELETE",
+  });
+}
+
+export function fetchUsers(): Promise<UsersPayload> {
+  return request<UsersPayload>("/api/users");
+}
+
+export function createUser(input: {
+  display_name: string;
+  daily_message_limit?: number;
+}): Promise<{ user: TestUser }> {
+  return request<{ user: TestUser }>("/api/users", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export function updateUser(
+  id: number,
+  input: { status?: string; daily_message_limit?: number },
+): Promise<{ user: TestUser }> {
+  return request<{ user: TestUser }>(`/api/users/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(input),
+  });
+}
+
+export function bindQqAccount(
+  userId: number,
+  input: { external_id: string; display_name?: string },
+): Promise<{ user: TestUser }> {
+  return request<{ user: TestUser }>(`/api/users/${userId}/qq`, {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export function fetchUserPersona(userId: number): Promise<UserPersonaPayload> {
+  return request<UserPersonaPayload>(`/api/users/${userId}/persona`);
+}
+
+export function saveUserPersona(userId: number, persona: Persona): Promise<UserPersonaPayload> {
+  return request<UserPersonaPayload>(`/api/users/${userId}/persona`, {
+    method: "PUT",
+    body: JSON.stringify(persona),
+  });
+}
+
+export function resetUserPersona(userId: number): Promise<UserPersonaPayload> {
+  return request<UserPersonaPayload>(`/api/users/${userId}/persona`, {
     method: "DELETE",
   });
 }

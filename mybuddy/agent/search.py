@@ -76,25 +76,48 @@ def classify_search_need(
     has_recency = bool(_RECENCY_RE.search(clean))
     has_time_sensitive_topic = bool(_TIME_SENSITIVE_RE.search(clean))
     has_high_stakes = bool(_HIGH_STAKES_RE.search(clean))
-    matched_interest = _match_interest_topic(clean, interest_topics or [])
 
+    # 高风险事实(医疗/法律/金融等)即使夹在情绪语气里也要核验,优先级最高。
+    if has_high_stakes and (has_recency or has_time_sensitive_topic):
+        return SearchDecision("must", "高风险事实需要核验")
+
+    # 情绪陪伴 / 创作类消息不联网检索。必须放在兴趣与时效启发式之前,否则下面的
+    # 兴趣/时效分支会抢先返回 must,使这条守卫永远不可达。
+    if _PERSONAL_COMPANION_RE.search(clean) or _CREATIVE_RE.search(clean):
+        return SearchDecision("none")
+
+    matched_interest = _match_interest_topic(clean, interest_topics or [])
     if matched_interest:
         if has_recency or _INTEREST_RECENCY_RE.search(clean):
             return SearchDecision("must", "用户兴趣话题的时效信息需要核验", matched_interest)
         if has_time_sensitive_topic or _INTEREST_FACT_RE.search(clean) or _looks_like_question(clean):
             return SearchDecision("should", "用户兴趣话题中的事实细节需要校验", matched_interest)
 
-    if has_high_stakes and (has_recency or has_time_sensitive_topic):
-        return SearchDecision("must", "高风险事实需要核验")
     if has_recency and has_time_sensitive_topic:
         return SearchDecision("must", "时效性事实问题")
     if has_time_sensitive_topic and _looks_like_question(clean):
         return SearchDecision("should", "事实可能随时间变化")
 
-    if _PERSONAL_COMPANION_RE.search(clean) or _CREATIVE_RE.search(clean):
-        return SearchDecision("none")
-
     return SearchDecision("none")
+
+
+def may_use_interest_topics(text: str) -> bool:
+    """判断是否值得收集用户兴趣话题。
+
+    兴趣话题只有在消息带有时效、时间敏感主题、兴趣事实或提问标记时,才可能把
+    检索判定从 none 提升到 should/must。否则可以跳过较重的兴趣话题收集
+    (会遍历画像/命题并读取全部长期记忆卡片)。
+    """
+    clean = " ".join((text or "").strip().split())
+    if not clean:
+        return False
+    return bool(
+        _RECENCY_RE.search(clean)
+        or _INTEREST_RECENCY_RE.search(clean)
+        or _TIME_SENSITIVE_RE.search(clean)
+        or _INTEREST_FACT_RE.search(clean)
+        or _looks_like_question(clean)
+    )
 
 
 def build_search_context(
@@ -121,6 +144,7 @@ def build_search_context(
         "- 优先依据下面的搜索结果回答,不要凭旧知识补充未被结果支持的新闻细节。",
         "- 如果结果为空、报错或互相冲突,要明确说目前无法可靠确认。",
         "- 可以自然地说“我刚看了几条结果”,但不要暴露工具参数或调试信息。",
+        "- 不要说“搜索那边”“工具”“系统”这类后台表述;没查到时说“我这边没查到可靠结果”。",
         "- 涉及政策、医疗、法律、金融等高风险内容时,提醒用户以官方或专业来源为准。",
         "- 涉及用户兴趣话题时,优先官方/Wiki/权威资料;社区反馈只能当作讨论或口碑,不要当成事实。",
         "",
@@ -164,7 +188,7 @@ def build_unavailable_search_context(decision: SearchDecision, *, query: str) ->
             "",
             "回答要求:",
             "- 不要凭旧知识回答最新新闻、价格、政策、职位变动或高风险事实。",
-            "- 可以说明现在无法可靠核验,并请用户提供链接或稍后再试。",
+            "- 不要说“搜索那边”“工具”“系统”这类后台表述;可以说“我这边没查到可靠结果”,并请用户提供链接或稍后再试。",
         ]
     )
     return "\n".join(lines)

@@ -1,6 +1,6 @@
 """web_search 工具:DuckDuckGo HTML 端点。
 
-为什么不用 BeautifulSoup:多一个依赖,且 DDG 的 HTML 足够规则 —— 用正则抓
+为什么不用 BeautifulSoup:多一个依赖,且 DDG 的 HTML 足够规则 -- 用正则抓
 `<a class="result__a" href="..."`、snippet、title 三块就够了。若将来 DDG
 改版就回退 `results: []` 不让对话崩。
 
@@ -9,15 +9,15 @@
 
 from __future__ import annotations
 
+import asyncio
 import html
 import logging
 import re
 import time
 import urllib.parse
+import urllib.request
 from dataclasses import dataclass, field
 from typing import Any
-
-import httpx
 
 from .context import get_config
 from .registry import tool
@@ -38,6 +38,7 @@ _RESULT_BLOCK_RE = re.compile(
     r'.*?<a[^>]*class="[^"]*result__snippet[^"]*"[^>]*>(.*?)</a>',
     re.DOTALL,
 )
+_CHALLENGE_RE = re.compile(r"(anomaly-modal|challenge-form|Unfortunately,\s*bots)", re.I)
 _TAG_RE = re.compile(r"<[^>]+>")
 
 
@@ -83,6 +84,29 @@ def _parse_results(html_text: str, max_results: int) -> list[dict[str, str]]:
     return out
 
 
+def _fetch_html(query: str, timeout: float) -> str:
+    data = urllib.parse.urlencode({"q": query}).encode()
+    req = urllib.request.Request(
+        DDG_URL,
+        data=data,
+        headers={
+            "User-Agent": USER_AGENT,
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+        },
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        status = getattr(resp, "status", resp.getcode())
+        body = resp.read()
+
+    text = body.decode("utf-8", errors="replace")
+    if status != 200:
+        raise RuntimeError(f"DuckDuckGo HTTP {status}")
+    if _CHALLENGE_RE.search(text):
+        raise RuntimeError("DuckDuckGo returned anti-bot challenge")
+    return text
+
+
 @tool(
     name="web_search",
     description=(
@@ -114,14 +138,11 @@ async def web_search(query: str, max_results: int = 5) -> dict:
         return {"query": query, "results": cached.value[:max_results], "cached": True}
 
     try:
-        async with httpx.AsyncClient(
-            timeout=cfg.tools.http_timeout,
-            headers={"User-Agent": USER_AGENT},
-        ) as client:
-            resp = await client.post(DDG_URL, data={"q": query})
-            resp.raise_for_status()
-            results = _parse_results(resp.text, max_results)
-    except httpx.HTTPError as e:
+        html_text = await asyncio.to_thread(_fetch_html, query, cfg.tools.http_timeout)
+        results = _parse_results(html_text, max_results)
+        if not results and "result__a" in html_text:
+            raise RuntimeError("DuckDuckGo results page parser matched no items")
+    except (OSError, RuntimeError, TimeoutError) as e:
         logger.warning("web_search 失败: %s", e)
         return {"query": query, "results": [], "error": f"{type(e).__name__}: {e}"}
 
@@ -141,5 +162,6 @@ __all__ = ["web_search"]
 _internals: dict[str, Any] = {
     "parse_results": _parse_results,
     "decode_ddg_redirect": _decode_ddg_redirect,
+    "fetch_html": _fetch_html,
     "clear_cache": _clear_cache_for_tests,
 }

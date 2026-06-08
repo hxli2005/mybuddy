@@ -708,3 +708,34 @@ async def test_recall_memory_no_results(tmp_path) -> None:
 
     out = await isolated.execute("recall_memory", {"query": "不存在的东西"})
     assert "没有找到" in out
+
+
+def test_relevant_profile_fields_always_keeps_stable_identity_facts() -> None:
+    from mybuddy.memory.manager import _relevant_profile_fields
+
+    fields = {"昵称": "阿航", "咖啡偏好": "美式无糖"}
+    # 话题无关的输入:身份类事实(昵称,即便不是规范键名)仍要保留,
+    # 非身份偏好按词面相关性裁剪掉。
+    selected = _relevant_profile_fields(fields, "今天天气不错", limit=2)
+    assert selected.get("昵称") == "阿航"
+    assert "咖啡偏好" not in selected
+
+    # 输入与偏好相关时,偏好也应被带出。
+    selected2 = _relevant_profile_fields(fields, "想喝咖啡了,有什么偏好", limit=2)
+    assert "咖啡偏好" in selected2
+
+
+def test_relevant_profile_fields_does_not_treat_topical_keys_as_stable() -> None:
+    from mybuddy.memory.manager import _is_stable_profile_key, _relevant_profile_fields
+
+    # 同义身份键(子串匹配)算稳定;整键身份词也算稳定。
+    assert _is_stable_profile_key("出生日期") is True
+    assert _is_stable_profile_key("过敏源") is True
+    assert _is_stable_profile_key("工作") is True
+    # 话题性字段(通用词 + 额外字)不能被误判成身份事实而无条件注入。
+    for topical in ("工作进度", "当前工作流", "城市天气", "学校作业", "专业书单", "当前项目"):
+        assert _is_stable_profile_key(topical) is False
+
+    fields = {"当前项目": "周五项目报告", "工作进度": "完成 60%"}
+    # 话题无关输入时,这些字段不应出现(回归:子串匹配曾把它们当稳定身份无界注入)。
+    assert _relevant_profile_fields(fields, "晚上吃什么好呢", limit=2) == {}

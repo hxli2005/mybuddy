@@ -7,6 +7,7 @@ export type ViewId =
   | "profile"
   | "reminders"
   | "skills"
+  | "users"
   | "notes"
   | "persona";
 
@@ -48,6 +49,8 @@ export const queryKeys = {
   memory: ["memory"],
   reminders: ["reminders"],
   skills: ["skills"],
+  users: ["users"],
+  userPersona: (userId: number) => ["users", userId, "persona"] as const,
   notes: ["notes"],
 } as const;
 
@@ -109,11 +112,18 @@ export const viewMetas: ViewMeta[] = [
     shortcut: "7",
   },
   {
+    id: "users",
+    label: "测试用户",
+    summary: "管理测试账号、QQ 绑定和额度",
+    group: "operations",
+    shortcut: "8",
+  },
+  {
     id: "persona",
     label: "人格",
     summary: "编辑称呼、边界与回应习惯",
     group: "system",
-    shortcut: "8",
+    shortcut: "9",
   },
 ];
 

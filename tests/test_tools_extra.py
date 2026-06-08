@@ -1,6 +1,6 @@
 """M7 新工具测试:weather 真 API / translate / web_search / notes / list_skills。
 
-HTTP 工具用 httpx MockTransport 注入伪响应,不发真实网络。
+HTTP 工具用 MockTransport/本地 fake 注入伪响应,不发真实网络。
 LLM 工具用最小 ScriptedProvider。
 长期记忆复用 test_memory.mock_embed。
 """
@@ -240,17 +240,10 @@ async def test_web_search_parses_results(monkeypatch) -> None:
 
     mod._internals["clear_cache"]()
 
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, text=_DDG_HTML_SAMPLE)
+    def fake_fetch_html(query: str, timeout: float) -> str:
+        return _DDG_HTML_SAMPLE
 
-    transport = httpx.MockTransport(handler)
-    orig_init = httpx.AsyncClient.__init__
-
-    def patched_init(self, *args, **kwargs):
-        kwargs["transport"] = transport
-        return orig_init(self, *args, **kwargs)
-
-    monkeypatch.setattr(httpx.AsyncClient, "__init__", patched_init)
+    monkeypatch.setattr(mod, "_fetch_html", fake_fetch_html)
 
     cfg = Config()
     cfg.tools.web_search_max_results = 5
@@ -272,24 +265,37 @@ async def test_web_search_network_failure(monkeypatch) -> None:
 
     mod._internals["clear_cache"]()
 
-    def handler(request: httpx.Request) -> httpx.Response:
-        raise httpx.ConnectError("network down")
+    def fake_fetch_html(query: str, timeout: float) -> str:
+        raise OSError("network down")
 
-    transport = httpx.MockTransport(handler)
-    orig_init = httpx.AsyncClient.__init__
-
-    def patched_init(self, *args, **kwargs):
-        kwargs["transport"] = transport
-        return orig_init(self, *args, **kwargs)
-
-    monkeypatch.setattr(httpx.AsyncClient, "__init__", patched_init)
+    monkeypatch.setattr(mod, "_fetch_html", fake_fetch_html)
 
     cfg = Config()
     set_context(config=cfg)
 
     result = await mod.web_search("xyz")
     assert result["results"] == []
-    assert "ConnectError" in result["error"]
+    assert "OSError" in result["error"]
+    assert "network down" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_web_search_challenge_page_is_reported_as_error(monkeypatch) -> None:
+    from mybuddy.tools import web_search as mod
+
+    mod._internals["clear_cache"]()
+
+    def fake_fetch_html(query: str, timeout: float) -> str:
+        raise RuntimeError("DuckDuckGo returned anti-bot challenge")
+
+    monkeypatch.setattr(mod, "_fetch_html", fake_fetch_html)
+
+    cfg = Config()
+    set_context(config=cfg)
+
+    result = await mod.web_search("xyz")
+    assert result["results"] == []
+    assert "anti-bot challenge" in result["error"]
 
 
 def test_web_search_decode_ddg_redirect() -> None:

@@ -21,6 +21,7 @@ import { PersonaView } from "./views/PersonaView";
 import { ProfileView } from "./views/ProfileView";
 import { RemindersView } from "./views/RemindersView";
 import { SkillsView } from "./views/SkillsView";
+import { UsersView } from "./views/UsersView";
 
 export function App() {
   const queryClient = useQueryClient();
@@ -55,6 +56,8 @@ export function App() {
         return <RemindersView />;
       case "skills":
         return <SkillsView />;
+      case "users":
+        return <UsersView />;
       case "notes":
         return <NotesView />;
       case "persona":
@@ -83,6 +86,7 @@ export function App() {
       queryKeys.memory,
       queryKeys.reminders,
       queryKeys.skills,
+      queryKeys.users,
       queryKeys.notes,
     ]) {
       queryClient.invalidateQueries({ queryKey: key });

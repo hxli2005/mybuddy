@@ -18,13 +18,145 @@ from rich.table import Table
 from mybuddy.config import load_config
 from mybuddy.learning import SkillRegistry
 from mybuddy.memory import UserProfile
-from mybuddy.storage import Reminder, init_db, session_scope
+from mybuddy.storage import (
+    Reminder,
+    bind_external_account,
+    create_user,
+    init_db,
+    list_user_summaries,
+    session_scope,
+    set_user_daily_limit,
+    set_user_status,
+)
 
 console = Console()
 
 profile_app = typer.Typer(help="查看/编辑用户画像")
 reminders_app = typer.Typer(help="查看/取消提醒")
 skills_app = typer.Typer(help="查看/归档 skill")
+users_app = typer.Typer(help="测试用户与外部账号管理")
+
+
+# ---------------------------------------------------------------------
+# users
+# ---------------------------------------------------------------------
+
+
+@users_app.command("list")
+def users_list(
+    config_path: str = typer.Option("config.yaml", "--config"),
+) -> None:
+    """列出测试用户和外部账号绑定。"""
+    cfg = load_config(config_path)
+    engine = init_db(cfg.paths.db_file)
+    snapshot = [
+        (
+            item.user.id,
+            item.user.display_name,
+            item.user.status,
+            item.user.daily_message_limit,
+            ", ".join(f"{account.provider}:{account.external_id}" for account in item.external_accounts),
+            ", ".join(f"{source}:{count}" for source, count in sorted(item.usage_today.items())),
+        )
+        for item in list_user_summaries(engine)
+    ]
+    if not snapshot:
+        console.print("[dim]还没有测试用户。[/dim]")
+        return
+    t = Table(title="测试用户")
+    t.add_column("id", justify="right")
+    t.add_column("name")
+    t.add_column("status")
+    t.add_column("daily")
+    t.add_column("external")
+    t.add_column("today")
+    for user_id, name, status, limit, external, usage in snapshot:
+        t.add_row(str(user_id), name, status, str(limit), external, usage)
+    console.print(t)
+
+
+@users_app.command("create")
+def users_create(
+    display_name: str = typer.Argument("", help="显示名"),
+    daily_message_limit: int = typer.Option(30, "--daily", help="每日消息额度"),
+    config_path: str = typer.Option("config.yaml", "--config"),
+) -> None:
+    """创建一个测试用户。"""
+    cfg = load_config(config_path)
+    engine = init_db(cfg.paths.db_file)
+    user = create_user(engine, display_name=display_name, daily_message_limit=daily_message_limit)
+    console.print(
+        f"[green]已创建用户 #{user.id}[/green] "
+        f"name={user.display_name or '-'} daily={user.daily_message_limit}"
+    )
+
+
+@users_app.command("bind-qq")
+def users_bind_qq(
+    user_id: int,
+    qq_id: str,
+    display_name: str = typer.Option("", "--name", help="QQ 侧显示名"),
+    config_path: str = typer.Option("config.yaml", "--config"),
+) -> None:
+    """把 QQ external_id 绑定到内部用户。"""
+    cfg = load_config(config_path)
+    engine = init_db(cfg.paths.db_file)
+    try:
+        bind_external_account(
+            engine,
+            user_id=user_id,
+            provider="qq",
+            external_id=qq_id,
+            display_name=display_name,
+        )
+    except ValueError as e:
+        console.print(f"[red]{e}[/red]")
+        raise typer.Exit(code=1) from e
+    console.print(f"[green]已绑定用户 #{user_id} -> qq:{qq_id}[/green]")
+
+
+@users_app.command("enable")
+def users_enable(
+    user_id: int,
+    config_path: str = typer.Option("config.yaml", "--config"),
+) -> None:
+    """启用用户。"""
+    cfg = load_config(config_path)
+    engine = init_db(cfg.paths.db_file)
+    if set_user_status(engine, user_id, "active") is None:
+        console.print(f"[yellow]用户不存在:id={user_id}[/yellow]")
+        return
+    console.print(f"[green]已启用用户 #{user_id}[/green]")
+
+
+@users_app.command("disable")
+def users_disable(
+    user_id: int,
+    config_path: str = typer.Option("config.yaml", "--config"),
+) -> None:
+    """禁用用户。"""
+    cfg = load_config(config_path)
+    engine = init_db(cfg.paths.db_file)
+    if set_user_status(engine, user_id, "disabled") is None:
+        console.print(f"[yellow]用户不存在:id={user_id}[/yellow]")
+        return
+    console.print(f"[green]已禁用用户 #{user_id}[/green]")
+
+
+@users_app.command("quota")
+def users_quota(
+    user_id: int,
+    daily_message_limit: int = typer.Option(..., "--daily", help="每日消息额度"),
+    config_path: str = typer.Option("config.yaml", "--config"),
+) -> None:
+    """设置用户每日消息额度。"""
+    cfg = load_config(config_path)
+    engine = init_db(cfg.paths.db_file)
+    user = set_user_daily_limit(engine, user_id, daily_message_limit)
+    if user is None:
+        console.print(f"[yellow]用户不存在:id={user_id}[/yellow]")
+        return
+    console.print(f"[green]已设置用户 #{user_id} daily={user.daily_message_limit}[/green]")
 
 
 # ---------------------------------------------------------------------
@@ -266,6 +398,7 @@ def skills_unarchive(
 
 def register(app: typer.Typer) -> None:
     """把三组子命令挂到主 app 下。"""
+    app.add_typer(users_app, name="users")
     app.add_typer(profile_app, name="profile")
     app.add_typer(reminders_app, name="reminders")
     app.add_typer(skills_app, name="skills")
@@ -276,4 +409,5 @@ __all__ = [
     "profile_app",
     "reminders_app",
     "skills_app",
+    "users_app",
 ]

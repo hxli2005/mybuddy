@@ -203,6 +203,8 @@ code,
 .composer button,
 .note-form button,
 .persona-form button,
+.user-create-form button,
+.user-inline-form button,
 .icon-button {
   min-height: 2.75rem;
   border: var(--rule-hairline) solid var(--color-rule);
@@ -226,7 +228,9 @@ code,
 .segmented button,
 .composer button,
 .note-form button,
-.persona-form button {
+.persona-form button,
+.user-create-form button,
+.user-inline-form button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -239,7 +243,9 @@ code,
 .text-button.primary,
 .composer button,
 .note-form button,
-.persona-form button {
+.persona-form button,
+.user-create-form button,
+.user-inline-form button:not(.text-button) {
   border-color: var(--color-accent);
   background: var(--color-accent);
   color: var(--color-accent-ink);
@@ -265,7 +271,9 @@ code,
 .text-button[data-state="loading"],
 .send-button[data-state="loading"],
 .note-form button[data-state="loading"],
-.persona-form button[data-state="loading"] {
+.persona-form button[data-state="loading"],
+.user-create-form button[data-state="loading"],
+.user-inline-form button[data-state="loading"] {
   opacity: 0.72;
 }
 
@@ -360,7 +368,8 @@ code,
 .dashboard-grid,
 .notes-layout,
 .persona-layout,
-.conversation-layout {
+.conversation-layout,
+.users-dashboard {
   display: grid;
   gap: var(--space-lg);
   min-width: 0;
@@ -561,6 +570,18 @@ code,
 .badge.cancelled,
 .badge.fired {
   background: var(--color-paper-3);
+}
+
+.badge.active {
+  border-color: var(--color-success-soft);
+  background: var(--color-success-soft);
+  color: var(--color-success);
+}
+
+.badge.disabled {
+  border-color: var(--color-error-soft);
+  background: var(--color-error-soft);
+  color: var(--color-error);
 }
 
 .confidence-meter {
@@ -907,18 +928,21 @@ label,
 }
 
 .note-form,
-.persona-form {
+.persona-form,
+.user-create-form {
   display: grid;
   gap: var(--space-sm);
 }
 
-.note-form {
+.note-form,
+.user-create-form {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .note-form .full-field,
 .note-form .note-preview,
-.note-form button {
+.note-form button,
+.user-create-form button {
   grid-column: 1 / -1;
 }
 
@@ -935,6 +959,96 @@ label,
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: var(--space-sm);
+}
+
+.users-list {
+  display: grid;
+  gap: var(--space-sm);
+  min-width: 0;
+}
+
+.user-card {
+  gap: var(--space-md);
+}
+
+.user-card header > div {
+  display: grid;
+  gap: var(--space-2xs);
+  min-width: 0;
+}
+
+.user-card-badges {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--space-xs);
+}
+
+.user-card-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--space-sm);
+  min-width: 0;
+}
+
+.user-card-grid > div {
+  display: grid;
+  align-content: start;
+  gap: var(--space-xs);
+  min-width: 0;
+  border-block-start: var(--rule-hairline) solid var(--color-rule);
+  padding-block-start: var(--space-sm);
+}
+
+.user-card-grid strong,
+.user-account-id {
+  overflow-wrap: anywhere;
+}
+
+.user-account-id {
+  color: var(--color-muted);
+  font-size: var(--text-xs);
+}
+
+.user-usage-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-xs);
+}
+
+.user-controls {
+  display: grid;
+  gap: var(--space-sm);
+  min-width: 0;
+  border-block-start: var(--rule-hairline) solid var(--color-rule);
+  padding-block-start: var(--space-md);
+}
+
+.user-inline-form {
+  display: grid;
+  grid-template-columns: minmax(8rem, 1fr) minmax(8rem, 1fr) auto;
+  align-items: end;
+  gap: var(--space-sm);
+  min-width: 0;
+}
+
+.quota-form {
+  grid-template-columns: minmax(8rem, 12rem) auto auto auto;
+}
+
+.user-error {
+  border-inline-start: 0.2rem solid var(--color-error);
+  color: var(--color-error);
+  font-size: var(--text-sm);
+  padding-inline-start: var(--space-sm);
+}
+
+.user-persona-section {
+  display: grid;
+  gap: var(--space-md);
+  min-width: 0;
+  border-block: var(--rule-hairline) solid var(--color-rule);
+  padding-block: var(--space-md);
 }
 
 .persona-preview > div {
@@ -1313,6 +1427,8 @@ dd {
   .action-tile:hover,
   .quick-prompts button:hover,
   .material-links button:hover,
+  .user-create-form button:hover,
+  .user-inline-form button:hover,
   .icon-button:hover,
   .segmented button:hover {
     transform: translateY(calc(var(--space-3xs) * -1));
@@ -1326,6 +1442,8 @@ dd {
   .palette-item:hover,
   .quick-prompts button:hover,
   .material-links button:hover,
+  .user-create-form button:hover,
+  .user-inline-form button:hover,
   .icon-button:hover,
   .segmented button:hover {
     border-color: var(--color-rule-2);
@@ -1350,6 +1468,8 @@ dd {
 .composer button:active,
 .note-form button:active,
 .persona-form button:active,
+.user-create-form button:active,
+.user-inline-form button:active,
 .icon-button:active,
 .segmented button:active {
   transform: translateY(var(--space-3xs));
@@ -1367,7 +1487,8 @@ dd {
   }
 
   .dashboard-grid,
-  .persona-layout {
+  .persona-layout,
+  .users-dashboard {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
@@ -1436,6 +1557,9 @@ dd {
   .row-card,
   .skill-row,
   .note-form,
+  .user-create-form,
+  .user-inline-form,
+  .user-card-grid,
   .form-grid,
   .thread-map {
     grid-template-columns: 1fr;
@@ -1443,7 +1567,9 @@ dd {
 
   .composer button,
   .send-button,
-  .note-form button {
+  .note-form button,
+  .user-create-form button,
+  .user-inline-form button {
     width: 100%;
   }
 

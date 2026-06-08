@@ -37,12 +37,22 @@ from mybuddy.storage import (
     Note,
     ProfileClaim,
     Reminder,
+    UserSummaryRecord,
     append_message,
+    bind_external_account,
+    create_user,
+    delete_user_persona,
     drain_pending,
+    get_user,
     init_db,
     list_messages,
     list_undelivered,
+    list_user_summaries,
+    resolve_user_persona,
     session_scope,
+    set_user_daily_limit,
+    set_user_persona,
+    set_user_status,
 )
 from mybuddy.tools import ToolRegistry, set_context, setup_memory_tool, setup_skill_tool
 from mybuddy.tools.reminder import parse_reminder_time
@@ -100,6 +110,25 @@ class NoteUpdateRequest(BaseModel):
     content: str | None = None
     title: str | None = None
     tags: list[str] | None = None
+
+
+class UserCreateRequest(BaseModel):
+    display_name: str = Field(min_length=1)
+    daily_message_limit: int = Field(default=30, ge=0)
+
+
+class UserUpdateRequest(BaseModel):
+    status: str | None = None
+    daily_message_limit: int | None = Field(default=None, ge=0)
+
+
+class UserQQBindRequest(BaseModel):
+    external_id: str = Field(min_length=1)
+    display_name: str | None = None
+
+
+class UserPersonaUpdateRequest(PersonaUpdateRequest):
+    pass
 
 
 class ReminderUpdateRequest(BaseModel):
@@ -310,6 +339,123 @@ class AppState:
     def messages_payload(self, *, limit: int = 100, session_id: str | None = None) -> dict[str, Any]:
         engine = _require(self.engine)
         return {"messages": list_messages(engine, limit=limit, session_id=session_id)}
+
+    def users_payload(self) -> dict[str, Any]:
+        engine = _require(self.engine)
+        return {"users": [_user_summary_payload(item) for item in list_user_summaries(engine)]}
+
+    def create_user_payload(
+        self,
+        *,
+        display_name: str,
+        daily_message_limit: int = 30,
+    ) -> dict[str, Any]:
+        clean_name = display_name.strip()
+        if not clean_name:
+            raise RuntimeError("测试用户名称为空")
+        engine = _require(self.engine)
+        user = create_user(
+            engine,
+            display_name=clean_name,
+            daily_message_limit=daily_message_limit,
+        )
+        return {"user": _find_user_summary_payload(engine, user.id)}
+
+    def update_user_payload(
+        self,
+        user_id: int,
+        *,
+        status: str | None = None,
+        daily_message_limit: int | None = None,
+    ) -> dict[str, Any]:
+        if status is None and daily_message_limit is None:
+            raise RuntimeError("没有可更新的测试用户字段")
+        engine = _require(self.engine)
+        updated = None
+        if status is not None:
+            updated = set_user_status(engine, user_id, _clean_user_status(status))
+        if daily_message_limit is not None:
+            updated = set_user_daily_limit(engine, user_id, daily_message_limit)
+        if updated is None:
+            raise RuntimeError(f"测试用户不存在:id={user_id}")
+        return {"user": _find_user_summary_payload(engine, user_id)}
+
+    def bind_user_qq_payload(
+        self,
+        user_id: int,
+        *,
+        external_id: str,
+        display_name: str | None = None,
+    ) -> dict[str, Any]:
+        clean_external_id = external_id.strip()
+        if not clean_external_id:
+            raise RuntimeError("QQ external_id 为空")
+        engine = _require(self.engine)
+        try:
+            bind_external_account(
+                engine,
+                user_id=user_id,
+                provider="qq",
+                external_id=clean_external_id,
+                display_name=(display_name or "").strip(),
+            )
+        except ValueError as e:
+            raise RuntimeError(str(e)) from e
+        return {"user": _find_user_summary_payload(engine, user_id)}
+
+    def user_persona_payload(self, user_id: int) -> dict[str, Any]:
+        engine = _require(self.engine)
+        cfg = _require(self.cfg)
+        if get_user(engine, user_id) is None:
+            raise RuntimeError(f"测试用户不存在:id={user_id}")
+        resolved = resolve_user_persona(
+            engine,
+            user_id=user_id,
+            default_persona=cfg.persona,
+        )
+        return {
+            "user_id": user_id,
+            "inherits_default": resolved.inherits_default,
+            "version": resolved.version,
+            "persona": resolved.persona.model_dump(),
+        }
+
+    def update_user_persona_payload(self, user_id: int, updates: dict[str, Any]) -> dict[str, Any]:
+        engine = _require(self.engine)
+        cfg = _require(self.cfg)
+        if get_user(engine, user_id) is None:
+            raise RuntimeError(f"测试用户不存在:id={user_id}")
+        resolved = resolve_user_persona(
+            engine,
+            user_id=user_id,
+            default_persona=cfg.persona,
+        )
+        merged = resolved.persona.model_dump()
+        merged.update(_clean_persona_updates(updates))
+        persona = PersonaConfig.model_validate(merged)
+        try:
+            record = set_user_persona(engine, user_id=user_id, persona=persona)
+        except ValueError as e:
+            raise RuntimeError(str(e)) from e
+        return {
+            "user_id": user_id,
+            "inherits_default": False,
+            "version": record.version,
+            "persona": record.persona.model_dump(),
+        }
+
+    def delete_user_persona_payload(self, user_id: int) -> dict[str, Any]:
+        engine = _require(self.engine)
+        cfg = _require(self.cfg)
+        if get_user(engine, user_id) is None:
+            raise RuntimeError(f"测试用户不存在:id={user_id}")
+        delete_user_persona(engine, user_id)
+        return {
+            "user_id": user_id,
+            "inherits_default": True,
+            "version": "default",
+            "persona": cfg.persona.model_dump(),
+        }
 
     def update_profile_field_payload(self, key: str, value: str) -> dict[str, Any]:
         clean_key = key.strip()
@@ -629,6 +775,69 @@ def create_app(config_path: str = "config.yaml", max_steps: int = 6):
     async def messages(limit: int = 100, session_id: str | None = None) -> dict[str, Any]:
         return state.messages_payload(limit=limit, session_id=session_id)
 
+    @app.get("/api/users")
+    async def users() -> dict[str, Any]:
+        return state.users_payload()
+
+    @app.post("/api/users")
+    async def create_test_user(req: UserCreateRequest) -> dict[str, Any]:
+        try:
+            return state.create_user_payload(
+                display_name=req.display_name,
+                daily_message_limit=req.daily_message_limit,
+            )
+        except RuntimeError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+
+    @app.patch("/api/users/{user_id}")
+    async def update_test_user(user_id: int, req: UserUpdateRequest) -> dict[str, Any]:
+        try:
+            return state.update_user_payload(
+                user_id,
+                status=req.status,
+                daily_message_limit=req.daily_message_limit,
+            )
+        except RuntimeError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+
+    @app.post("/api/users/{user_id}/qq")
+    async def bind_test_user_qq(user_id: int, req: UserQQBindRequest) -> dict[str, Any]:
+        try:
+            return state.bind_user_qq_payload(
+                user_id,
+                external_id=req.external_id,
+                display_name=req.display_name,
+            )
+        except RuntimeError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+
+    @app.get("/api/users/{user_id}/persona")
+    async def user_persona(user_id: int) -> dict[str, Any]:
+        try:
+            return state.user_persona_payload(user_id)
+        except RuntimeError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+
+    @app.put("/api/users/{user_id}/persona")
+    async def update_user_persona(
+        user_id: int,
+        req: UserPersonaUpdateRequest,
+    ) -> dict[str, Any]:
+        try:
+            return state.update_user_persona_payload(
+                user_id,
+                req.model_dump(exclude_none=True),
+            )
+        except RuntimeError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+
+    @app.delete("/api/users/{user_id}/persona")
+    async def delete_user_persona(user_id: int) -> dict[str, Any]:
+        try:
+            return state.delete_user_persona_payload(user_id)
+        except RuntimeError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+
     @app.post("/api/feedback")
     async def feedback(req: FeedbackRequest) -> dict[str, Any]:
         try:
@@ -760,6 +969,41 @@ def _frontend_static_dir(frontend_dir: Path) -> Path:
 def _frontend_index_path(frontend_dir: Path) -> Path:
     dist_index = frontend_dir / "dist" / "index.html"
     return dist_index if dist_index.exists() else frontend_dir / "index.html"
+
+
+def _user_summary_payload(item: UserSummaryRecord) -> dict[str, Any]:
+    usage_today = dict(sorted(item.usage_today.items()))
+    return {
+        "id": item.user.id,
+        "display_name": item.user.display_name,
+        "status": item.user.status,
+        "daily_message_limit": item.user.daily_message_limit,
+        "usage_today": usage_today,
+        "usage_total_today": sum(usage_today.values()),
+        "has_custom_persona": item.has_custom_persona,
+        "external_accounts": [
+            {
+                "provider": account.provider,
+                "external_id": account.external_id,
+                "display_name": account.display_name,
+            }
+            for account in item.external_accounts
+        ],
+    }
+
+
+def _find_user_summary_payload(engine: Engine, user_id: int) -> dict[str, Any]:
+    for item in list_user_summaries(engine):
+        if item.user.id == user_id:
+            return _user_summary_payload(item)
+    raise RuntimeError(f"测试用户不存在:id={user_id}")
+
+
+def _clean_user_status(status: str) -> str:
+    clean = status.strip().lower()
+    if clean not in {"active", "disabled"}:
+        raise RuntimeError("测试用户状态只支持 active 或 disabled")
+    return clean
 
 
 def _note_payload(row: Note) -> dict[str, Any]:

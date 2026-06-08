@@ -223,6 +223,53 @@ async def test_agent_prefetches_search_context_for_news_question(tmp_path) -> No
 
 
 @pytest.mark.asyncio
+async def test_agent_prefetches_search_from_default_registry_when_missing_locally(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    cfg = Config()
+    engine = init_db(str(tmp_path / "fallback_search_messages.db"))
+    set_context(engine=engine, config=cfg)
+
+    fallback = ToolRegistry()
+    monkeypatch.setattr(ToolRegistry, "_default", fallback)
+
+    @tool(name="web_search", description="mock default search", registry=fallback)
+    async def web_search(query: str, max_results: int = 5) -> dict:
+        return {
+            "query": query,
+            "results": [
+                {
+                    "title": "默认工具表新闻",
+                    "url": "https://example.com/default-search",
+                    "snippet": "Search came from the default registry.",
+                }
+            ][:max_results],
+        }
+
+    provider = ScriptedProvider([LLMResponse(text="我刚查到。", finish_reason="stop")])
+    memory = _make_memory(engine, cfg, provider)
+    logger = TrajectoryLogger(tmp_path / "traj")
+    agent = Agent(
+        provider=provider,
+        config=cfg,
+        registry=ToolRegistry(),
+        memory=memory,
+        trajectory_logger=logger,
+        engine=engine,
+    )
+
+    result = await agent.run("搜一下今天有什么科技新闻")
+
+    system_text = provider.calls[0]["system"]
+    assert "默认工具表新闻" in system_text
+    assert "web_search 工具不可用" not in system_text
+    assert result.tool_calls[0]["name"] == "web_search"
+    assert result.tool_calls[0]["source"] == "backend_search_prefetch"
+    assert result.search_sources[0]["url"] == "https://example.com/default-search"
+
+
+@pytest.mark.asyncio
 async def test_agent_does_not_prefetch_search_for_personal_today_message(tmp_path) -> None:
     cfg = Config()
     engine = init_db(str(tmp_path / "no_search_messages.db"))

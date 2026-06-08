@@ -10,7 +10,7 @@ from datetime import datetime
 import pytest
 from typer.testing import CliRunner
 
-from mybuddy.cli_admin import profile_app, reminders_app, skills_app
+from mybuddy.cli_admin import profile_app, reminders_app, skills_app, users_app
 from mybuddy.learning import SkillRegistry
 from mybuddy.memory import UserProfile
 from mybuddy.storage import Reminder, init_db, session_scope
@@ -56,6 +56,40 @@ paths:
         "engine": engine,
         "skills_dir": skills_dir,
     }
+
+
+# =============================================================================
+# users
+# =============================================================================
+
+
+def test_users_create_bind_list_disable_quota(admin_env) -> None:
+    cfg = admin_env["cfg_path"]
+
+    r_create = runner.invoke(users_app, ["create", "测试用户", "--daily", "12", "--config", cfg])
+    assert r_create.exit_code == 0, r_create.stdout
+    assert "已创建用户 #1" in r_create.stdout
+
+    r_bind = runner.invoke(users_app, ["bind-qq", "1", "qq-openid", "--name", "QQ名", "--config", cfg])
+    assert r_bind.exit_code == 0, r_bind.stdout
+    assert "qq:qq-openid" in r_bind.stdout
+
+    r_quota = runner.invoke(users_app, ["quota", "1", "--daily", "3", "--config", cfg])
+    assert r_quota.exit_code == 0, r_quota.stdout
+    assert "daily=3" in r_quota.stdout
+
+    r_disable = runner.invoke(users_app, ["disable", "1", "--config", cfg])
+    assert r_disable.exit_code == 0, r_disable.stdout
+    assert "已禁用" in r_disable.stdout
+
+    r_enable = runner.invoke(users_app, ["enable", "1", "--config", cfg])
+    assert r_enable.exit_code == 0, r_enable.stdout
+    assert "已启用" in r_enable.stdout
+
+    r_list = runner.invoke(users_app, ["list", "--config", cfg])
+    assert r_list.exit_code == 0, r_list.stdout
+    assert "测试用户" in r_list.stdout
+    assert "qq:qq-openid" in r_list.stdout
 
 
 # =============================================================================

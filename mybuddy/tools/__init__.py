@@ -20,7 +20,9 @@ from .context import (
     get_long_term,
     get_provider,
     get_scheduler,
+    get_skill_registry,
     set_context,
+    use_context,
 )
 from .memory_tool import recall_memory, setup_memory_tool  # noqa: F401
 from .registry import ToolEntry, ToolRegistry, tool
@@ -34,8 +36,10 @@ __all__ = [
     "get_long_term",
     "get_provider",
     "get_scheduler",
+    "get_skill_registry",
     "set_context",
     "setup_memory_tool",
     "setup_skill_tool",
     "tool",
+    "use_context",
 ]

@@ -35,6 +35,9 @@ api = [
     "fastapi>=0.110.0",
     "uvicorn>=0.29.0",
 ]
+qq = [
+    "qq-botpy>=1.2.1",
+]
 
 [project.scripts]
 mybuddy = "mybuddy.cli:app"

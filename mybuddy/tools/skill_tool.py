@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING
 
+from .context import get_skill_registry, set_context
 from .registry import tool
 
 if TYPE_CHECKING:
@@ -22,6 +23,7 @@ def setup_skill_tool(registry: SkillRegistry) -> None:
     """CLI 启动时注入 SkillRegistry。"""
     global _registry
     _registry = registry
+    set_context(skill_registry=registry)
 
 
 @tool(
@@ -32,14 +34,15 @@ def setup_skill_tool(registry: SkillRegistry) -> None:
     ),
 )
 def list_skills() -> str:
-    """返回全部未归档 skill 的摘要。
-
-    返回 JSON 文本 [{name, triggers, confidence, steps_preview}]。
-    """
-    if _registry is None:
+    """返回全部未归档 skill 的摘要。"""
+    try:
+        registry = get_skill_registry()
+    except RuntimeError:
+        registry = _registry
+    if registry is None:
         return "skill registry 未初始化。"
 
-    skills = _registry.all()
+    skills = registry.all()
     if not skills:
         return "目前还没有积累任何 skill。"
 

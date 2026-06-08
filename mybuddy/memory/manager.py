@@ -369,6 +369,34 @@ def _core_memory_type(mem_type: str) -> str | None:
     return None
 
 
+# 身份类画像键(姓名/生日/职业/禁忌等)。这类稳定事实无论当前话题是否相关都应进入
+# 提示词,否则用户名字、过敏等关键信息会在话题无关的轮次里凭空消失。
+#
+# 高精度子串 token:这些词几乎只出现在身份字段里,用子串匹配以兼容同义写法
+# (如 "出生日期" 命中 "出生","过敏源" 命中 "过敏")。
+_STABLE_PROFILE_KEY_TOKENS = (
+    "名字", "姓名", "昵称", "称呼", "生日", "出生", "过敏", "忌口", "禁忌",
+)
+# 通用词(职业/工作/城市…)只做整键精确匹配,避免把 "工作进度""城市天气""学校作业"
+# 这类话题性字段误判成身份事实而无限注入。
+_STABLE_PROFILE_KEY_EXACT = frozenset(
+    {
+        "年龄", "职业", "工作", "职位", "身份", "学校", "学历", "专业",
+        "城市", "所在地", "所在城市", "常驻城市", "居住地", "家乡",
+        "联系方式", "电话", "邮箱",
+    }
+)
+
+
+def _is_stable_profile_key(key: str) -> bool:
+    k = (key or "").strip()
+    if not k:
+        return False
+    if k in _STABLE_PROFILE_KEY_EXACT:
+        return True
+    return any(token in k for token in _STABLE_PROFILE_KEY_TOKENS)
+
+
 def _relevant_profile_fields(
     fields: dict[str, str],
     user_input: str,
@@ -378,18 +406,21 @@ def _relevant_profile_fields(
     if not fields:
         return {}
     q_tokens = set(_simple_tokens(user_input))
+    selected: dict[str, str] = {}
     scored: list[tuple[int, str, str]] = []
-    stable_keys = {"名字", "称呼", "生日", "职业", "身份", "过敏"}
     for key, value in fields.items():
-        text = f"{key} {value}"
-        tokens = set(_simple_tokens(text))
+        if _is_stable_profile_key(key):
+            # 身份类事实始终注入,不受词面重叠或 limit 限制。
+            selected[key] = value
+            continue
+        tokens = set(_simple_tokens(f"{key} {value}"))
         score = len(q_tokens & tokens)
-        if key in stable_keys:
-            score += 1
         if score > 0:
             scored.append((score, key, value))
     scored.sort(key=lambda item: item[0], reverse=True)
-    return {key: value for _, key, value in scored[:limit]}
+    for _, key, value in scored[:limit]:
+        selected[key] = value
+    return selected
 
 
 def _simple_tokens(text: str) -> list[str]:

@@ -70,14 +70,24 @@ class DemoHandler(BaseHTTPRequestHandler):
             if path == "/api/notes":
                 self._send_json(self.server.state.notes_payload())
                 return
+            if path == "/api/users":
+                self._send_json(self.server.state.users_payload())
+                return
+            user_persona_id = _match_user_persona_route(path)
+            if user_persona_id is not None:
+                self._send_json(self.server.state.user_persona_payload(user_persona_id))
+                return
             self._send_error(HTTPStatus.NOT_FOUND, "not found")
+        except ValueError as e:
+            self._send_error(HTTPStatus.BAD_REQUEST, str(e))
         except Exception as e:  # noqa: BLE001
             self._send_error(HTTPStatus.INTERNAL_SERVER_ERROR, str(e))
 
     def do_POST(self) -> None:  # noqa: N802
         try:
+            path = urlparse(self.path).path
             data = self._read_json()
-            if self.path == "/api/chat":
+            if path == "/api/chat":
                 message = str(data.get("message", "")).strip()
                 if not message:
                     self._send_error(HTTPStatus.BAD_REQUEST, "message is required")
@@ -85,7 +95,7 @@ class DemoHandler(BaseHTTPRequestHandler):
                 payload = asyncio.run(self.server.state.chat_payload(message))
                 self._send_json(payload)
                 return
-            if self.path == "/api/feedback":
+            if path == "/api/feedback":
                 label = str(data.get("label", "")).strip()
                 if not label:
                     self._send_error(HTTPStatus.BAD_REQUEST, "label is required")
@@ -93,11 +103,11 @@ class DemoHandler(BaseHTTPRequestHandler):
                 payload = self.server.state.feedback_payload(label, data.get("turn_id"))
                 self._send_json(payload)
                 return
-            if self.path == "/api/persona":
+            if path == "/api/persona":
                 payload = self.server.state.update_persona_payload(data)
                 self._send_json(payload)
                 return
-            if self.path == "/api/notes":
+            if path == "/api/notes":
                 payload = self.server.state.create_note_payload(
                     content=str(data.get("content", "")),
                     title=data.get("title"),
@@ -105,38 +115,74 @@ class DemoHandler(BaseHTTPRequestHandler):
                 )
                 self._send_json(payload)
                 return
+            if path == "/api/users":
+                payload = self.server.state.create_user_payload(
+                    display_name=str(data.get("display_name", "")),
+                    daily_message_limit=int(data.get("daily_message_limit", 30)),
+                )
+                self._send_json(payload)
+                return
+            user_qq_id = _match_user_qq_route(path)
+            if user_qq_id is not None:
+                payload = self.server.state.bind_user_qq_payload(
+                    user_qq_id,
+                    external_id=str(data.get("external_id", "")),
+                    display_name=data.get("display_name"),
+                )
+                self._send_json(payload)
+                return
             self._send_error(HTTPStatus.NOT_FOUND, "not found")
         except RuntimeError as e:
+            self._send_error(HTTPStatus.BAD_REQUEST, str(e))
+        except ValueError as e:
             self._send_error(HTTPStatus.BAD_REQUEST, str(e))
         except Exception as e:  # noqa: BLE001
             self._send_error(HTTPStatus.INTERNAL_SERVER_ERROR, str(e))
 
     def do_PUT(self) -> None:  # noqa: N802
         try:
+            path = urlparse(self.path).path
             data = self._read_json()
-            if self.path == "/api/persona":
+            user_persona_id = _match_user_persona_route(path)
+            if user_persona_id is not None:
+                payload = self.server.state.update_user_persona_payload(user_persona_id, data)
+                self._send_json(payload)
+                return
+            if path == "/api/persona":
                 payload = self.server.state.update_persona_payload(data)
                 self._send_json(payload)
                 return
             self._send_error(HTTPStatus.NOT_FOUND, "not found")
         except RuntimeError as e:
             self._send_error(HTTPStatus.BAD_REQUEST, str(e))
+        except ValueError as e:
+            self._send_error(HTTPStatus.BAD_REQUEST, str(e))
         except Exception as e:  # noqa: BLE001
             self._send_error(HTTPStatus.INTERNAL_SERVER_ERROR, str(e))
 
     def do_PATCH(self) -> None:  # noqa: N802
         try:
+            path = urlparse(self.path).path
             data = self._read_json()
-            if self.path.startswith("/api/profile/fields/"):
-                key = unquote(self.path.removeprefix("/api/profile/fields/"))
+            user_id = _match_user_route(path)
+            if user_id is not None:
+                payload = self.server.state.update_user_payload(
+                    user_id,
+                    status=data.get("status"),
+                    daily_message_limit=data.get("daily_message_limit"),
+                )
+                self._send_json(payload)
+                return
+            if path.startswith("/api/profile/fields/"):
+                key = unquote(path.removeprefix("/api/profile/fields/"))
                 payload = self.server.state.update_profile_field_payload(
                     key,
                     str(data.get("value", "")),
                 )
                 self._send_json(payload)
                 return
-            if self.path.startswith("/api/profile/claims/"):
-                claim_id = int(self.path.removeprefix("/api/profile/claims/"))
+            if path.startswith("/api/profile/claims/"):
+                claim_id = int(path.removeprefix("/api/profile/claims/"))
                 payload = self.server.state.update_profile_claim_payload(
                     claim_id,
                     claim=data.get("claim"),
@@ -144,8 +190,8 @@ class DemoHandler(BaseHTTPRequestHandler):
                 )
                 self._send_json(payload)
                 return
-            if self.path.startswith("/api/memory/archive/"):
-                memory_id = unquote(self.path.removeprefix("/api/memory/archive/"))
+            if path.startswith("/api/memory/archive/"):
+                memory_id = unquote(path.removeprefix("/api/memory/archive/"))
                 payload = self.server.state.update_memory_payload(
                     memory_id,
                     content=data.get("content"),
@@ -153,8 +199,8 @@ class DemoHandler(BaseHTTPRequestHandler):
                 )
                 self._send_json(payload)
                 return
-            if self.path.startswith("/api/notes/"):
-                note_id = int(self.path.removeprefix("/api/notes/"))
+            if path.startswith("/api/notes/"):
+                note_id = int(path.removeprefix("/api/notes/"))
                 payload = self.server.state.update_note_payload(
                     note_id,
                     content=data.get("content"),
@@ -163,16 +209,16 @@ class DemoHandler(BaseHTTPRequestHandler):
                 )
                 self._send_json(payload)
                 return
-            if self.path.startswith("/api/reminders/"):
-                reminder_id = int(self.path.removeprefix("/api/reminders/"))
+            if path.startswith("/api/reminders/"):
+                reminder_id = int(path.removeprefix("/api/reminders/"))
                 payload = self.server.state.update_reminder_payload(
                     reminder_id,
                     str(data.get("status", "")),
                 )
                 self._send_json(payload)
                 return
-            if self.path.startswith("/api/skills/"):
-                name = unquote(self.path.removeprefix("/api/skills/"))
+            if path.startswith("/api/skills/"):
+                name = unquote(path.removeprefix("/api/skills/"))
                 payload = self.server.state.update_skill_payload(name, data.get("archived"))
                 self._send_json(payload)
                 return
@@ -186,20 +232,25 @@ class DemoHandler(BaseHTTPRequestHandler):
 
     def do_DELETE(self) -> None:  # noqa: N802
         try:
-            if self.path.startswith("/api/profile/fields/"):
-                key = unquote(self.path.removeprefix("/api/profile/fields/"))
+            path = urlparse(self.path).path
+            user_persona_id = _match_user_persona_route(path)
+            if user_persona_id is not None:
+                self._send_json(self.server.state.delete_user_persona_payload(user_persona_id))
+                return
+            if path.startswith("/api/profile/fields/"):
+                key = unquote(path.removeprefix("/api/profile/fields/"))
                 self._send_json(self.server.state.delete_profile_field_payload(key))
                 return
-            if self.path.startswith("/api/profile/claims/"):
-                claim_id = int(self.path.removeprefix("/api/profile/claims/"))
+            if path.startswith("/api/profile/claims/"):
+                claim_id = int(path.removeprefix("/api/profile/claims/"))
                 self._send_json(self.server.state.delete_profile_claim_payload(claim_id))
                 return
-            if self.path.startswith("/api/memory/archive/"):
-                memory_id = unquote(self.path.removeprefix("/api/memory/archive/"))
+            if path.startswith("/api/memory/archive/"):
+                memory_id = unquote(path.removeprefix("/api/memory/archive/"))
                 self._send_json(self.server.state.delete_memory_payload(memory_id))
                 return
-            if self.path.startswith("/api/notes/"):
-                note_id = int(self.path.removeprefix("/api/notes/"))
+            if path.startswith("/api/notes/"):
+                note_id = int(path.removeprefix("/api/notes/"))
                 self._send_json(self.server.state.delete_note_payload(note_id))
                 return
             self._send_error(HTTPStatus.NOT_FOUND, "not found")
@@ -262,6 +313,27 @@ def serve(
     finally:
         state.shutdown()
         server.server_close()
+
+
+def _match_user_route(path: str) -> int | None:
+    parts = path.strip("/").split("/")
+    if len(parts) == 3 and parts[:2] == ["api", "users"]:
+        return int(parts[2])
+    return None
+
+
+def _match_user_qq_route(path: str) -> int | None:
+    parts = path.strip("/").split("/")
+    if len(parts) == 4 and parts[:2] == ["api", "users"] and parts[3] == "qq":
+        return int(parts[2])
+    return None
+
+
+def _match_user_persona_route(path: str) -> int | None:
+    parts = path.strip("/").split("/")
+    if len(parts) == 4 and parts[:2] == ["api", "users"] and parts[3] == "persona":
+        return int(parts[2])
+    return None
 
 
 def _first_int(values: list[str] | None, *, default: int) -> int:

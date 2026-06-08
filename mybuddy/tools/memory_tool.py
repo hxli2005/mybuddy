@@ -10,7 +10,7 @@ from typing import Any
 
 from mybuddy.memory.long_term import LongTermMemory
 
-from .context import get_config
+from .context import get_config, get_long_term
 from .registry import tool
 
 # 模块级注册 LongTermMemory 引用;CLI 启动时由 setup 注入
@@ -31,9 +31,12 @@ def setup_memory_tool(ltm: LongTermMemory) -> None:
 
 
 def _get_ltm() -> LongTermMemory:
-    if _ltm is None:
-        raise RuntimeError("LongTermMemory 未注入,请先调用 setup_memory_tool()")
-    return _ltm
+    try:
+        return get_long_term()
+    except RuntimeError:
+        if _ltm is None:
+            raise RuntimeError("LongTermMemory 未注入,请先调用 setup_memory_tool()") from None
+        return _ltm
 
 
 @tool(

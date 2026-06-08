@@ -194,6 +194,21 @@ def web(
     serve(config_path=config_path, host=host, port=port, max_steps=max_steps)
 
 
+@app.command()
+def qqbot(
+    config_path: str = typer.Option("config.yaml", "--config", help="配置文件路径"),
+    max_steps: int = typer.Option(6, "--max-steps", help="单轮 ReAct 最大步数"),
+) -> None:
+    """启动 QQ 官方机器人渠道。"""
+    from mybuddy.channels.qq import QQBotRunner
+
+    try:
+        QQBotRunner(config_path=config_path, max_steps=max_steps).run()
+    except RuntimeError as e:
+        console.print(f"[red]{e}[/red]")
+        raise typer.Exit(code=1) from e
+
+
 @dream_app.command("run")
 def dream_run(
     config_path: str = typer.Option("config.yaml", "--config", help="配置文件路径"),

@@ -22,6 +22,10 @@ uv run mybuddy chat
 
 # 演示前端 + 真实后端
 uv run mybuddy web
+
+# QQ 官方机器人渠道(可选)
+uv sync --extra qq
+uv run mybuddy qqbot
 ```
 
 ## 项目状态
@@ -32,3 +36,8 @@ uv run mybuddy web
 - 长期记忆使用 `raw/`、`conversations/`、`archive/` 三层文本档案。
 - 用户画像包含稳定字段和动态命题,动态命题支持证据时间、置信度、冲突检查和晋升为长期记忆。
 - 角色陪伴链路已接入关系记忆、未完成话题和事件式主动消息。
+
+## QQ 机器人接入
+
+QQ 渠道是独立挂件:QQ 只负责收发消息、账号映射、事件去重和调用共享 `ChatService`,
+不直接操作 Agent / Memory。详细部署与管理员操作见 [`docs/QQBOT.md`](docs/QQBOT.md)。

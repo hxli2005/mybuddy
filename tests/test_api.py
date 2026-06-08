@@ -13,7 +13,7 @@ from mybuddy.api import (
     _integrate_pending_messages,
     _run_deterministic_demo_tools,
 )
-from mybuddy.config import Config, load_config
+from mybuddy.config import Config, PersonaConfig, load_config
 from mybuddy.learning import SkillRegistry
 from mybuddy.memory import LongTermMemory, UserProfile
 from mybuddy.storage import (
@@ -23,6 +23,7 @@ from mybuddy.storage import (
     ProfileField,
     Reminder,
     enqueue,
+    increment_usage,
     init_db,
     session_scope,
 )
@@ -260,6 +261,88 @@ def test_messages_payload_returns_raw_chat_log(tmp_path) -> None:
     assert payload["messages"][0]["role"] == "assistant"
     assert payload["messages"][0]["content"] == "我在。"
     assert payload["messages"][0]["meta"]["turn_id"] == "t1"
+
+
+def test_users_payload_create_bind_update_and_usage(tmp_path) -> None:
+    engine = init_db(str(tmp_path / "users.db"))
+    state = AppState(config_path="config.yaml")
+    state.engine = engine
+
+    assert state.users_payload() == {"users": []}
+
+    created = state.create_user_payload(display_name="测试用户", daily_message_limit=12)
+    user_id = created["user"]["id"]
+    assert created["user"]["display_name"] == "测试用户"
+    assert created["user"]["status"] == "active"
+    assert created["user"]["daily_message_limit"] == 12
+
+    bound = state.bind_user_qq_payload(
+        user_id,
+        external_id="qq-openid",
+        display_name="QQ名",
+    )
+    assert bound["user"]["external_accounts"] == [
+        {
+            "provider": "qq",
+            "external_id": "qq-openid",
+            "display_name": "QQ名",
+        }
+    ]
+
+    updated = state.update_user_payload(user_id, status="disabled", daily_message_limit=3)
+    assert updated["user"]["status"] == "disabled"
+    assert updated["user"]["daily_message_limit"] == 3
+
+    increment_usage(engine, user_id=user_id, source="qq", amount=2)
+    listed = state.users_payload()["users"]
+
+    assert listed[0]["id"] == user_id
+    assert listed[0]["usage_today"] == {"qq": 2}
+    assert listed[0]["usage_total_today"] == 2
+
+
+def test_user_update_rejects_invalid_status(tmp_path) -> None:
+    engine = init_db(str(tmp_path / "users_invalid_status.db"))
+    state = AppState(config_path="config.yaml")
+    state.engine = engine
+    created = state.create_user_payload(display_name="测试用户")
+
+    with pytest.raises(RuntimeError, match="active 或 disabled"):
+        state.update_user_payload(created["user"]["id"], status="pending")
+
+
+def test_user_persona_payload_update_and_reset(tmp_path) -> None:
+    engine = init_db(str(tmp_path / "user_persona.db"))
+    state = AppState(config_path="config.yaml")
+    state.engine = engine
+    state.cfg = Config(persona=PersonaConfig(name="默认小布", style="默认风格"))
+    created = state.create_user_payload(display_name="测试用户")
+    user_id = created["user"]["id"]
+
+    inherited = state.user_persona_payload(user_id)
+
+    assert inherited["inherits_default"] is True
+    assert inherited["persona"]["name"] == "默认小布"
+
+    updated = state.update_user_persona_payload(
+        user_id,
+        {
+            "name": "用户专属",
+            "style": "更简洁",
+            "response_habits": ["先给结论"],
+        },
+    )
+
+    assert updated["inherits_default"] is False
+    assert updated["persona"]["name"] == "用户专属"
+    assert updated["persona"]["response_habits"] == ["先给结论"]
+    assert state.users_payload()["users"][0]["has_custom_persona"] is True
+
+    reset = state.delete_user_persona_payload(user_id)
+
+    assert reset["inherits_default"] is True
+    assert reset["persona"]["name"] == "默认小布"
+    assert state.users_payload()["users"][0]["has_custom_persona"] is False
 
 
 def test_integrate_pending_nudge_as_assistant_message(tmp_path) -> None:

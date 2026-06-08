@@ -159,6 +159,34 @@ export type NotesPayload = {
   notes: Note[];
 };
 
+export type ExternalAccount = {
+  provider: string;
+  external_id: string;
+  display_name: string;
+};
+
+export type TestUser = {
+  id: number;
+  display_name: string;
+  status: "active" | "disabled" | string;
+  daily_message_limit: number;
+  usage_today: Record<string, number>;
+  usage_total_today: number;
+  has_custom_persona: boolean;
+  external_accounts: ExternalAccount[];
+};
+
+export type UsersPayload = {
+  users: TestUser[];
+};
+
+export type UserPersonaPayload = {
+  user_id: number;
+  inherits_default: boolean;
+  version: string;
+  persona: Persona;
+};
+
 export type PersonaPayload = {
   persona: Persona;
 };

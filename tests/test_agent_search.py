@@ -32,6 +32,19 @@ def test_classify_search_need_lowers_threshold_for_interest_topics() -> None:
     assert feeling.level == "none"
 
 
+def test_companion_guard_wins_over_interest_recency() -> None:
+    # 兴趣话题 + 时近词,但整体是情绪陪伴语气:陪伴守卫应优先返回 none,
+    # 而不是因为"兴趣 + 最近"抢先判成 must(回归 bug:守卫曾被排在兴趣分支之后而永不可达)。
+    decision = classify_search_need("我最近在玩原神好累", interest_topics=["原神"])
+    assert decision.level == "none"
+
+
+def test_high_stakes_still_searches_even_in_emotional_tone() -> None:
+    # 高风险事实即使带情绪语气也要核验,优先级高于陪伴守卫。
+    decision = classify_search_need("我好焦虑,最近用药方案要不要调整")
+    assert decision.level == "must"
+
+
 def test_build_search_context_instructs_uncertainty_when_results_empty() -> None:
     context = build_search_context(
         SearchDecision("must", "新闻或热点问题"),
@@ -42,6 +55,7 @@ def test_build_search_context_instructs_uncertainty_when_results_empty() -> None
     assert "外部资料检索" in context
     assert "检索错误:network down" in context
     assert "不能装作已经确认" in context
+    assert "不要说“搜索那边”" in context
 
 
 def test_extract_search_sources_returns_user_facing_source_cards() -> None:

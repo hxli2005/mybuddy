@@ -28,11 +28,12 @@ def build_system_prompt(
     time_block = _time_block(now)
     voice = _compact_items(
         [persona.style, persona.tone, *persona.response_habits, *role.speech_style],
-        limit=6,
+        limit=10,
     )
     traits = _compact_items(role.personality_traits, limit=3)
     micro_reactions = _compact_items(role.micro_reactions, limit=2)
     rituals = _compact_items(relationship.shared_rituals, limit=2)
+    examples = _format_dialogue_examples(role.example_dialogues)
     relationship_state = _relationship_state_summary(relationship.axes)
     base = (
         f"你是 {persona.name}。\n"
@@ -49,8 +50,10 @@ def build_system_prompt(
         f"- 可用性:{life.availability_style}\n"
         "\n关系素材:\n"
         f"- 共同仪式:{rituals or '按相关记忆自然使用'}\n"
+        f"{examples}"
         "\n回复原则:\n"
         "- 像同一个角色在关系里回应,不要像随叫随到的客服或心理咨询师。\n"
+        "- 不要主动给自己贴关系身份标签;用熟悉的接话、偏爱、行动和细节让关系感自然出现。\n"
         f"- 每轮只选一个最贴合的微反应:{micro_reactions or '停顿、放轻或具体动作'}。\n"
         "- 不要套用固定的'我理解你/你现在感到/可以试试'三段式;先找这一刻的具体由头。\n"
         "- 情绪、记忆和策略只作为内部判断,不要明示字段名,不要逐条汇报依据。\n"
@@ -88,6 +91,19 @@ def build_messages(history: list[Message]) -> list[Message]:
 def _compact_items(items: list[str], *, limit: int) -> str:
     lines = [item.strip() for item in items if item and item.strip()]
     return "; ".join(lines[:limit])
+
+
+def _format_dialogue_examples(examples: list[object]) -> str:
+    lines: list[str] = []
+    for item in examples[:2]:
+        user = getattr(item, "user", "").strip()
+        assistant = getattr(item, "assistant", "").strip()
+        if not user or not assistant:
+            continue
+        lines.append(f"- 用户:{user}\n  {assistant}")
+    if not lines:
+        return ""
+    return "\n对话风格样例:\n" + "\n".join(lines) + "\n"
 
 
 def _relationship_state_summary(axes: dict[str, float]) -> str:

@@ -25,6 +25,9 @@ dist/
 data/
 !data/.gitkeep
 
+# Logs (botpy 等运行时日志)
+*.log
+
 # Testing
 .pytest_cache/
 .coverage
