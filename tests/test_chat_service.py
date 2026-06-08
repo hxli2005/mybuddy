@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from mybuddy.config import PersonaConfig
-from mybuddy.llm import BaseLLMProvider, LLMResponse, Message, ToolSpec
+from mybuddy.llm import BaseLLMProvider, LLMResponse, Message, ToolCall, ToolSpec
 from mybuddy.services import ChannelCommandService, ChatService, RequestContext
 from mybuddy.storage import (
     create_user,
@@ -37,7 +37,7 @@ class EchoProvider(BaseLLMProvider):
         return LLMResponse(text=f"reply:{user}", finish_reason="stop")
 
 
-def _write_config(path: Path, tmp_path: Path) -> None:
+def _write_config(path: Path, tmp_path: Path, *, scheduler_enabled: bool = False) -> None:
     path.write_text(
         f"""
 llm:
@@ -53,12 +53,46 @@ paths:
   skills_dir: "{tmp_path / 'data' / 'skills'}"
   trajectories_dir: "{tmp_path / 'data' / 'trajectories'}"
 scheduler:
-  enabled: false
+  enabled: {str(scheduler_enabled).lower()}
 tools:
   weather_mock: true
 """,
         encoding="utf-8",
     )
+
+
+class ReminderToolProvider(BaseLLMProvider):
+    """第一轮调用 set_reminder,第二轮收敛出文本回复。"""
+
+    def __init__(self, *, content: str, time: str) -> None:
+        self._content = content
+        self._time = time
+        self._step = 0
+
+    async def generate(
+        self,
+        messages: list[Message],
+        tools: list[ToolSpec] | None = None,
+        *,
+        model: str | None = None,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+        system: str | None = None,
+    ) -> LLMResponse:
+        self._step += 1
+        if self._step == 1:
+            return LLMResponse(
+                text="",
+                tool_calls=[
+                    ToolCall(
+                        id="r1",
+                        name="set_reminder",
+                        arguments={"content": self._content, "time": self._time},
+                    )
+                ],
+                finish_reason="tool_use",
+            )
+        return LLMResponse(text="好,到点我提醒你。", finish_reason="stop")
 
 
 @pytest.mark.asyncio
@@ -283,3 +317,87 @@ def test_channel_persona_commands_update_user_persona(tmp_path: Path) -> None:
     assert clear.handled is True
     assert reset.handled is True
     assert service.persona_payload(ctx)["inherits_default"] is True
+
+
+@pytest.mark.asyncio
+async def test_qq_set_reminder_registers_scheduler_job(tmp_path: Path) -> None:
+    """回归:QQ/多用户路径下 set_reminder 必须真正把 job 注册进调度器。
+
+    历史 bug:ChatService 从不构造/启动 MyBuddyScheduler,给 Agent 和 use_context 传的都是
+    scheduler=None,于是 set_reminder 只静默写库(scheduled=False)、提醒永不触发。
+    """
+    import json
+
+    config_path = tmp_path / "config.yaml"
+    _write_config(config_path, tmp_path, scheduler_enabled=True)
+    service = ChatService(
+        config_path=str(config_path),
+        provider=ReminderToolProvider(content="喝水", time="2999-01-01 09:00"),
+        enable_emotion=False,
+    )
+    service.startup()
+    engine = init_db(str(tmp_path / "data" / "master.db"))
+    user = create_user(engine, display_name="u", daily_message_limit=5)
+    ctx = RequestContext(user_id=user.id, source="qq")
+
+    try:
+        response = await service.chat(ctx, "明天提醒我喝水")
+
+        # 1) 工具结果不再是静默的 scheduled=False。
+        reminder_call = next(c for c in response.tool_calls if c["name"] == "set_reminder")
+        result = json.loads(reminder_call["result"])
+        assert result["ok"] is True
+        assert result["scheduled"] is True
+        reminder_id = result["id"]
+
+        # 2) 该用户的调度器确实在运行,且注册了对应的 reminder job。
+        runtime = service._runtimes[user.id]
+        assert runtime.scheduler is not None
+        assert runtime.scheduler.running is True
+        job_ids = {job["id"] for job in runtime.scheduler.list_jobs()}
+        assert f"reminder_{reminder_id}" in job_ids
+    finally:
+        service.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_qq_reminders_restored_on_runtime_start(tmp_path: Path) -> None:
+    """重启后用户首次对话时,库里 pending 的提醒应被 _restore_reminders 兜底重建为 job。"""
+    from datetime import datetime, timedelta
+
+    from mybuddy.services.chat import _user_config
+    from mybuddy.storage import Reminder, session_scope
+
+    config_path = tmp_path / "config.yaml"
+    _write_config(config_path, tmp_path, scheduler_enabled=True)
+    service = ChatService(
+        config_path=str(config_path),
+        provider=EchoProvider(),
+        enable_emotion=False,
+    )
+    service.startup()
+    engine = init_db(str(tmp_path / "data" / "master.db"))
+    user = create_user(engine, display_name="u", daily_message_limit=5)
+    ctx = RequestContext(user_id=user.id, source="qq")
+
+    # 模拟"上次运行"留下的一条未触发提醒,直接写进该用户独立库。
+    assert service.cfg is not None
+    user_cfg = _user_config(service.cfg, user.id)
+    user_engine = init_db(user_cfg.paths.db_file)
+    trigger = datetime.now().replace(second=0, microsecond=0) + timedelta(days=1)
+    with session_scope(user_engine) as s:
+        r = Reminder(content="复诊", trigger_at=trigger, status="pending")
+        s.add(r)
+        s.flush()
+        reminder_id = r.id
+
+    try:
+        # 首次对话触发 runtime 构造 + 调度器启动 + _restore_reminders。
+        await service.chat(ctx, "在吗")
+
+        runtime = service._runtimes[user.id]
+        assert runtime.scheduler is not None and runtime.scheduler.running is True
+        job_ids = {job["id"] for job in runtime.scheduler.list_jobs()}
+        assert f"reminder_{reminder_id}" in job_ids
+    finally:
+        service.shutdown()
