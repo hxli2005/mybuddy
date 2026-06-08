@@ -9,6 +9,9 @@ import asyncio
 import json
 import logging
 import mimetypes
+import threading
+from collections.abc import Awaitable
+from concurrent.futures import TimeoutError as FutureTimeoutError
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -20,11 +23,74 @@ from mybuddy.api import AppState, _frontend_index_path, _frontend_not_built_html
 logger = logging.getLogger(__name__)
 
 
+class _BackgroundLoop:
+    """常驻事件循环(后台线程),所有请求共用。
+
+    ThreadingHTTPServer 每个请求跑在自己的 worker 线程里。若每请求都用
+    ``asyncio.run(...)`` 起一个一次性 loop,回复返回后该 loop 立即关闭并取消所有未完成
+    task —— agent 在对话里 fire-and-forget 起的后台记忆抽取 / skill 复盘(挂着等
+    small-model 往返)会被静默腰斩,网页对话几乎学不到新事实。
+
+    改为所有请求把协程投递到这一个常驻 loop(贴近 uvicorn 行为):请求协程跑完拿到
+    回复后,后台 task 仍挂在 loop 上继续跑完。
+    """
+
+    def __init__(self) -> None:
+        self._loop = asyncio.new_event_loop()
+        self._thread = threading.Thread(
+            target=self._run, name="mybuddy-web-loop", daemon=True
+        )
+        self._closed = False
+        self._thread.start()
+
+    def _run(self) -> None:
+        asyncio.set_event_loop(self._loop)
+        self._loop.run_forever()
+
+    def run(self, coro: Awaitable[Any]) -> Any:
+        """把协程投递到常驻 loop 并阻塞等其结果(供同步 worker 线程调用)。"""
+        return asyncio.run_coroutine_threadsafe(coro, self._loop).result()
+
+    def drain(self, tasks: set[asyncio.Task], *, timeout: float = 10.0) -> None:
+        """关闭前把在途后台 task 跑完;超时则放弃等待,不阻塞退出。"""
+        if self._closed:
+            return
+
+        async def _await_pending() -> None:
+            pending = [t for t in tasks if not t.done()]
+            if pending:
+                await asyncio.gather(*pending, return_exceptions=True)
+
+        try:
+            asyncio.run_coroutine_threadsafe(_await_pending(), self._loop).result(timeout)
+        except FutureTimeoutError:
+            logger.warning("后台任务在 %.0fs 内未跑完,放弃等待直接关闭", timeout)
+        except RuntimeError:
+            pass  # loop 已停
+
+    def close(self, *, timeout: float = 5.0) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        self._loop.call_soon_threadsafe(self._loop.stop)
+        self._thread.join(timeout=timeout)
+        self._loop.close()
+
+
 class DemoServer(ThreadingHTTPServer):
     def __init__(self, server_address, handler, *, state: AppState, frontend_dir: Path):
         super().__init__(server_address, handler)
         self.state = state
         self.frontend_dir = frontend_dir
+        self.bg = _BackgroundLoop()
+
+    def server_close(self) -> None:
+        # 关闭前把在途后台 task(记忆抽取 / skill 复盘)跑完,再停常驻 loop,最后关 socket。
+        agent = self.state.agent
+        if agent is not None:
+            self.bg.drain(agent._bg_tasks)
+        self.bg.close()
+        super().server_close()
 
 
 class DemoHandler(BaseHTTPRequestHandler):
@@ -103,7 +169,9 @@ class DemoHandler(BaseHTTPRequestHandler):
                 if not message:
                     self._send_error(HTTPStatus.BAD_REQUEST, "message is required")
                     return
-                payload = asyncio.run(self.server.state.chat_payload(message))
+                # 投递到常驻 loop:回复返回后,agent 起的后台抽取/复盘 task 仍能跑完
+                # (不像 asyncio.run 那样在请求结束时把它们一起取消)。
+                payload = self.server.bg.run(self.server.state.chat_payload(message))
                 self._send_json(payload)
                 return
             if path == "/api/feedback":
