@@ -344,6 +344,41 @@ def test_refresh_handles_timezone_aware_expires_at(ltm) -> None:
     assert ltm.list_all(mem_type="open_thread")[0]["metadata"]["status"] == "stale"
 
 
+def test_open_thread_expires_at_normalized(ltm) -> None:
+    """回归(评审 Y3/[8]):open_thread 的 expires_at 一律归一为可比较的 ISO,
+    自然语言能解析就解析、解析不了/缺失给兜底寿命——不再有"永不 stale 的不死话题"。"""
+    from mybuddy.memory.governance import _parse_iso
+
+    governance = MemoryGovernance(ltm)
+    governance.add_or_merge("用户在准备一件没说截止的事", mem_type="open_thread", uid="ot_none")
+    governance.add_or_merge(
+        "用户明天要做的事", mem_type="open_thread", uid="ot_nl",
+        extra_meta={"expires_at": "明天下午3点"},
+    )
+    governance.add_or_merge(
+        "用户下周五的安排", mem_type="open_thread", uid="ot_bad",
+        extra_meta={"expires_at": "下周五"},  # parse_reminder_time/dateutil 都解析不了
+    )
+    by_id = {i["id"]: i["metadata"] for i in ltm.list_all(mem_type="open_thread")}
+    for uid in ("ot_none", "ot_nl", "ot_bad"):
+        exp = by_id[uid].get("expires_at")
+        assert _parse_iso(exp) is not None, f"{uid} 的 expires_at 应为合法 ISO,实际 {exp!r}"
+    assert by_id["ot_nl"]["expires_at"] != "明天下午3点"  # 自然语言已被归一
+
+
+def test_choose_content_preserves_newer_update() -> None:
+    """回归(评审 Y4/[7]):合并不再"谁长留谁",更新但更短的关键信息不被丢。"""
+    from mybuddy.memory.governance import _choose_content
+
+    # entity 的更新("最近生病住院了"更短)与旧描述都保留
+    merged = _choose_content("是一只很黏人的英短,喜欢晒太阳", "最近生病住院了")
+    assert "英短" in merged and "生病住院" in merged
+    # 新是旧的子串 → 留旧(无增量)
+    assert _choose_content("用户喜欢喝美式咖啡", "美式咖啡") == "用户喜欢喝美式咖啡"
+    # 新是旧的超集 → 留新
+    assert _choose_content("咖啡", "用户喜欢喝咖啡") == "用户喜欢喝咖啡"
+
+
 def test_merge_does_not_revive_snoozed_thread(ltm) -> None:
     """回归(评审 C3):再次提到一个 snoozed 话题(同 memory_key)不该被合并复活成 active。"""
     governance = MemoryGovernance(ltm)
@@ -351,6 +386,33 @@ def test_merge_does_not_revive_snoozed_thread(ltm) -> None:
     governance.snooze_open_thread(uid, "2099-01-01T00:00:00")
     governance.add_or_merge("用户下周要交材料", mem_type="open_thread")  # 再次提到 → merge
     assert ltm.list_all(mem_type="open_thread")[0]["metadata"]["status"] == "snoozed"
+
+
+def test_build_context_do_refresh_flag(tmp_path) -> None:
+    """回归(评审 Y2/[3]):do_refresh=False(供 to_thread 只读)跳过生命周期刷新,
+    刷新改由 agent 在事件循环上先做,避免与后台 run_extract 跨线程写竞态。"""
+    engine = init_db(str(tmp_path / "refresh.db"))
+    cfg = Config()
+    chroma_dir = tmp_path / "refresh_chroma"
+    chroma_dir.mkdir()
+    ltm = LongTermMemory(
+        persist_dir=str(chroma_dir), collection_name="refresh", embedding_fn=mock_embed
+    )
+    ltm.add(
+        "旧的未完成话题",
+        mem_type="open_thread",
+        uid="ot_exp",
+        extra_meta={"title": "x", "expires_at": "2000-01-01T00:00:00"},
+    )
+    mm = MemoryManager(engine=engine, config=cfg, ltm=ltm, provider=DummyProvider())
+
+    # do_refresh=False:不写盘,过期卡仍 active(纯只读,可安全丢进 to_thread)
+    mm.build_context_section("随便说点", do_refresh=False)
+    assert ltm.list_all(mem_type="open_thread")[0]["metadata"].get("status", "active") == "active"
+
+    # 默认 / 显式 refresh_lifecycle:过期 → stale
+    mm.refresh_lifecycle()
+    assert ltm.list_all(mem_type="open_thread")[0]["metadata"]["status"] == "stale"
 
 
 # =============================================================================
@@ -741,6 +803,25 @@ def test_recall_golden_set(tmp_path) -> None:
             assert m in text, f"{query!r} 应召回 {m!r},实际:\n{text}"
         for n in must_not:
             assert n not in text, f"{query!r} 不该召回 {n!r},实际:\n{text}"
+
+
+def test_preference_valence_prefers_structured_polarity() -> None:
+    """回归(评审 #9/#10):极性优先用结构化 polarity,而非脆弱的正文正则。"""
+    from mybuddy.memory.manager import _preference_valence
+
+    # 正向诉求却含"不要" —— 纯正则会误判成避开 → 模型反着做;polarity=like 纠正为偏好
+    assert (
+        _preference_valence({"metadata": {"polarity": "like"}, "content": "希望被鼓励,不要打鸡血"})
+        == "偏好"
+    )
+    # 避雷但不含那 6 个关键词 —— 正则漏判(漏进安全栏);polarity=avoid 纠正为避开
+    assert (
+        _preference_valence({"metadata": {"polarity": "avoid"}, "content": "被催进度会焦虑,请慢慢来"})
+        == "避开"
+    )
+    # 无 polarity(旧卡/直接写入)退回正则兜底
+    assert _preference_valence({"metadata": {}, "content": "用户不喜欢香菜"}) == "避开"
+    assert _preference_valence({"metadata": {}, "content": "用户喜欢喝咖啡"}) == "偏好"
 
 
 # =============================================================================
