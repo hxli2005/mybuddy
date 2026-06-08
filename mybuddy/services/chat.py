@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -27,7 +28,9 @@ from mybuddy.learning import (
 from mybuddy.llm import Message as LLMMessage
 from mybuddy.llm import Role, make_provider
 from mybuddy.memory import LongTermMemory, MemoryManager, UserProfile
+from mybuddy.scheduler import MyBuddyScheduler
 from mybuddy.storage import (
+    Reminder,
     UserRecord,
     append_message,
     delete_user_persona,
@@ -37,6 +40,7 @@ from mybuddy.storage import (
     increment_usage,
     init_db,
     resolve_user_persona,
+    session_scope,
     set_user_persona,
     usage_count_today,
 )
@@ -46,8 +50,9 @@ if TYPE_CHECKING:
     from sqlalchemy import Engine
 
     from mybuddy.llm import BaseLLMProvider
-    from mybuddy.scheduler import MyBuddyScheduler
 
+
+logger = logging.getLogger(__name__)
 
 ProviderFactory = Callable[[Config], "BaseLLMProvider"]
 
@@ -137,6 +142,8 @@ class ChatService:
         self.engine = init_db(cfg.paths.db_file)
 
     def shutdown(self) -> None:
+        for runtime in self._runtimes.values():
+            _shutdown_scheduler(runtime.scheduler)
         self._runtimes.clear()
 
     @property
@@ -173,6 +180,10 @@ class ChatService:
             guard = self._quota_guard(user, ctx)
             if guard is not None:
                 return guard
+            # 调度器必须在运行中的事件循环内启动(APScheduler AsyncIOScheduler 约束),
+            # 因此放到这里惰性启动,而不是 startup()/构造期。不启动它,set_reminder 只会
+            # 静默写库不注册 job(QQ/多用户提醒永不触发)。
+            self._ensure_scheduler_started(runtime)
             with use_context(
                 engine=runtime.engine,
                 config=runtime.cfg,
@@ -315,7 +326,23 @@ class ChatService:
         }
 
     def reset_runtime(self, user_id: int) -> bool:
-        return self._runtimes.pop(user_id, None) is not None
+        runtime = self._runtimes.pop(user_id, None)
+        if runtime is None:
+            return False
+        _shutdown_scheduler(runtime.scheduler)
+        return True
+
+    def _ensure_scheduler_started(self, runtime: UserRuntime) -> None:
+        """首次对话时在运行中的事件循环内启动该用户的调度器并回灌待触发提醒。
+
+        APScheduler 的 AsyncIOScheduler.start() 需要 running loop,故惰性启动放在
+        async chat() 内而非 startup()/构造期。已运行则直接返回(幂等)。
+        """
+        scheduler = runtime.scheduler
+        if scheduler is None or scheduler.running:
+            return
+        scheduler.start()
+        _restore_reminders(scheduler, runtime.engine)
 
     def _runtime_for(self, user: UserRecord, *, refresh_if_stale: bool = True) -> UserRuntime:
         base_cfg = _require_cfg(self.cfg)
@@ -330,6 +357,7 @@ class ChatService:
             if not refresh_if_stale or existing.persona_version == resolved_persona.version:
                 return existing
             self._runtimes.pop(user.id, None)
+            _shutdown_scheduler(existing.scheduler)
 
         user_cfg = _user_config(base_cfg, user.id)
         user_cfg.persona = resolved_persona.persona
@@ -362,6 +390,9 @@ class ChatService:
         emotion_tracker = EmotionTracker(window=5) if self._enable_emotion else None
         setup_memory_tool(ltm)
         setup_skill_tool(skill_registry)
+        # 每用户独立调度器:jobstore 与提醒投递都落在该用户自己的库,和 api.py/cli.py 的
+        # 单用户装配对称。这里只构造,真正 start() 推迟到 chat() 的事件循环内。
+        scheduler = MyBuddyScheduler(user_cfg) if user_cfg.scheduler.enabled else None
         agent = Agent(
             provider=provider,
             config=user_cfg,
@@ -373,7 +404,7 @@ class ChatService:
             emotion_detector=emotion_detector,
             emotion_tracker=emotion_tracker,
             engine=engine,
-            scheduler=None,
+            scheduler=scheduler,
             skill_registry=skill_registry,
             skill_curator=SkillCurator(provider, skill_registry, model=user_cfg.llm.small_model),
         )
@@ -386,6 +417,7 @@ class ChatService:
             profile=profile,
             skill_registry=skill_registry,
             feedback_bus=feedback_bus,
+            scheduler=scheduler,
             agent=agent,
             persona_version=resolved_persona.version,
         )
@@ -451,6 +483,37 @@ def _user_config(cfg: Config, user_id: int) -> Config:
     user_cfg.paths.trajectories_dir = str(base / "trajectories")
     user_cfg.logging.file = str(base / "mybuddy.log")
     return user_cfg
+
+
+def _restore_reminders(scheduler: MyBuddyScheduler, engine: Engine) -> None:
+    """把该用户库里仍 pending 且未过期的提醒重新注册到调度器(幂等)。
+
+    与 api.py:_restore_reminders / cli.py:_restore_reminders 同义,只是作用在每用户库上:
+    重启后用户首次对话时兜底重建 job(即便 jobstore 丢过 job 也能从 reminders 表恢复)。
+    """
+    from mybuddy._time import utcnow
+
+    now = utcnow()
+    with session_scope(engine) as s:
+        rows = (
+            s.query(Reminder)
+            .filter(Reminder.status == "pending")
+            .filter(Reminder.trigger_at > now)
+            .all()
+        )
+        pending = [(r.id, r.trigger_at) for r in rows]
+    for rid, trigger in pending:
+        scheduler.schedule_reminder(rid, trigger)
+
+
+def _shutdown_scheduler(scheduler: MyBuddyScheduler | None) -> None:
+    """关停一个用户调度器。QQ 进程退出时事件循环可能已关闭,故吞掉关停异常只记日志。"""
+    if scheduler is None:
+        return
+    try:
+        scheduler.shutdown()
+    except Exception:  # noqa: BLE001
+        logger.exception("user scheduler shutdown failed")
 
 
 def _require_cfg(value: Config | None) -> Config:
