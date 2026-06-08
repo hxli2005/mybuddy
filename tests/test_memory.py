@@ -275,10 +275,12 @@ def test_memory_governance_merges_duplicate_memory(ltm) -> None:
 
 def test_memory_governance_marks_expired_open_thread_stale(ltm) -> None:
     governance = MemoryGovernance(ltm)
-    governance.add_or_merge(
+    # 用底层 ltm.add 直接造一张已过期的卡(add_or_merge 会把过去的 expires_at 丢弃 —— R4);
+    # 这里要测的是 refresh 把已到期的 active 转 stale。
+    ltm.add(
         "用户昨天要处理报告开头",
         mem_type="open_thread",
-        extra_meta={"expires_at": "2000-01-01T00:00:00"},
+        extra_meta={"status": "active", "expires_at": "2000-01-01T00:00:00"},
     )
 
     assert governance.refresh_open_thread_lifecycle() == 1
@@ -331,13 +333,17 @@ def test_governance_deletes_long_stale_open_thread(ltm) -> None:
 
 
 def test_refresh_handles_timezone_aware_expires_at(ltm) -> None:
-    """回归(评审 C1):模型产出带时区的 expires_at 不应让 refresh 抛 TypeError 打断对话。"""
+    """回归(评审 C1):带时区的 expires_at 不应让 refresh 抛 TypeError 打断对话。
+
+    用底层 ltm.add 注入未归一的 aware 字符串(add_or_merge 会在写入时归一/丢弃),模拟历史
+    遗留卡直接进到 refresh 的比较路径。
+    """
     governance = MemoryGovernance(ltm)
-    governance.add_or_merge(
+    ltm.add(
         "用户周五要交报告",
         mem_type="open_thread",
         uid="ot_tz",
-        extra_meta={"title": "报告", "expires_at": "2000-01-01T00:00:00+08:00"},
+        extra_meta={"title": "报告", "status": "active", "expires_at": "2000-01-01T00:00:00+08:00"},
     )
     # 不抛 + 已过期 → stale(aware 被规整成 naive-UTC 后能正常比较)
     assert governance.refresh_open_thread_lifecycle() == 1
@@ -345,25 +351,79 @@ def test_refresh_handles_timezone_aware_expires_at(ltm) -> None:
 
 
 def test_open_thread_expires_at_normalized(ltm) -> None:
-    """回归(评审 Y3/[8]):open_thread 的 expires_at 一律归一为可比较的 ISO,
-    自然语言能解析就解析、解析不了/缺失给兜底寿命——不再有"永不 stale 的不死话题"。"""
+    """回归(评审 Y3/R2):可解析的显式截止归一为 ISO;解析不了/缺失**不写兜底默认**
+    (否则会盖掉用户后补的真实截止),永生由 refresh 按 last_seen+TTL 兜底(见下条测试)。"""
     from mybuddy.memory.governance import _parse_iso
 
     governance = MemoryGovernance(ltm)
-    governance.add_or_merge("用户在准备一件没说截止的事", mem_type="open_thread", uid="ot_none")
     governance.add_or_merge(
         "用户明天要做的事", mem_type="open_thread", uid="ot_nl",
         extra_meta={"expires_at": "明天下午3点"},
     )
-    governance.add_or_merge(
-        "用户下周五的安排", mem_type="open_thread", uid="ot_bad",
-        extra_meta={"expires_at": "下周五"},  # parse_reminder_time/dateutil 都解析不了
-    )
+    governance.add_or_merge("用户在准备一件没说截止的事", mem_type="open_thread", uid="ot_none")
     by_id = {i["id"]: i["metadata"] for i in ltm.list_all(mem_type="open_thread")}
-    for uid in ("ot_none", "ot_nl", "ot_bad"):
-        exp = by_id[uid].get("expires_at")
-        assert _parse_iso(exp) is not None, f"{uid} 的 expires_at 应为合法 ISO,实际 {exp!r}"
-    assert by_id["ot_nl"]["expires_at"] != "明天下午3点"  # 自然语言已被归一
+    # 可解析 → 归一为 ISO
+    assert _parse_iso(by_id["ot_nl"].get("expires_at")) is not None
+    assert by_id["ot_nl"]["expires_at"] != "明天下午3点"
+    # 缺失 → 不写兜底默认值
+    assert "expires_at" not in by_id["ot_none"]
+
+
+def test_open_thread_without_expires_still_bounded(ltm) -> None:
+    """回归(评审 R8):无显式 expires_at 的话题不永生——refresh 按 last_seen_at + TTL 兜底回收。"""
+    ltm.add(
+        "一个很久没提、也没说截止的旧话题",
+        mem_type="open_thread",
+        uid="ot_old",
+        extra_meta={
+            "status": "active",
+            "last_seen_at": "2000-01-01T00:00:00",
+            "created_at": "2000-01-01T00:00:00",
+        },
+    )
+    governance = MemoryGovernance(ltm)
+    assert governance.refresh_open_thread_lifecycle() == 1  # last_seen+TTL 已过 → stale
+    assert ltm.list_all(mem_type="open_thread")[0]["metadata"]["status"] == "stale"
+
+
+def test_stale_open_thread_revives_when_rementioned(ltm) -> None:
+    """回归(评审 R1):自动 stale 的话题被用户再次提起 → 复活为 active 且不会立刻又 stale。"""
+    governance = MemoryGovernance(ltm)
+    # 直接造一张 stale 卡(add_or_merge 不再存过去的 expires_at)
+    ltm.add(
+        "用户周五要交报告", mem_type="open_thread", uid="ot_s",
+        extra_meta={"status": "stale", "stale_at": "2000-01-01T00:00:00",
+                    "expires_at": "2000-01-01T00:00:00"},
+    )
+    assert ltm.list_all(mem_type="open_thread")[0]["metadata"]["status"] == "stale"
+
+    governance.add_or_merge("用户周五要交报告", mem_type="open_thread")  # 再次提到 → 复活
+    card = ltm.list_all(mem_type="open_thread")[0]
+    assert card["id"] == "ot_s"  # 合并进同一张卡
+    assert card["metadata"]["status"] == "active" and not card["metadata"].get("stale_at")
+    governance.refresh_open_thread_lifecycle()  # 过去截止已换成未来兜底
+    assert ltm.list_all(mem_type="open_thread")[0]["metadata"]["status"] == "active"
+
+    # snoozed 不被再次提到唤醒(C3 仍成立)
+    sid = governance.add_or_merge("用户下月计划", mem_type="open_thread").memory_id
+    governance.snooze_open_thread(sid, "2099-01-01T00:00:00")
+    governance.add_or_merge("用户下月计划", mem_type="open_thread")
+    assert next(
+        i["metadata"]["status"] for i in ltm.list_all(mem_type="open_thread") if i["id"] == sid
+    ) == "snoozed"
+
+
+def test_later_real_deadline_replaces_missing(ltm) -> None:
+    """回归(评审 R2):先建无截止话题、后补真实"明天"截止 → 采用真实截止,不被旧值盖掉。"""
+    from mybuddy.memory.governance import _parse_iso
+
+    governance = MemoryGovernance(ltm)
+    governance.add_or_merge("用户在准备项目汇报", mem_type="open_thread", uid="ot")
+    assert "expires_at" not in ltm.list_all(mem_type="open_thread")[0]["metadata"]
+    governance.add_or_merge(
+        "用户在准备项目汇报", mem_type="open_thread", extra_meta={"expires_at": "明天下午3点"}
+    )
+    assert _parse_iso(ltm.list_all(mem_type="open_thread")[0]["metadata"].get("expires_at")) is not None
 
 
 def test_choose_content_preserves_newer_update() -> None:
@@ -822,6 +882,55 @@ def test_preference_valence_prefers_structured_polarity() -> None:
     # 无 polarity(旧卡/直接写入)退回正则兜底
     assert _preference_valence({"metadata": {}, "content": "用户不喜欢香菜"}) == "避开"
     assert _preference_valence({"metadata": {}, "content": "用户喜欢喝咖啡"}) == "偏好"
+    # 回归(评审 R6):LLM 没严格输出 like/avoid 时,中文/近义词也能识别,不跌回脆弱正则
+    assert _preference_valence({"metadata": {"polarity": "讨厌"}, "content": "随便"}) == "避开"
+    assert _preference_valence({"metadata": {"polarity": "dislike"}, "content": "随便"}) == "避开"
+    assert _preference_valence({"metadata": {"polarity": "想要"}, "content": "随便"}) == "偏好"
+
+
+def test_normalize_expires_at_timezone_and_past() -> None:
+    """回归(评审 R4):中文相对时间按本地壁钟解析再转 UTC(不偏一个时区);已过去的截止丢弃。"""
+    from datetime import UTC
+
+    from mybuddy._time import utcnow
+    from mybuddy.memory.governance import _normalize_expires_at, _parse_iso
+
+    now_iso = utcnow().isoformat(timespec="seconds")
+    iso = _normalize_expires_at("明天下午3点", now_iso)
+    assert iso is not None
+    # 存的是 UTC;转回本地应为"明天 15:00"(机器本地时区,tz 无关断言)
+    assert _parse_iso(iso).replace(tzinfo=UTC).astimezone().hour == 15
+    # 已过去的显式截止 → 丢弃(不让话题刚建就 stale),解析不了的也丢弃
+    assert _normalize_expires_at("2000-01-01T00:00:00", now_iso) is None
+    assert _normalize_expires_at("下周五", now_iso) is None
+
+
+def test_choose_content_dedups_entity_prefix_and_keeps_recent() -> None:
+    """回归(评审 R5):合并不重复拼 entity 前缀;超长保留最新片段而非整段丢弃。"""
+    from mybuddy.memory.governance import _choose_content
+
+    merged = _choose_content("煤球(猫):是只英短", "煤球(猫):最近生病住院了")
+    assert merged == "煤球(猫):是只英短;最近生病住院了"
+    assert merged.count("煤球(猫):") == 1  # 前缀不重复
+    # 多段累积超长:保留最新片段,不整段丢光
+    long_combined = _choose_content("a:" + "旧" * 100, "a:中间")
+    out = _choose_content(long_combined, "a:最新")
+    assert "最新" in out and len(out) <= 240
+
+
+def test_preference_merge_keeps_polarity_consistent_with_content(ltm) -> None:
+    """回归(评审 R3):合并保留旧正文时 polarity 也跟旧的,避免'标签 like、正文不喜欢'矛盾卡。"""
+    governance = MemoryGovernance(ltm)
+    governance.add_or_merge(
+        "用户不喜欢被打鸡血式鼓励", mem_type="preference", extra_meta={"polarity": "avoid"}
+    )
+    # 同正文(必合并),但新卡把 polarity 误标成 like
+    governance.add_or_merge(
+        "用户不喜欢被打鸡血式鼓励", mem_type="preference", extra_meta={"polarity": "like"}
+    )
+    cards = ltm.list_all(mem_type="preference")
+    assert len(cards) == 1  # 合并成一张
+    assert cards[0]["metadata"].get("polarity") == "avoid"  # 与保留的否定正文一致,未被 like 盖掉
 
 
 # =============================================================================
