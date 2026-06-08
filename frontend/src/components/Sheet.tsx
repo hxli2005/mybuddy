@@ -50,7 +50,13 @@ export function Sheet({ open, onClose, title, subtitle, children, actions, side 
   const hidden = side === "right" ? "translate-x-full" : "-translate-x-full";
 
   return createPortal(
-    <div className="fixed inset-0 z-50" role="dialog" aria-modal="true">
+    <div
+      className="fixed inset-0 z-50"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby={title ? "sheet-title" : undefined}
+      aria-label={title ? undefined : "面板"}
+    >
       <div
         onClick={onClose}
         className={cn(
@@ -68,7 +74,7 @@ export function Sheet({ open, onClose, title, subtitle, children, actions, side 
       >
         <header className="flex items-center gap-3 px-5 h-16 shrink-0 border-b border-line">
           <div className="min-w-0 flex-1">
-            {title ? <h2 className="font-semibold text-ink truncate">{title}</h2> : null}
+            {title ? <h2 id="sheet-title" className="font-semibold text-ink truncate">{title}</h2> : null}
             {subtitle ? <p className="text-[12.5px] text-muted truncate">{subtitle}</p> : null}
           </div>
           {actions}

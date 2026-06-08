@@ -32,6 +32,12 @@ const presenceText: Record<Presence, string> = {
   negative: "我在，慢慢说",
 };
 
+const presenceDot: Record<Presence, string> = {
+  calm: "bg-accent",
+  positive: "bg-positive",
+  negative: "bg-negative",
+};
+
 type ShellProps = {
   presence: Presence;
   children: ReactNode;
@@ -51,7 +57,7 @@ export function Shell({ presence, children, settingsOpen, onOpenSettings, onClos
           <div className="min-w-0 flex-1 leading-tight">
             <p className="font-semibold text-ink">小布</p>
             <p className="text-[12px] text-muted flex items-center gap-1.5">
-              <span className="inline-block h-1.5 w-1.5 rounded-full bg-positive" />
+              <span className={`inline-block h-1.5 w-1.5 rounded-full ${presenceDot[presence]}`} />
               {presenceText[presence]}
             </p>
           </div>

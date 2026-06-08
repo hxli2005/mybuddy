@@ -9,7 +9,7 @@ import {
   useState,
 } from "react";
 import { fetchMessages, sendChat, sendFeedback } from "../lib/api";
-import { Avatar, Chip, EmptyState, TypingDots } from "../components/ui";
+import { Chip, EmptyState, TypingDots } from "../components/ui";
 import { cn } from "../lib/cn";
 import { queryKeys } from "../lib/queryKeys";
 import type {
@@ -91,6 +91,11 @@ export function ChatView({ onChatResult }: ChatViewProps) {
   const feedbackMutation = useMutation({
     mutationFn: ({ label, turnId }: { label: string; turnId: string }) => sendFeedback(label, turnId),
     onSuccess: (_data, vars) => setFeedbackDone((m) => ({ ...m, [vars.turnId]: vars.label })),
+    onError: (error) =>
+      setMessages((current) => [
+        ...current,
+        { id: makeId("system"), role: "system", text: `反馈没记上：${errText(error)}` },
+      ]),
   });
 
   // 自动滚到底
@@ -129,7 +134,7 @@ export function ChatView({ onChatResult }: ChatViewProps) {
   }
 
   function onFeedback(turnId: string, label: string) {
-    if (feedbackDone[turnId]) return;
+    if (feedbackDone[turnId] || feedbackMutation.isPending) return;
     feedbackMutation.mutate({ label, turnId });
   }
 

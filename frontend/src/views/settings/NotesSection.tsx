@@ -64,7 +64,7 @@ export function NotesSection() {
           {query.data?.notes.length ? (
             query.data.notes.map((note) => (
               <NoteCard
-                key={note.id}
+                key={`${note.id}-${note.updated_at}`}
                 note={note}
                 editing={editingId === note.id}
                 onEdit={() => setEditingId(note.id)}
