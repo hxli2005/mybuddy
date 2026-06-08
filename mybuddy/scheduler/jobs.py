@@ -150,6 +150,11 @@ def run_dream_job(db_file: str, config_path: str) -> None:
     cfg = load_config(config_path)
     engine = init_db(db_file)
     provider = make_provider(cfg.llm)
+    # 已知并发限制(评审[4],评估后有意不修):本 job 在调度线程用独立 LongTermMemory
+    # 实例(独立 _card_cache)写同一批 archive,与在线 chat 跨实例存在 RMW 丢更新 + 脏缓存
+    # 的理论窗口。但:① 默认 02:23 深夜跑,单人此时基本离线;② 写卡已是原子(temp+rename),
+    # 不会损坏/读到半写;③ 唯一 RMW 是 last_nudged_at 单字段戳,最坏丢一次、下次自愈。
+    # 上 filelock 依赖或把热字段拆进 SQLite 与这点收益不成比例,故按现状接受。
     ltm = LongTermMemory(
         persist_dir=cfg.paths.chroma_dir,
         embedding_model=cfg.memory.embedding_model,

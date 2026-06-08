@@ -154,9 +154,13 @@ class Agent:
 
         # 2. 检索记忆上下文。开 embedding 时语义查询是同步网络调用,丢到线程里跑,
         #    避免阻塞事件循环、卡住其他并发请求(纯词法时无网络,直接同步即可)。
+        #    生命周期刷新(唯一的写)留在事件循环上先做,build 在线程里只读,避免与后台
+        #    run_extract 的写盘跨线程无锁 RMW 丢更新。
         if getattr(self._memory, "semantic_enabled", False):
+            if hasattr(self._memory, "refresh_lifecycle"):
+                self._memory.refresh_lifecycle()
             memory_context = await asyncio.to_thread(
-                self._memory.build_context_section, user_input
+                self._memory.build_context_section, user_input, do_refresh=False
             )
         else:
             memory_context = self._memory.build_context_section(user_input)

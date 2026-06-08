@@ -143,8 +143,23 @@ class MemoryManager:
 
     # ---- 上下文构建 ----
 
-    def build_context_section(self, user_input: str) -> str:
+    def refresh_lifecycle(self) -> None:
+        """刷新 open_thread 生命周期(过期/唤醒/TTL 删除)。**必须在事件循环线程上调用**,
+        不要放进 build 的 to_thread —— 否则它的写盘会与后台 run_extract 的写盘跨线程
+        无锁 RMW 丢更新。后台维护异常绝不打断对话。"""
+        self._ensure_governance_state()
+        if self._ltm is None:
+            return
+        try:
+            self._governance.refresh_open_thread_lifecycle()
+        except Exception:
+            logger.exception("refresh_open_thread_lifecycle 失败,跳过本轮生命周期刷新")
+
+    def build_context_section(self, user_input: str, *, do_refresh: bool = True) -> str:
         """构建注入 system prompt 的记忆上下文文本块(空段自动省略)。
+
+        do_refresh=False 时跳过生命周期刷新(纯只读),供 agent 把本方法丢进 to_thread
+        时使用——刷新由 agent 在事件循环上先调 refresh_lifecycle() 完成,避免跨线程写竞态。
 
         最简记忆优先级:
           1. 未完成话题(open_thread):最多 1 条,必须有具体由头。
@@ -163,12 +178,8 @@ class MemoryManager:
                 "- 使用记忆时要像自然想起旧事,不要把记忆条目逐条汇报给用户。"
             )
 
-        if self._ltm is not None:
-            # 生命周期刷新是后台维护,绝不能因一张坏卡(如脏时间字段)打断当前对话轮。
-            try:
-                self._governance.refresh_open_thread_lifecycle()
-            except Exception:
-                logger.exception("refresh_open_thread_lifecycle 失败,跳过本轮生命周期刷新")
+        if do_refresh:
+            self.refresh_lifecycle()
 
         core_sections = [
             (("open_thread",), "## 未完成话题(有具体由头才提)", 1),
@@ -653,13 +664,17 @@ def _format_memory_hit(hit: dict) -> str:
 def _preference_valence(hit: dict) -> str:
     """判断一条偏好卡是"偏好"还是"避开"。
 
-    抽取侧把喜欢/不喜欢都折进 mem_type=preference,价正负只在正文措辞里
-    (extractor.py 的 prompt 明确只用 preference 一类)。注入时若不标出正负,
-    模型可能把"讨厌X"误读成"喜欢X"去迎合。
+    优先用抽取阶段产出的结构化极性 polarity(LLM 按用户真实意图判定);否则退回正文
+    正则兜底。纯正则会把"希望被鼓励,不要打鸡血"这类**正向**诉求误判成避开,导致模型
+    反着做——故结构化极性优先。
     """
     meta = hit.get("metadata") or {}
-    if meta.get("type") == "anti_preference":
+    polarity = str(meta.get("polarity") or "").strip().lower()
+    if polarity == "avoid" or meta.get("type") == "anti_preference":
         return "避开"
+    if polarity == "like":
+        return "偏好"
+    # 无结构化极性(旧卡 / 直接写入)时才退回正文正则,仅作兜底。
     text = f"{meta.get('title', '')} {hit.get('content', '')}"
     return "避开" if _NEGATIVE_INTEREST_RE.search(text) else "偏好"
 
@@ -711,6 +726,7 @@ def _relation_item_to_card(item: dict) -> tuple[str, dict]:
     }
     for key in (
         "title",
+        "polarity",
         "triggers",
         "emotional_color",
         "callback_style",

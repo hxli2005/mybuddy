@@ -50,6 +50,7 @@ EXTRACT_PROMPT = """你是一个关系记忆管理助手。请从以下用户与
       {
         "title": "偏好或避雷标题",
         "content": "用户明确表达过的偏好、禁忌或回应方式",
+        "polarity": "like 或 avoid",
         "triggers": ["再次出现时可使用的触发词"],
         "confidence": 0.8
       }
@@ -91,6 +92,8 @@ EXTRACT_PROMPT = """你是一个关系记忆管理助手。请从以下用户与
 - relationship_memories:
   - 只使用 preference/shared_moment/open_thread 三类。不要新增其他类型。
   - preference:用户明确表达的稳定偏好、避雷、喜欢/不喜欢的回应方式。
+    polarity 必填:用户**想要/喜欢**填 "like",**不想要/讨厌/要避开**填 "avoid"。
+    注意"喜欢X但不要Y"这类整体是正向诉求时填 "like",不要被"不要"二字带成 avoid。
   - shared_moment:用户和 AI 之间形成的共同经历、回忆卡、有效陪伴片段。
   - open_thread:未来有明确由头可回访的未完成话题;必须有具体 evidence,不要泛泛关心。
     如果能判断截止或过期时间,填写 expires_at;如果能判断事件发生时间,填写 event_time。

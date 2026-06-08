@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 from mybuddy._time import utcnow
@@ -37,6 +37,8 @@ TERMINAL_STATUSES = {"resolved", "archived", "deleted", "superseded"}
 # stale open_thread 超过这么多天直接删除:话题只会开不会关会让 archive 永久膨胀,
 # 每轮 list_all 全扫都被这些早已无关的卡稀释。
 STALE_TTL_DAYS = 30
+# open_thread 缺失/无法解析 expires_at 时的兜底寿命:超过即转 stale,保证没有"不死话题"。
+DEFAULT_OPEN_THREAD_TTL_DAYS = 30
 
 
 @dataclass(frozen=True)
@@ -224,7 +226,28 @@ def governance_metadata(
     meta.setdefault("memory_key", make_memory_key(mem_type, content, meta))
     if mem_type == "open_thread":
         meta.setdefault("status", "active")
+        # expires_at 归一为 ISO:模型常填"明天3点""下周五"这类自然语言,_parse_iso 解析
+        # 不了就永不 stale → 不死话题。能解析的转 ISO,解析不了/缺失的给兜底寿命。
+        meta["expires_at"] = _normalize_expires_at(meta.get("expires_at"), current)
     return meta
+
+
+def _normalize_expires_at(value: Any, current_iso: str) -> str:
+    """把 expires_at 规整成可比较的 naive ISO。优先 ISO,其次中文相对时间(明天/后天+点),
+    再不行用兜底寿命(current + DEFAULT_OPEN_THREAD_TTL_DAYS),保证每条话题终能回收。"""
+    base = _parse_iso(current_iso) or utcnow()
+    dt = _parse_iso(value) if isinstance(value, str) else None
+    if dt is None and isinstance(value, str) and value.strip():
+        try:
+            from mybuddy.tools.reminder import parse_reminder_time
+
+            parsed = parse_reminder_time(value, now=base)
+            dt = parsed.replace(tzinfo=None) if parsed.tzinfo is not None else parsed
+        except Exception:  # noqa: BLE001 — 解析失败就走兜底
+            dt = None
+    if dt is None:
+        dt = base + timedelta(days=DEFAULT_OPEN_THREAD_TTL_DAYS)
+    return dt.isoformat(timespec="seconds")
 
 
 def merge_metadata(old: dict[str, Any], new: dict[str, Any], *, now: str | None = None) -> dict[str, Any]:
@@ -247,6 +270,11 @@ def merge_metadata(old: dict[str, Any], new: dict[str, Any], *, now: str | None 
             continue
         if key == "observed_at":
             merged[key] = min(str(merged.get(key) or value), str(value))
+            continue
+        if key == "expires_at":
+            # 保留原始截止时间:再次提到(常不带或带默认兜底 expires_at)不该覆盖
+            # 旧卡真实的截止日期。旧卡没有才采用新值。
+            merged.setdefault("expires_at", value)
             continue
         if key == "last_seen_at":
             merged[key] = current
@@ -304,11 +332,22 @@ def _meaningful_zh_chunks(text: str) -> list[str]:
 
 
 def _choose_content(old: str, new: str) -> str:
+    """合并两条同主题记忆的正文。
+
+    不再"谁长留谁"——那会把更新但更短的信息丢掉(如 entity 的"最近生病住院了"被
+    "是只英短喜欢晒太阳"盖掉)。改为:子集去重,真有增量则追加(限长,超长保留较新)。
+    """
     old_clean = (old or "").strip()
     new_clean = (new or "").strip()
-    if len(new_clean) > len(old_clean) + 8:
-        return new_clean
-    return old_clean or new_clean
+    if not new_clean:
+        return old_clean
+    if not old_clean or old_clean in new_clean:
+        return new_clean  # 新是旧的超集(或旧为空)
+    if new_clean in old_clean:
+        return old_clean  # 新无增量
+    combined = f"{old_clean};{new_clean}"
+    # 真有新信息则追加;限长避免反复合并无限堆积,超长则保留较新的。
+    return combined if len(combined) <= 240 else new_clean
 
 
 def _similarity_threshold(mem_type: str) -> float:
