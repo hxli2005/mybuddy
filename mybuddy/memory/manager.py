@@ -60,6 +60,32 @@ class MemoryManager:
         self._ltm.normalize_metadata()
         self._governance = MemoryGovernance(ltm)
 
+        # 可选语义召回:enabled 时构造 SemanticRecall 并挂到 ltm。失败静默降级为纯词法。
+        self._semantic = None
+        emb_cfg = getattr(config.memory, "embedding", None)
+        if emb_cfg is not None and emb_cfg.enabled and ltm is not None:
+            try:
+                from pathlib import Path
+
+                from mybuddy.memory.semantic import SemanticRecall
+
+                effective = emb_cfg
+                if not emb_cfg.api_key:
+                    # api_key 留空 = 复用主对话 LLM 的端点/密钥
+                    # (如 OpenRouter 同一端点也提供 /embeddings),避免重复填密钥。
+                    effective = emb_cfg.model_copy(
+                        update={
+                            "api_key": config.llm.api_key,
+                            "base_url": config.llm.base_url or emb_cfg.base_url,
+                        }
+                    )
+                index_path = Path(config.paths.chroma_dir) / "vectors.db"
+                self._semantic = SemanticRecall(effective, index_path)
+                ltm.attach_semantic(self._semantic)
+            except Exception:
+                logger.exception("语义召回初始化失败,降级为纯词法")
+                self._semantic = None
+
         # 用于记录最近 user+assistant 文本对,供 extractor 使用
         self._recent_turns: list[str] = []
         self._recent_turn_ids: list[str] = []
@@ -280,6 +306,16 @@ class MemoryManager:
             len(result.claims),
             relationship_count,
         )
+
+        # 语义召回:把新写入的卡片重建进向量索引。embed 是网络调用,放线程里跑,
+        # 不阻塞事件循环(本方法已在后台 task 中)。reconcile 幂等,首次会嵌入整个档案。
+        if self._semantic is not None and self._semantic.enabled:
+            try:
+                import asyncio
+
+                await asyncio.to_thread(self._ltm.reconcile_semantic)
+            except Exception:
+                logger.exception("语义向量重建失败")
         return True
 
     # ---- 属性访问 ----
@@ -336,10 +372,16 @@ class MemoryManager:
     ) -> list[dict]:
         if self._ltm is None:
             return []
+        use_sem = getattr(self, "_semantic", None) is not None and self._semantic.enabled
+        # 混合检索返回 RRF 分(量纲不同),故仅纯词法时套 0.25 词面相关度下限;
+        # 语义路径靠融合排名 + 分段配额裁剪,不再用词法阈值砍掉换词召回。
+        floor = 0.0 if use_sem else 0.25
         hits_by_id: dict[str, dict] = {}
         for mem_type in mem_types:
-            for hit in self._ltm.search(user_input, top_k=top_k, mem_type=mem_type):
-                if hit.get("score", 0) < 0.25:
+            for hit in self._ltm.search(
+                user_input, top_k=top_k, mem_type=mem_type, use_semantic=use_sem
+            ):
+                if hit.get("score", 0) < floor:
                     continue
                 uid = str(hit.get("id") or "")
                 if not uid or uid in hits_by_id:
