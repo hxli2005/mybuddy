@@ -712,9 +712,11 @@ def create_app(config_path: str = "config.yaml", max_steps: int = 6):
 
     @app.get("/")
     async def index():
+        from fastapi.responses import HTMLResponse
+
         path = _frontend_index_path(frontend_dir)
-        if not path.exists():
-            raise HTTPException(status_code=404, detail="frontend index not found")
+        if path is None:
+            return HTMLResponse(_frontend_not_built_html(frontend_dir), status_code=503)
         return FileResponse(path)
 
     @app.get("/api/status")
@@ -913,9 +915,30 @@ def _frontend_static_dir(frontend_dir: Path) -> Path:
     return dist if (dist / "index.html").exists() else frontend_dir
 
 
-def _frontend_index_path(frontend_dir: Path) -> Path:
+def _frontend_index_path(frontend_dir: Path) -> Path | None:
+    """构建后的前端入口;未构建(无 dist)时返回 None。
+
+    不再退回 frontend/index.html —— 那个文件根本不存在(Vite 入口在 src/index.html 且引用
+    原始 /main.tsx,本服务也不会转译),只会让 / 回一个莫名的 404 file not found。
+    """
     dist_index = frontend_dir / "dist" / "index.html"
-    return dist_index if dist_index.exists() else frontend_dir / "index.html"
+    return dist_index if dist_index.exists() else None
+
+
+def _frontend_not_built_html(frontend_dir: Path) -> str:
+    """前端未构建时 / 返回的可读提示页(取代莫名的 404)。"""
+    return (
+        "<!doctype html><meta charset='utf-8'><title>MyBuddy · 前端未构建</title>"
+        '<div style="font-family:system-ui,sans-serif;max-width:40rem;margin:4rem auto;'
+        'padding:0 1.5rem;line-height:1.7;color:#333">'
+        "<h1>前端尚未构建</h1>"
+        "<p>本服务托管的是前端构建产物 <code>frontend/dist/</code>,当前不存在。</p>"
+        "<p>先构建前端再刷新本页:</p>"
+        '<pre style="background:#f4f4f5;padding:1rem;border-radius:8px;overflow:auto">'
+        f"cd {frontend_dir}\nnpm install\nnpm run build</pre>"
+        "<p>本地开发也可用 <code>npm run dev</code> 起 Vite(它会把 <code>/api</code> 代理到本服务)。</p>"
+        "</div>"
+    )
 
 
 def _user_summary_payload(item: UserSummaryRecord) -> dict[str, Any]:

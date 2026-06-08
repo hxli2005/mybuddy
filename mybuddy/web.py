@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import mimetypes
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -14,7 +15,9 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 
-from mybuddy.api import AppState, _frontend_index_path
+from mybuddy.api import AppState, _frontend_index_path, _frontend_not_built_html
+
+logger = logging.getLogger(__name__)
 
 
 class DemoServer(ThreadingHTTPServer):
@@ -33,7 +36,15 @@ class DemoHandler(BaseHTTPRequestHandler):
             path = parsed.path
             query = parse_qs(parsed.query)
             if path == "/":
-                self._send_file(_frontend_index_path(self.server.frontend_dir))
+                index = _frontend_index_path(self.server.frontend_dir)
+                if index is None:
+                    # 前端未构建:给可读提示页(503),而不是莫名的 404 file not found。
+                    self._send_html(
+                        HTTPStatus.SERVICE_UNAVAILABLE,
+                        _frontend_not_built_html(self.server.frontend_dir),
+                    )
+                else:
+                    self._send_file(index)
                 return
             if path.startswith("/static/"):
                 name = unquote(path.removeprefix("/static/"))
@@ -280,6 +291,14 @@ class DemoHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _send_html(self, status: HTTPStatus, html: str) -> None:
+        body = html.encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def _send_error(self, status: HTTPStatus, detail: str) -> None:
         self._send_json({"detail": detail}, status=status)
 
@@ -292,6 +311,13 @@ def serve(
     max_steps: int = 6,
 ) -> None:
     frontend_dir = Path(__file__).resolve().parents[1] / "frontend"
+    if _frontend_index_path(frontend_dir) is None:
+        # 非致命:dev 下前端走 `npm run dev`(Vite 代理 /api 到本服务),API 仍需可用。
+        logger.warning(
+            "前端未构建(%s 不存在):/ 会返回‘前端未构建’提示页。要由本服务托管前端,"
+            "先 `cd frontend && npm run build`;本地开发用 `npm run dev`(Vite 代理 /api 到此)。",
+            frontend_dir / "dist" / "index.html",
+        )
     state = AppState(config_path=config_path, max_steps=max_steps, enable_scheduler=False)
     state.startup()
     server = DemoServer((host, port), DemoHandler, state=state, frontend_dir=frontend_dir)
