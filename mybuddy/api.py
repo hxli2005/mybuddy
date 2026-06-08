@@ -52,7 +52,13 @@ from mybuddy.storage import (
     set_user_persona,
     set_user_status,
 )
-from mybuddy.tools import ToolRegistry, set_context, setup_memory_tool, setup_skill_tool
+from mybuddy.tools import (
+    ToolRegistry,
+    set_context,
+    setup_memory_tool,
+    setup_skill_tool,
+    use_context,
+)
 from mybuddy.tools.reminder import parse_reminder_time
 
 if TYPE_CHECKING:
@@ -266,40 +272,53 @@ class AppState:
     async def chat_payload(self, message: str) -> dict[str, Any]:
         if self.agent is None:
             raise RuntimeError("LLM api_key 未配置,无法对话")
-        engine = _require(self.engine)
-        pending_before = _integrate_pending_messages(
-            engine,
-            session_id=self.agent.session_id,
-            items=drain_pending(engine),
-            add_to_short_term=self.agent._memory.add_message,
-        )
-        result = await self.agent.run(message.strip())
-        result_text = result.text
-        tool_calls = list(result.tool_calls)
-        deterministic_tools = await _run_deterministic_demo_tools(message, tool_calls, self)
-        if deterministic_tools:
-            tool_calls.extend(deterministic_tools)
-        result_text = _append_tool_summary(result_text, tool_calls)
-        pending_after = _integrate_pending_messages(
-            engine,
-            session_id=self.agent.session_id,
-            items=drain_pending(engine),
-            add_to_short_term=self.agent._memory.add_message,
-        )
-        self.last_turn_id = result.trajectory.turn_id
-        self.last_triggered_skills = list(result.triggered_skills)
-        return {
-            "text": result_text,
-            "turn_id": result.trajectory.turn_id,
-            "steps": result.steps,
-            "finish_reason": result.finish_reason,
-            "tool_calls": tool_calls,
-            "emotion": result.emotion.to_dict() if result.emotion else None,
-            "emotional_support": result.emotional_support,
-            "triggered_skills": result.triggered_skills,
-            "search_sources": result.search_sources,
-            "pending_messages": pending_before + pending_after,
-        }
+        # 工具上下文是 ContextVar,按线程/按 task 隔离。startup() 在主线程(或 FastAPI
+        # 启动协程)里 set_context,但实际跑对话时:web.py 用 ThreadingHTTPServer 每请求
+        # 开新线程 + asyncio.run(全新 context),FastAPI 每请求是独立 task —— 两种情况下
+        # 启动时设的上下文都传不到这里,工具(web_search/weather 等)会拿到 config=None。
+        # 因此在真正会调用工具的请求协程内重新建立上下文(与多用户 ChatService 同款做法)。
+        with use_context(
+            engine=self.engine,
+            config=self.cfg,
+            scheduler=self.scheduler,
+            provider=self.provider,
+            long_term=self.ltm,
+            skill_registry=self.skill_registry,
+        ):
+            engine = _require(self.engine)
+            pending_before = _integrate_pending_messages(
+                engine,
+                session_id=self.agent.session_id,
+                items=drain_pending(engine),
+                add_to_short_term=self.agent._memory.add_message,
+            )
+            result = await self.agent.run(message.strip())
+            result_text = result.text
+            tool_calls = list(result.tool_calls)
+            deterministic_tools = await _run_deterministic_demo_tools(message, tool_calls, self)
+            if deterministic_tools:
+                tool_calls.extend(deterministic_tools)
+            result_text = _append_tool_summary(result_text, tool_calls)
+            pending_after = _integrate_pending_messages(
+                engine,
+                session_id=self.agent.session_id,
+                items=drain_pending(engine),
+                add_to_short_term=self.agent._memory.add_message,
+            )
+            self.last_turn_id = result.trajectory.turn_id
+            self.last_triggered_skills = list(result.triggered_skills)
+            return {
+                "text": result_text,
+                "turn_id": result.trajectory.turn_id,
+                "steps": result.steps,
+                "finish_reason": result.finish_reason,
+                "tool_calls": tool_calls,
+                "emotion": result.emotion.to_dict() if result.emotion else None,
+                "emotional_support": result.emotional_support,
+                "triggered_skills": result.triggered_skills,
+                "search_sources": result.search_sources,
+                "pending_messages": pending_before + pending_after,
+            }
 
     def feedback_payload(self, label: str, turn_id: str | None = None) -> dict[str, Any]:
         if self.feedback_bus is None:

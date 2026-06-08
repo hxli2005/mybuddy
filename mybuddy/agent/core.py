@@ -22,6 +22,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import uuid
 from datetime import datetime, timedelta
@@ -444,6 +445,23 @@ class Agent:
             result_text,
             max_items=self._config.tools.web_search_max_results,
         )
+        count = search_result_count(result_text)
+        # 检索可观测性:命中 must/should 却拿到 0 条时,把真实原因(超时/反爬/ddgs 缺失/
+        # 缓存空)打到日志。否则失败完全不可见——模型只会对用户说“没查到”,运维无从排查。
+        if count == 0:
+            error = ""
+            try:
+                error = str(json.loads(result_text).get("error") or "")
+            except (ValueError, TypeError):
+                error = "(结果非 JSON,无法解析)"
+            logger.warning(
+                "web_search 预检索 0 条结果 | level=%s query=%r error=%s",
+                decision.level,
+                user_input[:80],
+                error or "(无 error 字段,权威空结果)",
+            )
+        else:
+            logger.info("web_search 预检索命中 %d 条 | query=%r", count, user_input[:80])
         return context, {
             "id": "prefetch_web_search",
             "name": "web_search",
@@ -453,7 +471,7 @@ class Agent:
             "decision_level": decision.level,
             "decision_reason": decision.reason,
             "decision_topic": decision.topic,
-            "result_count": search_result_count(result_text),
+            "result_count": count,
         }, sources
 
     def _registry_for_web_search(self) -> ToolRegistry | None:
