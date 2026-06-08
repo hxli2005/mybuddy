@@ -611,6 +611,61 @@ async def test_memory_manager_extracts_and_injects_entities(tmp_path) -> None:
     assert "煤球" in text
 
 
+def _golden_recall_store(tmp_path) -> MemoryManager:
+    """搭一个贴近真实的小记忆库,覆盖 note/偏好/避雷/entity/open_thread 各类型。"""
+    engine = init_db(str(tmp_path / "golden.db"))
+    cfg = Config()
+    chroma_dir = tmp_path / "golden_chroma"
+    chroma_dir.mkdir()
+    ltm = LongTermMemory(
+        persist_dir=str(chroma_dir), collection_name="golden", embedding_fn=mock_embed
+    )
+    ltm.add(
+        "地点在上海",
+        mem_type="note",
+        uid="g_note",
+        extra_meta={"title": "地点", "source": "user_note", "importance": 0.85},
+    )
+    ltm.add("用户喜欢喝美式咖啡", mem_type="preference", extra_meta={"title": "咖啡偏好"})
+    ltm.add("用户不喜欢被打鸡血式鼓励", mem_type="preference", extra_meta={"title": "鼓励方式"})
+    ltm.add(
+        "煤球(猫):用户养的橘猫,很黏人",
+        mem_type="entity",
+        extra_meta={"entity_name": "煤球", "relation": "猫", "keywords": ["煤球", "猫"]},
+    )
+    ltm.add(
+        "用户在准备周五的项目汇报",
+        mem_type="open_thread",
+        extra_meta={"title": "项目汇报", "contact_reason": "周五要交"},
+    )
+    return MemoryManager(engine=engine, config=cfg, ltm=ltm, provider=DummyProvider())
+
+
+def test_recall_golden_set(tmp_path) -> None:
+    """召回金标准回归集:锁死 T1/T2 的召回行为,后续调阈值/权重一旦破坏立刻报警。
+
+    每条 (query, 必须召回, 不该召回)。覆盖:note 按词召回、偏好正价、避雷负价标注、
+    entity 按名召回、open_thread 召回、无关 query 不乱注入话题卡。
+    """
+    mm = _golden_recall_store(tmp_path)
+    cases = [
+        ("我的地点是哪", ["上海"], []),
+        ("想喝美式咖啡", ["美式咖啡", "【偏好】"], []),
+        ("给我加油鼓励一下", ["打鸡血", "【避开】"], []),
+        ("煤球今天乖不乖", ["煤球"], []),
+        ("项目汇报准备好了吗", ["汇报"], []),
+        # 无关 query:话题性卡(note/正向偏好/entity 无 recency 兜底)不该乱入;
+        # open_thread 与"避雷"会按设计经 recency 兜底出现(主动回响 + 安全栏),不在此断言。
+        ("今天股市大涨", [], ["上海", "美式咖啡", "煤球"]),
+    ]
+    for query, must, must_not in cases:
+        text = mm.build_context_section(query)
+        for m in must:
+            assert m in text, f"{query!r} 应召回 {m!r},实际:\n{text}"
+        for n in must_not:
+            assert n not in text, f"{query!r} 不该召回 {n!r},实际:\n{text}"
+
+
 # =============================================================================
 # FactExtractor
 # =============================================================================

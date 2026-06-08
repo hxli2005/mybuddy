@@ -61,6 +61,11 @@ class LongTermMemory:
         # 写入/删除时按 key 失效;mtime 变化也会自动 miss,双保险。
         self._card_cache: dict[str, tuple[int, dict[str, Any], str]] = {}
 
+        # normalize_metadata 是一次性迁移(补旧卡缺失字段);跑过就置位,后续调用直接
+        # 跳过。否则每次构造 MemoryManager / 每次 memory API GET 都全量扫 + 重写旧卡,
+        # 既浪费 IO 又 bump mtime 把刚建的读缓存冲掉。
+        self._normalized = False
+
         # 可选语义召回器(SemanticRecall);None = 纯词法检索。
         self._semantic: Any = None
 
@@ -318,7 +323,10 @@ class LongTermMemory:
         self._write_card(uid, new_meta, content)
 
     def normalize_metadata(self) -> int:
-        """补齐旧档案卡缺失的治理字段,返回更新数量。"""
+        """补齐旧档案卡缺失的治理字段,返回更新数量。本实例只跑一次(一次性迁移)。"""
+        if self._normalized:
+            return 0
+        self._normalized = True
         now = utcnow().isoformat(timespec="seconds")
         count = 0
         for item in self.list_all():
