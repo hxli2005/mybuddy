@@ -1,55 +1,80 @@
-import { CornerDownLeft, Send, ThumbsDown, ThumbsUp } from "lucide-react";
+import { ArrowUp, Heart, Link2, Sparkles, ThumbsDown, ThumbsUp } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { FormEvent, KeyboardEvent, useEffect, useMemo, useState } from "react";
-import { fetchMessages, sendChat, sendFeedback } from "../api/client";
-import { EmptyState, PageHeader, Panel } from "../components/Primitives";
-import { queryKeys } from "../state/observability";
-import type { ChatLogMessage, ChatResponse, PendingMessage, SearchSource } from "../types/api";
+import {
+  FormEvent,
+  KeyboardEvent,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
+import { fetchMessages, sendChat, sendFeedback } from "../lib/api";
+import { Avatar, Chip, EmptyState, TypingDots } from "../components/ui";
+import { cn } from "../lib/cn";
+import { queryKeys } from "../lib/queryKeys";
+import type {
+  ChatLogMessage,
+  ChatResponse,
+  Emotion,
+  EmotionalSupport,
+  PendingMessage,
+  SearchSource,
+} from "../types/api";
 
 type ChatMessage = {
   id: string;
   role: "user" | "assistant" | "system";
   text: string;
   sources?: SearchSource[];
+  support?: EmotionalSupport | null;
+  emotion?: Emotion | null;
+  turnId?: string | null;
+  proactive?: string | null;
 };
 
 type ChatViewProps = {
   onChatResult: (response: ChatResponse) => void;
 };
 
-const quickPrompts = ["帮我整理今天的状态", "提醒我晚点复盘", "把这段话记下来"];
-const defaultPendingStatus = "正在组织回复。";
-const explicitSearchPattern = /(查一下|搜一下|搜索|上网|新闻|热搜|热点|链接|出处|来源|引用|官网|官方|current|latest|news|search|source|link)/i;
+const quickPrompts = ["陪我说会儿话", "帮我理一理今天", "提醒我晚点复盘", "把这件事记下来"];
+const defaultPendingStatus = "正在想怎么回你…";
+const explicitSearchPattern =
+  /(查一下|搜一下|搜索|上网|新闻|热搜|热点|链接|出处|来源|引用|官网|官方|current|latest|news|search|source|link)/i;
 const timeSensitivePattern =
-  /(最新|最近|现在|目前|当前|今天|昨天|刚刚|实时|今年).*(政策|法规|价格|股价|汇率|版本|发布|比赛|赛程|榜单|公司|产品|模型|论文|事件|事故|争议|口碑|趋势)|(政策|法规|价格|股价|汇率|版本|发布会|比赛|赛程|榜单|CEO|总统|总理|产品|模型|论文|口碑|趋势)/i;
-const interestFactPattern = /(剧情|设定|角色|卡牌|卡池|活动|机制|攻略|技能|数值|时间线|结局|主线|支线|声优|讲什么|哪张|哪个)/i;
+  /(最新|最近|现在|目前|当前|今天|昨天|刚刚|实时|今年).*(政策|法规|价格|股价|汇率|版本|发布|比赛|赛程|榜单|公司|产品|模型|论文|事件|事故|争议|口碑|趋势)/i;
 
 export function ChatView({ onChatResult }: ChatViewProps) {
   const queryClient = useQueryClient();
   const [message, setMessage] = useState("");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [lastTurnId, setLastTurnId] = useState<string | null>(null);
   const [pendingStatus, setPendingStatus] = useState(defaultPendingStatus);
-  const [pendingBroadcasts, setPendingBroadcasts] = useState<PendingMessage[]>([]);
+  const [feedbackDone, setFeedbackDone] = useState<Record<string, string>>({});
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
   const historyQuery = useQuery({ queryKey: queryKeys.messages, queryFn: () => fetchMessages(100) });
 
   useEffect(() => {
     if (!historyQuery.data?.messages.length) return;
-    setMessages((current) => {
-      if (current.length) return current;
-      return historyQuery.data.messages.flatMap(historyMessageToChatMessage);
-    });
+    setMessages((current) => (current.length ? current : historyQuery.data.messages.flatMap(historyToChat)));
   }, [historyQuery.data]);
 
   const chatMutation = useMutation({
     mutationFn: sendChat,
     onSuccess: (data) => {
-      setLastTurnId(data.turn_id || null);
-      setPendingBroadcasts(data.pending_messages || []);
+      const proactive = (data.pending_messages || []).map(pendingToChat);
       setMessages((current) => [
         ...current,
-        ...(data.pending_messages || []).map(pendingMessageToChatMessage),
-        createMessage("assistant", data.text || "没有文本响应。", data.search_sources || []),
+        ...proactive,
+        {
+          id: makeId("assistant"),
+          role: "assistant",
+          text: data.text || "（这次没有文字回应）",
+          sources: data.search_sources || [],
+          support: hasSupport(data.emotional_support) ? data.emotional_support : null,
+          emotion: data.emotion || null,
+          turnId: data.turn_id || null,
+        },
       ]);
       queryClient.invalidateQueries({ queryKey: queryKeys.messages });
       onChatResult(data);
@@ -57,233 +82,317 @@ export function ChatView({ onChatResult }: ChatViewProps) {
     onError: (error) => {
       setMessages((current) => [
         ...current,
-        createMessage("system", error instanceof Error ? error.message : String(error)),
+        { id: makeId("system"), role: "system", text: errText(error) },
       ]);
     },
-    onSettled: () => {
-      setPendingStatus(defaultPendingStatus);
-    },
+    onSettled: () => setPendingStatus(defaultPendingStatus),
   });
 
   const feedbackMutation = useMutation({
-    mutationFn: (label: string) => sendFeedback(label, lastTurnId || ""),
-    onSuccess: (_, label) => {
-      setMessages((current) => [...current, createMessage("system", `feedback: ${label}`)]);
-    },
-    onError: (error) => {
-      setMessages((current) => [
-        ...current,
-        createMessage("system", error instanceof Error ? error.message : String(error)),
-      ]);
-    },
+    mutationFn: ({ label, turnId }: { label: string; turnId: string }) => sendFeedback(label, turnId),
+    onSuccess: (_data, vars) => setFeedbackDone((m) => ({ ...m, [vars.turnId]: vars.label })),
   });
 
-  const messageGroups = useMemo(() => {
-    return messages.reduce<Record<ChatMessage["role"], ChatMessage[]>>(
-      (groups, item) => {
-        groups[item.role].push(item);
-        return groups;
-      },
-      { user: [], assistant: [], system: [] },
-    );
-  }, [messages]);
+  // 自动滚到底
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [messages, chatMutation.isPending]);
 
-  const canSend = Boolean(message.trim()) && !chatMutation.isPending;
+  // textarea 自增高
+  useLayoutEffect(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
+  }, [message]);
 
-  function submitMessage(nextMessage = message) {
-    const clean = nextMessage.trim();
+  function submitMessage(next = message) {
+    const clean = next.trim();
     if (!clean || chatMutation.isPending) return;
     setMessage("");
     setPendingStatus(pendingStatusFor(clean));
-    setMessages((current) => [...current, createMessage("user", clean)]);
+    setMessages((current) => [...current, { id: makeId("user"), role: "user", text: clean }]);
     chatMutation.mutate(clean);
   }
 
-  function submit(event: FormEvent) {
-    event.preventDefault();
+  function onSubmit(e: FormEvent) {
+    e.preventDefault();
     submitMessage();
   }
 
-  function handleComposerKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
-    if (event.key === "Enter" && !event.shiftKey) {
-      event.preventDefault();
+  function onComposerKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
       submitMessage();
     }
   }
 
+  function onFeedback(turnId: string, label: string) {
+    if (feedbackDone[turnId]) return;
+    feedbackMutation.mutate({ label, turnId });
+  }
+
+  const empty = messages.length === 0;
+
   return (
-    <section className="view chat-view">
-      <PageHeader
-        actions={
-          <div className="inline-actions">
-            <button
-              aria-label="标记为好回复"
-              className="icon-button"
-              data-state={feedbackMutation.isPending ? "loading" : undefined}
-              disabled={!lastTurnId || feedbackMutation.isPending}
-              onClick={() => feedbackMutation.mutate("good")}
-              title="标记好回复"
-              type="button"
-            >
-              <ThumbsUp size={16} />
-            </button>
-            <button
-              aria-label="标记为坏回复"
-              className="icon-button"
-              data-state={feedbackMutation.isPending ? "loading" : undefined}
-              disabled={!lastTurnId || feedbackMutation.isPending}
-              onClick={() => feedbackMutation.mutate("bad")}
-              title="标记坏回复"
-              type="button"
-            >
-              <ThumbsDown size={16} />
-            </button>
-          </div>
-        }
-        description="对话是主任务；右侧观察面板会同步显示情绪、工具和支持策略。"
-        eyebrow={lastTurnId ? `本轮 ${lastTurnId}` : "local session"}
-        title="慢慢聊"
-      />
-
-      <div className="conversation-layout">
-        <Panel className="conversation-panel">
-          <div className="message-list" aria-live="polite">
-            {messages.length ? (
-              messages.map((item) => <MessageBubble item={item} key={item.id} />)
-            ) : (
-              <EmptyState
-                title={historyQuery.isLoading ? "正在读取历史" : "还没有开始"}
-                text={historyQuery.isLoading ? "正在从本地日志恢复对话。" : "先写一句话、一个念头，或直接选一个起手式。"}
-                action={
-                  <div className="quick-prompts">
-                    {quickPrompts.map((prompt) => (
-                      <button key={prompt} onClick={() => submitMessage(prompt)} type="button">
-                        {prompt}
-                      </button>
-                    ))}
-                  </div>
-                }
+    <div className="h-full flex flex-col">
+      <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto">
+        <div
+          className={cn(
+            "mx-auto w-full max-w-2xl px-4 sm:px-5 py-6 flex flex-col gap-3.5",
+            empty && "min-h-full justify-center",
+          )}
+        >
+          {empty ? (
+            <EmptyState
+              icon={Sparkles}
+              title={historyQuery.isLoading ? "正在翻看我们之前聊的…" : "嘿，我在呢"}
+              text={
+                historyQuery.isLoading
+                  ? "从本地记录里恢复对话。"
+                  : "随便说一句、一个念头，或者从下面挑一个开头。"
+              }
+              action={
+                <div className="flex flex-wrap justify-center gap-2 pt-1">
+                  {quickPrompts.map((p) => (
+                    <button key={p} type="button" onClick={() => submitMessage(p)}>
+                      <Chip className="cursor-pointer transition-colors hover:border-line-strong hover:bg-surface">
+                        {p}
+                      </Chip>
+                    </button>
+                  ))}
+                </div>
+              }
+            />
+          ) : (
+            messages.map((m) => (
+              <MessageRow
+                key={m.id}
+                message={m}
+                feedbackLabel={m.turnId ? feedbackDone[m.turnId] : undefined}
+                onFeedback={onFeedback}
               />
-            )}
-            {chatMutation.isPending ? (
-              <article className="message assistant pending">
-                <span className="message-meta">MyBuddy</span>
-                <p>{pendingStatus}</p>
-              </article>
-            ) : null}
-          </div>
-          <form className="composer" onSubmit={submit}>
-            <label className="composer-field">
-              <span>消息</span>
-              <textarea
-                aria-label="消息"
-                onChange={(event) => setMessage(event.target.value)}
-                onKeyDown={handleComposerKeyDown}
-                placeholder="今天有一件事是…"
-                rows={3}
-                value={message}
-              />
-            </label>
-            <button className="send-button" data-state={chatMutation.isPending ? "loading" : undefined} disabled={!canSend} type="submit">
-              <Send size={17} />
-              <span>{chatMutation.isPending ? "发送中" : "发送"}</span>
-            </button>
-            <span className="composer-hint">
-              <CornerDownLeft size={14} />
-              Enter 发送，Shift Enter 换行
-            </span>
-          </form>
-        </Panel>
+            ))
+          )}
 
-        <aside className="conversation-aside">
-          <Panel title="本轮结构" description="把会话拆成可检查的来源。">
-            <div className="thread-map">
-              <ThreadCount label="你" value={messageGroups.user.length} />
-              <ThreadCount label="MyBuddy" value={messageGroups.assistant.length} />
-              <ThreadCount label="系统" value={messageGroups.system.length} />
-            </div>
-          </Panel>
-          <Panel title="待播消息" description="来自提醒或后台调度的内容。">
-            {pendingBroadcasts.length ? (
-              <div className="table-list">
-                {pendingBroadcasts.map((item, index) => (
-                  <article className="list-card compact-card" key={`${item.source}-${index}`}>
-                    <strong>{item.source}</strong>
-                    <p>{item.content}</p>
-                    <span>{item.scheduled_at || "待定时间"}</span>
-                  </article>
-                ))}
+          {chatMutation.isPending ? (
+            <div className="flex items-end gap-2.5 self-start animate-fade-up">
+              <div className="rounded-2xl rounded-bl-md bg-surface border border-line shadow-soft px-4 py-3 flex items-center gap-2.5">
+                <TypingDots />
+                <span className="text-[13px] text-muted">{pendingStatus}</span>
               </div>
-            ) : (
-              <EmptyState title="没有待播" text="当前没有等待播报的提醒或后台消息。" />
-            )}
-          </Panel>
-        </aside>
+            </div>
+          ) : null}
+        </div>
       </div>
-    </section>
-  );
-}
 
-function MessageBubble({ item }: { item: ChatMessage }) {
-  return (
-    <article className={`message ${item.role}`}>
-      <span className="message-meta">{messageLabel(item.role)}</span>
-      <p>{item.text}</p>
-      {item.role === "assistant" && item.sources?.length ? (
-        <details className="message-sources">
-          <summary>资料来源</summary>
-          <ol>
-            {item.sources.map((source, index) => (
-              <li key={`${source.url}-${index}`}>
-                {source.url ? (
-                  <a href={source.url} rel="noreferrer" target="_blank">
-                    {source.title || source.url}
-                  </a>
-                ) : (
-                  <strong>{source.title}</strong>
-                )}
-                {source.date ? <span>{source.date}</span> : null}
-                {source.snippet ? <p>{source.snippet}</p> : null}
-              </li>
-            ))}
-          </ol>
-        </details>
-      ) : null}
-    </article>
-  );
-}
-
-function ThreadCount({ label, value }: { label: string; value: number }) {
-  return (
-    <div>
-      <strong>{value}</strong>
-      <span>{label}</span>
+      <div className="shrink-0 glass border-t border-line">
+        <form onSubmit={onSubmit} className="mx-auto w-full max-w-2xl px-4 sm:px-5 py-3">
+          <div className="flex items-end gap-2 rounded-3xl bg-surface border border-line shadow-card focus-within:border-accent/40 transition-colors p-1.5 pl-4">
+            <textarea
+              ref={textareaRef}
+              aria-label="消息"
+              rows={1}
+              value={message}
+              onChange={(e) => setMessage(e.target.value)}
+              onKeyDown={onComposerKeyDown}
+              placeholder="想和我说点什么…"
+              className="flex-1 resize-none bg-transparent py-2.5 text-[15px] leading-relaxed text-ink placeholder:text-faint focus:outline-none max-h-[200px]"
+            />
+            <button
+              type="submit"
+              aria-label="发送"
+              disabled={!message.trim() || chatMutation.isPending}
+              className={cn(
+                "grid place-items-center h-10 w-10 rounded-full shrink-0 transition-all duration-200 active:scale-95",
+                message.trim() && !chatMutation.isPending
+                  ? "bg-accent text-accent-fg shadow-soft hover:bg-accent-strong"
+                  : "bg-surface-2 text-faint",
+              )}
+            >
+              <ArrowUp size={19} strokeWidth={2.2} />
+            </button>
+          </div>
+          <p className="text-[11.5px] text-faint text-center mt-2">Enter 发送 · Shift+Enter 换行</p>
+        </form>
+      </div>
     </div>
   );
 }
 
-function createMessage(role: ChatMessage["role"], text: string, sources: SearchSource[] = []): ChatMessage {
-  return {
-    id: `${role}-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-    role,
-    text,
-    sources,
-  };
+/* ---------------------------------------------------------------- message */
+
+function MessageRow({
+  message,
+  feedbackLabel,
+  onFeedback,
+}: {
+  message: ChatMessage;
+  feedbackLabel?: string;
+  onFeedback: (turnId: string, label: string) => void;
+}) {
+  if (message.role === "system") {
+    return (
+      <div className="self-center my-1 animate-fade-in">
+        <span className="text-[12px] text-faint">{message.text}</span>
+      </div>
+    );
+  }
+
+  if (message.proactive) {
+    return (
+      <div className="self-start max-w-[88%] animate-fade-up">
+        <div className="flex items-center gap-1.5 text-[11.5px] text-accent mb-1 pl-1">
+          <Heart size={12} strokeWidth={2.2} />
+          小布主动找你
+        </div>
+        <div className="rounded-2xl rounded-bl-md bg-accent-soft border border-transparent px-4 py-2.5 text-[14.5px] leading-relaxed text-ink whitespace-pre-wrap">
+          {message.text}
+        </div>
+      </div>
+    );
+  }
+
+  const isUser = message.role === "user";
+
+  return (
+    <div className={cn("group flex flex-col animate-fade-up", isUser ? "items-end" : "items-start")}>
+      <div
+        className={cn(
+          "max-w-[85%] px-4 py-2.5 text-[14.5px] leading-relaxed whitespace-pre-wrap",
+          isUser
+            ? "bg-accent text-accent-fg rounded-2xl rounded-br-md shadow-soft"
+            : "bg-surface text-ink border border-line rounded-2xl rounded-bl-md shadow-soft",
+        )}
+      >
+        {message.text}
+      </div>
+
+      {!isUser && message.sources && message.sources.length > 0 ? (
+        <SourceList sources={message.sources} />
+      ) : null}
+
+      {!isUser && message.support ? <SupportReveal support={message.support} /> : null}
+
+      {!isUser && message.turnId ? (
+        <div
+          className={cn(
+            "flex items-center gap-1 mt-1.5 pl-1 transition-opacity",
+            feedbackLabel ? "opacity-100" : "opacity-0 group-hover:opacity-100 focus-within:opacity-100",
+          )}
+        >
+          {feedbackLabel ? (
+            <span className="text-[11.5px] text-muted">
+              {feedbackLabel === "good" ? "谢谢，记下了 ✓" : "好的，我会调整 ✓"}
+            </span>
+          ) : (
+            <>
+              <FeedbackButton icon={ThumbsUp} label="这条很好" onClick={() => onFeedback(message.turnId!, "good")} />
+              <FeedbackButton icon={ThumbsDown} label="这条不太对" onClick={() => onFeedback(message.turnId!, "bad")} />
+            </>
+          )}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function FeedbackButton({ icon: Icon, label, onClick }: { icon: typeof ThumbsUp; label: string; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      title={label}
+      onClick={onClick}
+      className="grid place-items-center h-7 w-7 rounded-full text-faint hover:text-ink hover:bg-surface-2 transition-colors"
+    >
+      <Icon size={14} strokeWidth={2} />
+    </button>
+  );
+}
+
+function SourceList({ sources }: { sources: SearchSource[] }) {
+  return (
+    <details className="mt-1.5 max-w-[85%] w-full group/src">
+      <summary className="inline-flex items-center gap-1.5 cursor-pointer text-[12px] text-muted hover:text-ink list-none select-none">
+        <Link2 size={13} strokeWidth={2} />
+        资料来源 · {sources.length}
+      </summary>
+      <ol className="mt-1.5 flex flex-col gap-1.5">
+        {sources.map((s, i) => (
+          <li key={`${s.url}-${i}`} className="rounded-xl bg-surface-2 border border-line px-3 py-2">
+            {s.url ? (
+              <a href={s.url} target="_blank" rel="noreferrer" className="text-[13px] font-medium text-accent hover:underline break-words">
+                {s.title || s.url}
+              </a>
+            ) : (
+              <span className="text-[13px] font-medium text-ink">{s.title}</span>
+            )}
+            {s.snippet ? <p className="text-[12px] text-muted mt-0.5 line-clamp-2">{s.snippet}</p> : null}
+          </li>
+        ))}
+      </ol>
+    </details>
+  );
+}
+
+function SupportReveal({ support }: { support: EmotionalSupport }) {
+  const rows: Array<[string, string | undefined]> = [
+    ["我听到的", support.mirror],
+    ["你也许需要", support.need],
+    ["可以试试", support.small_action],
+    ["要紧的话", support.safety_note],
+  ];
+  const visible = rows.filter(([, v]) => v && v.trim());
+  if (!visible.length) return null;
+  return (
+    <details className="mt-1.5 max-w-[85%] w-full">
+      <summary className="inline-flex items-center gap-1.5 cursor-pointer text-[12px] text-muted hover:text-ink list-none select-none">
+        <Heart size={13} strokeWidth={2} />
+        小布的心里话
+      </summary>
+      <div className="mt-1.5 rounded-xl bg-surface-2 border border-line px-3.5 py-3 flex flex-col gap-2">
+        {visible.map(([k, v]) => (
+          <div key={k} className="flex flex-col gap-0.5">
+            <span className="text-[11px] font-semibold uppercase tracking-wide text-faint">{k}</span>
+            <span className="text-[13px] text-ink-soft leading-relaxed">{v}</span>
+          </div>
+        ))}
+      </div>
+    </details>
+  );
+}
+
+/* ---------------------------------------------------------------- helpers */
+
+function makeId(role: string) {
+  return `${role}-${performance.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+}
+
+function hasSupport(s: EmotionalSupport | null | undefined): s is EmotionalSupport {
+  return Boolean(s && (s.mirror || s.need || s.small_action || s.safety_note));
+}
+
+function errText(error: unknown) {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function pendingStatusFor(text: string): string {
-  if (explicitSearchPattern.test(text) || timeSensitivePattern.test(text) || interestFactPattern.test(text)) return "正在看资料。";
+  if (explicitSearchPattern.test(text) || timeSensitivePattern.test(text)) return "正在帮你看看资料…";
   return defaultPendingStatus;
 }
 
-function pendingMessageToChatMessage(item: PendingMessage): ChatMessage {
-  if (item.role === "assistant") {
-    return createMessage("assistant", item.content);
-  }
-  return createMessage("system", `${item.source}: ${item.content}`);
+function pendingToChat(item: PendingMessage): ChatMessage {
+  return {
+    id: makeId("proactive"),
+    role: "assistant",
+    text: item.content,
+    proactive: item.source || "nudge",
+  };
 }
 
-function historyMessageToChatMessage(item: ChatLogMessage): ChatMessage[] {
+function historyToChat(item: ChatLogMessage): ChatMessage[] {
   if (item.role !== "user" && item.role !== "assistant") return [];
   if (!item.content.trim()) return [];
   return [
@@ -291,29 +400,21 @@ function historyMessageToChatMessage(item: ChatLogMessage): ChatMessage[] {
       id: `history-${item.id}`,
       role: item.role,
       text: item.content,
-      sources: normalizeSearchSources(item.meta?.search_sources),
+      sources: normalizeSources(item.meta?.search_sources),
     },
   ];
 }
 
-function normalizeSearchSources(value: unknown): SearchSource[] {
+function normalizeSources(value: unknown): SearchSource[] {
   if (!Array.isArray(value)) return [];
-  const sources: SearchSource[] = [];
+  const out: SearchSource[] = [];
   for (const item of value) {
     if (!item || typeof item !== "object") continue;
     const raw = item as Record<string, unknown>;
     const title = String(raw.title || "").trim();
     const url = String(raw.url || "").trim();
-    const snippet = String(raw.snippet || "").trim();
-    const date = String(raw.date || "").trim();
     if (!url && !title) continue;
-    sources.push({ title: title || url, url, snippet, date });
+    out.push({ title: title || url, url, snippet: String(raw.snippet || "").trim(), date: String(raw.date || "").trim() });
   }
-  return sources;
-}
-
-function messageLabel(role: ChatMessage["role"]): string {
-  if (role === "assistant") return "MyBuddy";
-  if (role === "user") return "你";
-  return "系统";
+  return out;
 }
