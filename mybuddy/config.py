@@ -123,11 +123,31 @@ class PersonaConfig(BaseModel):
     address_user: str = "你"
 
 
+class EmbeddingConfig(BaseModel):
+    """可选的语义召回(API embedding + 旁路向量索引)。
+
+    默认关闭:关闭时整条链路零开销、零额外依赖,检索仍是纯词法、纯离线。
+    开启需配置一个 OpenAI 兼容的 embeddings 端点(可与主对话 LLM 不同)。
+    """
+
+    enabled: bool = False
+    model: str = "text-embedding-3-small"
+    base_url: str = "https://api.openai.com/v1"
+    api_key: str = ""
+    timeout: float = 10.0
+    batch_size: int = 64
+    # RRF 融合参数:rrf_k 越大、排名差异影响越小;candidate_multiplier 控制
+    # 融合前每路取 top_k 的多少倍候选。
+    rrf_k: int = 60
+    candidate_multiplier: int = 4
+
+
 class MemoryConfig(BaseModel):
     short_term_size: int = 20
     long_term_top_k: int = 3
     embedding_model: str = "BAAI/bge-m3"
     extract_after_turns: int = 3
+    embedding: EmbeddingConfig = Field(default_factory=EmbeddingConfig)
 
 
 class PathsConfig(BaseModel):

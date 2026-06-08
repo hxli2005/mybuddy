@@ -12,7 +12,6 @@ from typer.testing import CliRunner
 
 from mybuddy.cli_admin import profile_app, reminders_app, skills_app, users_app
 from mybuddy.learning import SkillRegistry
-from mybuddy.memory import UserProfile
 from mybuddy.storage import Reminder, init_db, session_scope
 
 runner = CliRunner()
@@ -115,17 +114,6 @@ def test_profile_set_show_unset(admin_env) -> None:
     r4 = runner.invoke(profile_app, ["unset", "不存在", "--config", cfg])
     assert r4.exit_code == 0
     assert "不存在" in r4.stdout
-
-
-def test_profile_show_with_claims(admin_env) -> None:
-    engine = admin_env["engine"]
-    # 不依赖 Chroma,直接写 SQL 构造命题
-    profile = UserProfile(engine, None)
-    profile.add_claim("用户爱喝手冲", confidence=0.8)
-
-    r = runner.invoke(profile_app, ["show", "--config", admin_env["cfg_path"]])
-    assert r.exit_code == 0, r.stdout
-    assert "手冲" in r.stdout
 
 
 # =============================================================================

@@ -272,4 +272,3 @@ async def test_agent_without_skills_system_still_works(tmp_path) -> None:
     result = await agent.run("hi")
     assert result.text == "ok"
     assert result.triggered_skills == []
-    assert result.related_claim_ids == []

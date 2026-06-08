@@ -60,6 +60,9 @@ class LongTermMemory:
         # 写入/删除时按 key 失效;mtime 变化也会自动 miss,双保险。
         self._card_cache: dict[str, tuple[int, dict[str, Any], str]] = {}
 
+        # 可选语义召回器(SemanticRecall);None = 纯词法检索。
+        self._semantic: Any = None
+
     # ------------------------------------------------------------------
     # L0 原始数据层
     # ------------------------------------------------------------------
@@ -158,15 +161,32 @@ class LongTermMemory:
         top_k: int = 3,
         *,
         mem_type: str | None = None,
+        use_semantic: bool = False,
     ) -> list[dict[str, Any]]:
-        """文本检索,返回 [{id, content, score, metadata}, ...]。"""
+        """检索,返回 [{id, content, score, metadata}, ...]。
+
+        默认纯词法(governance/profile 等沿用);``use_semantic=True`` 且挂了可用的
+        语义召回时,把词法与向量两路用 RRF 融合重排,补回换词/同义召回。
+        """
         query = (query or "").strip()
         if not query:
             return []
+
+        lexical = self._lexical_search(query, mem_type=mem_type)
+        sem = self._semantic
+        if not use_semantic or sem is None or not sem.enabled:
+            return lexical[:top_k]
+
+        cand = max(top_k * sem.candidate_multiplier, top_k)
+        sem_hits = sem.search(query, cand, mem_type=mem_type)
+        if not sem_hits:
+            return lexical[:top_k]
+        return self._fuse_rrf(lexical[:cand], sem_hits, top_k=top_k, k=sem.rrf_k, mem_type=mem_type)
+
+    def _lexical_search(self, query: str, *, mem_type: str | None = None) -> list[dict[str, Any]]:
         q_tokens = set(_tokenize(query))
         if not q_tokens:
             return []
-
         hits: list[dict[str, Any]] = []
         for item in self.list_all(mem_type=mem_type):
             meta = item.get("metadata", {}) or {}
@@ -176,7 +196,6 @@ class LongTermMemory:
             if score <= 0:
                 continue
             hits.append({**item, "score": score})
-
         hits.sort(
             key=lambda h: (
                 h["score"],
@@ -185,7 +204,60 @@ class LongTermMemory:
             ),
             reverse=True,
         )
-        return hits[:top_k]
+        return hits
+
+    def _fuse_rrf(
+        self,
+        lexical_hits: list[dict[str, Any]],
+        semantic_hits: list[tuple[str, float]],
+        *,
+        top_k: int,
+        k: int,
+        mem_type: str | None,
+    ) -> list[dict[str, Any]]:
+        """Reciprocal Rank Fusion:只看两路排名,规避词法/余弦不同量纲的归一难题。"""
+        rrf: dict[str, float] = {}
+        for rank, hit in enumerate(lexical_hits):
+            cid = str(hit.get("id") or "")
+            if cid:
+                rrf[cid] = rrf.get(cid, 0.0) + 1.0 / (k + rank)
+        cos_by_id: dict[str, float] = {}
+        for rank, (cid, cos) in enumerate(semantic_hits):
+            rrf[cid] = rrf.get(cid, 0.0) + 1.0 / (k + rank)
+            cos_by_id[cid] = cos
+
+        by_id = {str(h.get("id") or ""): h for h in lexical_hits}
+        out: list[dict[str, Any]] = []
+        for cid in sorted(rrf, key=lambda c: rrf[c], reverse=True):
+            hit = by_id.get(cid)
+            if hit is None:
+                # 语义独有命中:按 id 回读档案卡并过滤 status/type。
+                loaded = self._read_card(cid)
+                if loaded is None:
+                    continue
+                meta, content = loaded
+                if meta.get("status", "active") != "active":
+                    continue
+                if mem_type is not None and meta.get("type") != mem_type:
+                    continue
+                hit = {"id": cid, "content": content, "metadata": meta}
+            enriched = {**hit, "score": rrf[cid]}
+            if cid in cos_by_id:
+                enriched["semantic_score"] = cos_by_id[cid]
+            out.append(enriched)
+            if len(out) >= top_k:
+                break
+        return out
+
+    def attach_semantic(self, recaller: Any) -> None:
+        """挂载语义召回器(SemanticRecall)。None / 未挂载时 search 保持纯词法。"""
+        self._semantic = recaller
+
+    def reconcile_semantic(self) -> int:
+        """让向量索引与当前档案对齐(从 .md 派生)。返回重嵌数量。"""
+        if self._semantic is None or not self._semantic.enabled:
+            return 0
+        return self._semantic.reconcile(self.list_all())
 
     def delete(self, uid: str) -> None:
         """删除指定档案卡。"""

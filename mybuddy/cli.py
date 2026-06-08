@@ -30,7 +30,6 @@ from mybuddy.learning import (
     SkillRegistry,
     TrajectoryLogger,
     detect_implicit_negative,
-    make_profile_claim_subscriber,
     make_skill_subscriber,
     make_trajectory_subscriber,
 )
@@ -128,10 +127,8 @@ def chat(
     # M5:情绪 + 反馈
     emotion_detector = EmotionDetector(provider, cfg.llm.small_model)
     emotion_tracker = EmotionTracker(window=5)
-    profile = UserProfile(engine, ltm)
     feedback_bus = FeedbackBus()
     feedback_bus.subscribe(make_trajectory_subscriber(logger))
-    feedback_bus.subscribe(make_profile_claim_subscriber(profile))
 
     # M6:skills
     skill_registry = SkillRegistry.load_all(cfg.paths.skills_dir)
@@ -273,7 +270,6 @@ def _restore_reminders(scheduler: MyBuddyScheduler, engine) -> None:
 
 async def _chat_loop(agent: Agent, engine, feedback_bus: FeedbackBus) -> None:
     last_turn_id: str | None = None
-    last_related_claim_ids: list[int] = []
     last_triggered_skills: list[str] = []
 
     # 启动时先 drain 一次(可能有离线期间触发的提醒/早安/nudge)
@@ -303,7 +299,6 @@ async def _chat_loop(agent: Agent, engine, feedback_bus: FeedbackBus) -> None:
                 FeedbackEvent(
                     turn_id=last_turn_id,
                     label=label,
-                    related_claim_ids=last_related_claim_ids,
                     meta={"triggered_skills": list(last_triggered_skills)},
                 )
             )
@@ -316,7 +311,6 @@ async def _chat_loop(agent: Agent, engine, feedback_bus: FeedbackBus) -> None:
                 FeedbackEvent(
                     turn_id=last_turn_id,
                     label="implicit:negative",
-                    related_claim_ids=last_related_claim_ids,
                     meta={
                         "triggered_skills": list(last_triggered_skills),
                         "trigger_text": user_input[:40],
@@ -334,7 +328,6 @@ async def _chat_loop(agent: Agent, engine, feedback_bus: FeedbackBus) -> None:
             continue
 
         last_turn_id = result.trajectory.turn_id
-        last_related_claim_ids = list(result.related_claim_ids)
         last_triggered_skills = list(result.triggered_skills)
         _render_response(
             result.text,

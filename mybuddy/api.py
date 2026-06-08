@@ -25,7 +25,6 @@ from mybuddy.learning import (
     SkillCurator,
     SkillRegistry,
     TrajectoryLogger,
-    make_profile_claim_subscriber,
     make_skill_subscriber,
     make_trajectory_subscriber,
 )
@@ -35,7 +34,6 @@ from mybuddy.memory import LongTermMemory, MemoryManager, UserProfile
 from mybuddy.scheduler import MyBuddyScheduler
 from mybuddy.storage import (
     Note,
-    ProfileClaim,
     Reminder,
     UserSummaryRecord,
     append_message,
@@ -74,11 +72,6 @@ class FeedbackRequest(BaseModel):
 
 class ProfileFieldUpdateRequest(BaseModel):
     value: str = Field(min_length=1)
-
-
-class ProfileClaimUpdateRequest(BaseModel):
-    claim: str | None = None
-    confidence: float | None = None
 
 
 class MemoryUpdateRequest(BaseModel):
@@ -154,7 +147,6 @@ class AppState:
     agent: Agent | None = None
     feedback_bus: FeedbackBus | None = None
     last_turn_id: str | None = None
-    last_related_claim_ids: list[int] = field(default_factory=list)
     last_triggered_skills: list[str] = field(default_factory=list)
 
     def startup(self) -> None:
@@ -188,7 +180,6 @@ class AppState:
             setup_skill_tool(skill_registry)
             feedback_bus = FeedbackBus()
             feedback_bus.subscribe(make_trajectory_subscriber(logger))
-            feedback_bus.subscribe(make_profile_claim_subscriber(profile))
             feedback_bus.subscribe(make_skill_subscriber(skill_registry))
             agent = Agent(
                 provider=provider,
@@ -296,7 +287,6 @@ class AppState:
             add_to_short_term=self.agent._memory.add_message,
         )
         self.last_turn_id = result.trajectory.turn_id
-        self.last_related_claim_ids = list(result.related_claim_ids)
         self.last_triggered_skills = list(result.triggered_skills)
         return {
             "text": result_text,
@@ -306,7 +296,6 @@ class AppState:
             "tool_calls": tool_calls,
             "emotion": result.emotion.to_dict() if result.emotion else None,
             "emotional_support": result.emotional_support,
-            "related_claim_ids": result.related_claim_ids,
             "triggered_skills": result.triggered_skills,
             "search_sources": result.search_sources,
             "pending_messages": pending_before + pending_after,
@@ -323,7 +312,6 @@ class AppState:
             FeedbackEvent(
                 turn_id=tid,
                 label=clean_label,
-                related_claim_ids=list(self.last_related_claim_ids),
                 meta={"triggered_skills": list(self.last_triggered_skills)},
             )
         )
@@ -333,7 +321,6 @@ class AppState:
         p = _require(self.profile)
         return {
             "fields": p.get_all_fields(),
-            "claims": p.get_all_claims(min_confidence=0.0, include_hidden=False)[:20],
         }
 
     def messages_payload(self, *, limit: int = 100, session_id: str | None = None) -> dict[str, Any]:
@@ -476,25 +463,6 @@ class AppState:
         if not p.delete_field(clean_key):
             raise RuntimeError(f"画像字段不存在:{clean_key}")
         return {"ok": True, "key": clean_key}
-
-    def update_profile_claim_payload(
-        self,
-        claim_id: int,
-        *,
-        claim: str | None = None,
-        confidence: float | None = None,
-    ) -> dict[str, Any]:
-        p = _require(self.profile)
-        updated = p.update_claim(claim_id, claim=claim, confidence=confidence)
-        if updated is None:
-            raise RuntimeError(f"画像命题不存在或内容为空:id={claim_id}")
-        return {"claim": updated}
-
-    def delete_profile_claim_payload(self, claim_id: int) -> dict[str, Any]:
-        p = _require(self.profile)
-        if not p.delete_claim(claim_id):
-            raise RuntimeError(f"画像命题不存在:id={claim_id}")
-        return {"ok": True, "id": claim_id}
 
     def memory_payload(self) -> dict[str, Any]:
         cfg = _require(self.cfg)
@@ -863,27 +831,6 @@ def create_app(config_path: str = "config.yaml", max_steps: int = 6):
         except RuntimeError as e:
             raise HTTPException(status_code=400, detail=str(e)) from e
 
-    @app.patch("/api/profile/claims/{claim_id}")
-    async def update_profile_claim(
-        claim_id: int,
-        req: ProfileClaimUpdateRequest,
-    ) -> dict[str, Any]:
-        try:
-            return state.update_profile_claim_payload(
-                claim_id,
-                claim=req.claim,
-                confidence=req.confidence,
-            )
-        except RuntimeError as e:
-            raise HTTPException(status_code=400, detail=str(e)) from e
-
-    @app.delete("/api/profile/claims/{claim_id}")
-    async def delete_profile_claim(claim_id: int) -> dict[str, Any]:
-        try:
-            return state.delete_profile_claim_payload(claim_id)
-        except RuntimeError as e:
-            raise HTTPException(status_code=400, detail=str(e)) from e
-
     @app.get("/api/memory")
     async def memory() -> dict[str, Any]:
         return state.memory_payload()
@@ -1099,24 +1046,7 @@ def _sync_memory_backing_update(
                 tags = _clean_note_tags(meta.get("tags"))
                 row.tags_json = json.dumps(tags, ensure_ascii=False) if tags else None
         return
-
-    if mem_type == "claim":
-        claim_id = _memory_sql_id(updated, "claim") or _memory_sql_id(original, "claim")
-        if claim_id is None:
-            return
-        with session_scope(engine) as s:
-            row = s.query(ProfileClaim).filter(ProfileClaim.id == claim_id).one_or_none()
-            if row is None:
-                return
-            row.claim = updated["content"]
-            confidence = meta.get("confidence")
-            if isinstance(confidence, int | float):
-                row.confidence = max(0.0, min(1.0, float(confidence)))
-            evidence_ids = meta.get("evidence_ids")
-            if isinstance(evidence_ids, str):
-                row.evidence_ids_json = evidence_ids
-            elif isinstance(evidence_ids, list):
-                row.evidence_ids_json = json.dumps(evidence_ids, ensure_ascii=False)
+    # 命题已合并为 SQLite 单一真相源,不再以档案卡形式经记忆端点编辑。
 
 
 def _sync_memory_backing_delete(engine: Engine, item: dict[str, Any]) -> None:
@@ -1131,15 +1061,7 @@ def _sync_memory_backing_delete(engine: Engine, item: dict[str, Any]) -> None:
             if row is not None:
                 s.delete(row)
         return
-
-    if mem_type == "claim":
-        claim_id = _memory_sql_id(item, "claim")
-        if claim_id is None:
-            return
-        with session_scope(engine) as s:
-            row = s.query(ProfileClaim).filter(ProfileClaim.id == claim_id).one_or_none()
-            if row is not None:
-                s.delete(row)
+    # 命题已合并为 SQLite 单一真相源,不再以档案卡形式经记忆端点删除。
 
 
 def _restore_reminders(scheduler: MyBuddyScheduler, engine: Engine) -> None:

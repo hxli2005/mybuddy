@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import sqlite3
 from typing import Any
 
 import pytest
@@ -22,7 +21,7 @@ from mybuddy.memory import (
     ShortTermMemory,
     UserProfile,
 )
-from mybuddy.storage import ProfileClaim, init_db, session_scope
+from mybuddy.storage import init_db
 
 # =============================================================================
 # Mock embedding function:旧接口兼容,当前文本存储不使用
@@ -199,13 +198,13 @@ def test_long_term_three_layer_files(ltm, tmp_path) -> None:
 
 def test_long_term_search_with_type_filter(ltm) -> None:
     ltm.add("事实:用户叫小明", mem_type="memory")
-    ltm.add("命题:用户可能喜欢早起", mem_type="claim")
+    ltm.add("偏好:用户可能喜欢早起", mem_type="preference")
 
     hits_mem = ltm.search("用户名字", top_k=5, mem_type="memory")
     assert all(h["metadata"].get("type") == "memory" for h in hits_mem)
 
-    hits_claim = ltm.search("早起习惯", top_k=5, mem_type="claim")
-    assert all(h["metadata"].get("type") == "claim" for h in hits_claim)
+    hits_pref = ltm.search("早起习惯", top_k=5, mem_type="preference")
+    assert all(h["metadata"].get("type") == "preference" for h in hits_pref)
 
 
 def test_long_term_delete(ltm) -> None:
@@ -293,20 +292,6 @@ def test_memory_governance_marks_expired_open_thread_stale(ltm) -> None:
 # =============================================================================
 
 
-@pytest.fixture
-def profile_with_ltm(tmp_path):
-    engine = init_db(str(tmp_path / "profile_test.db"))
-    chroma_dir = tmp_path / "chroma_profile"
-    chroma_dir.mkdir()
-    ltm = LongTermMemory(
-        persist_dir=str(chroma_dir),
-        collection_name="test_profile",
-        embedding_fn=mock_embed,
-    )
-    profile = UserProfile(engine, ltm)
-    return profile
-
-
 def test_profile_set_and_get_field(tmp_path) -> None:
     engine = init_db(str(tmp_path / "pf.db"))
     profile = UserProfile(engine, None)
@@ -335,119 +320,6 @@ def test_profile_delete_field(tmp_path) -> None:
     assert profile.delete_field("测试") is True
     assert profile.get_field("测试") is None
     assert profile.delete_field("不存在") is False
-
-
-def test_profile_add_and_search_claims(profile_with_ltm) -> None:
-    profile = profile_with_ltm
-    cid = profile.add_claim("用户周日晚上情绪较低", confidence=0.7, evidence_ids=["msg_1"])
-    assert cid > 0
-
-    hits = profile.search_claims("周末心情", top_k=5, min_confidence=0.5)
-    assert len(hits) >= 1
-    assert any("周日" in h["claim"] for h in hits)
-
-
-def test_profile_add_claim_merges_duplicate_claim(profile_with_ltm) -> None:
-    profile = profile_with_ltm
-
-    cid1 = profile.add_claim("用户不喜欢空泛鼓励", confidence=0.5, evidence_ids=["turn_1"])
-    cid2 = profile.add_claim("用户不喜欢空泛鼓励", confidence=0.8, evidence_ids=["turn_2"])
-
-    assert cid1 == cid2
-    claims = profile.get_all_claims()
-    assert len(claims) == 1
-    assert claims[0]["confidence"] == 0.8
-    assert claims[0]["evidence_ids"] == ["turn_1", "turn_2"]
-
-
-def test_profile_claim_lifecycle_metadata(profile_with_ltm) -> None:
-    profile = profile_with_ltm
-
-    cid = profile.add_claim(
-        "用户不喜欢空泛鼓励",
-        confidence=0.8,
-        evidence_ids=["turn_1", "turn_2", "turn_3"],
-    )
-
-    claim = next(c for c in profile.get_all_claims() if c["sql_id"] == cid)
-    assert claim["status"] == "active"
-    assert claim["category"] == "boundary"
-    assert claim["evidence_count"] == 3
-    assert claim["evidence_days"]
-    assert claim["first_seen_at"]
-    assert claim["last_seen_at"]
-
-
-def test_init_db_backfills_legacy_claim_evidence_metadata(tmp_path) -> None:
-    db_path = tmp_path / "legacy_claims.db"
-    conn = sqlite3.connect(db_path)
-    conn.execute(
-        "CREATE TABLE profile_claims ("
-        "id INTEGER PRIMARY KEY AUTOINCREMENT, "
-        "claim TEXT, "
-        "confidence FLOAT, "
-        "evidence_ids_json TEXT, "
-        "updated_at DATETIME)"
-    )
-    conn.execute(
-        "INSERT INTO profile_claims "
-        "(claim, confidence, evidence_ids_json, updated_at) "
-        "VALUES (?, ?, ?, ?)",
-        (
-            "用户不喜欢空泛鼓励",
-            0.7,
-            json.dumps(["turn_1", "turn_2"], ensure_ascii=False),
-            "2026-05-01 09:00:00",
-        ),
-    )
-    conn.commit()
-    conn.close()
-
-    engine = init_db(str(db_path))
-
-    with session_scope(engine) as s:
-        claim = s.query(ProfileClaim).one()
-        assert claim.status == "active"
-        assert claim.category == "general"
-        assert claim.evidence_count == 2
-        assert json.loads(claim.evidence_days_json or "[]") == ["2026-05-01"]
-        assert claim.first_seen_at is not None
-        assert claim.last_seen_at is not None
-
-
-def test_profile_update_confidence(profile_with_ltm) -> None:
-    profile = profile_with_ltm
-    cid = profile.add_claim("测试命题", confidence=0.5)
-    assert profile.update_confidence(cid, delta=0.2, new_evidence_id="msg_2") is True
-
-    claims = profile.get_all_claims()
-    test_claim = [c for c in claims if c["sql_id"] == cid][0]
-    assert test_claim["confidence"] == 0.7
-    assert "msg_2" in test_claim["evidence_ids"]
-
-
-def test_profile_prune_low_confidence(profile_with_ltm) -> None:
-    profile = profile_with_ltm
-    profile.add_claim("低置信度命题", confidence=0.1)
-    profile.add_claim("正常命题", confidence=0.8)
-    deleted = profile.prune_low_confidence(threshold=0.3)
-    assert deleted == 1
-
-    claims = profile.get_all_claims()
-    assert len(claims) == 1
-    assert claims[0]["claim"] == "正常命题"
-
-
-def test_profile_claims_fallback_without_ltm(tmp_path) -> None:
-    """无 Chroma 时 search_claims 降级为 SQL 扫描。"""
-    engine = init_db(str(tmp_path / "pf_fallback.db"))
-    profile = UserProfile(engine, None)
-    profile.add_claim("用户喜欢早起", confidence=0.7)
-    profile.add_claim("低置信度命题", confidence=0.2)
-
-    hits = profile.search_claims("不相关的查询", top_k=5, min_confidence=0.5)
-    assert len(hits) == 1
-    assert hits[0]["claim"] == "用户喜欢早起"
 
 
 def test_memory_manager_prioritizes_relationship_context(tmp_path) -> None:
@@ -482,9 +354,8 @@ def test_memory_manager_prioritizes_relationship_context(tmp_path) -> None:
     ltm.add("用户拖延了报告开头,报告开头还是没写", mem_type="memory")
 
     manager = MemoryManager(engine=engine, config=cfg, ltm=ltm, provider=DummyProvider())
-    text, related_claim_ids = manager.build_context_section("我又拖延了,报告开头还是没写")
+    text = manager.build_context_section("我又拖延了,报告开头还是没写")
 
-    assert related_claim_ids == []
     assert text.index("## 未完成话题") < text.index("## 关于用户")
     assert "那个没有催的晚上" in text
     assert "不喜欢被强行打鸡血" in text
@@ -494,7 +365,7 @@ def test_memory_manager_prioritizes_relationship_context(tmp_path) -> None:
 def test_memory_manager_injects_user_notes(tmp_path) -> None:
     """用户主动存的笔记必须能在聊天里被自然想起。
 
-    回归:之前 build_context_section 不检索 mem_type="note",
+    回归:build_context_section 之前不检索 mem_type="note",
     导致"创建笔记 地点在上海 → 聊天立刻问地点"答不上来。
     """
     engine = init_db(str(tmp_path / "manager_notes.db"))
@@ -516,12 +387,12 @@ def test_memory_manager_injects_user_notes(tmp_path) -> None:
     manager = MemoryManager(engine=engine, config=cfg, ltm=ltm, provider=DummyProvider())
 
     # 相关提问:笔记进聊天上下文
-    text, _ = manager.build_context_section("我的地点在哪来着")
+    text = manager.build_context_section("我的地点在哪来着")
     assert "你帮我记下的笔记" in text
     assert "地点在上海" in text
 
     # 无关提问:不误注入
-    other, _ = manager.build_context_section("今天晚饭想吃什么")
+    other = manager.build_context_section("今天晚饭想吃什么")
     assert "地点在上海" not in other
 
 
@@ -541,7 +412,6 @@ async def test_memory_manager_extract_uses_governance_to_merge(tmp_path) -> None
         {
             "facts": ["用户正在准备项目汇报"],
             "profile_fields": {},
-            "claims": [{"claim": "用户担心项目汇报开头", "confidence": 0.7}],
             "relationship_memories": {
                 "open_thread": [
                     {
@@ -564,13 +434,10 @@ async def test_memory_manager_extract_uses_governance_to_merge(tmp_path) -> None
 
     memories = ltm.list_all(mem_type="profile")
     open_threads = ltm.list_all(mem_type="open_thread")
-    claims = manager.profile.get_all_claims()
     assert len(memories) == 1
     assert memories[0]["metadata"]["occurrence_count"] == 2
     assert len(open_threads) == 1
     assert open_threads[0]["metadata"]["occurrence_count"] == 2
-    assert len(claims) == 1
-    assert claims[0]["evidence_ids"] == ["turn_1", "turn_2"]
 
 
 # =============================================================================
@@ -593,14 +460,11 @@ def test_extractor_parse_valid_json() -> None:
     extractor = FactExtractor.__new__(FactExtractor)
 
     result = extractor._parse(
-        '{"facts": ["用户叫小明"], "profile_fields": {"名字": "小明"}, '
-        '"claims": [{"claim": "用户可能喜欢早起", "confidence": 0.6}]}'
+        '{"facts": ["用户叫小明"], "profile_fields": {"名字": "小明"}}'
     )
     assert len(result.facts) == 1
     assert result.facts[0] == "用户叫小明"
     assert result.profile_fields == {"名字": "小明"}
-    assert len(result.claims) == 1
-    assert result.claims[0]["confidence"] == 0.6
 
 
 def test_extractor_parse_relationship_memories() -> None:

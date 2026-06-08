@@ -8,7 +8,6 @@ from .feedback import (
     FeedbackBus,
     FeedbackEvent,
     detect_implicit_negative,
-    make_profile_claim_subscriber,
     make_skill_subscriber,
     make_trajectory_subscriber,
 )
@@ -28,7 +27,6 @@ __all__ = [
     "TrajectoryLogger",
     "TrajectoryStep",
     "detect_implicit_negative",
-    "make_profile_claim_subscriber",
     "make_skill_subscriber",
     "make_trajectory_subscriber",
 ]

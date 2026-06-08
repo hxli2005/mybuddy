@@ -24,7 +24,6 @@ MERGEABLE_TYPES = {
     "profile",
     "preference",
     "memory",
-    "claim",
     "shared_moment",
     "open_thread",
     "anti_preference",

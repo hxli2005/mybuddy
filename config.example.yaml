@@ -81,6 +81,18 @@ memory:
   long_term_top_k: 3                  # 每次检索返回的长期记忆条数
   embedding_model: "BAAI/bge-m3"      # 历史兼容字段;当前文本记忆不使用
   extract_after_turns: 3              # 每 N 轮抽取一次事实
+  # 可选语义召回(API embedding + 旁路向量索引)。默认关闭:关闭时检索为纯词法、
+  # 纯离线、零额外开销。开启后会在词法基础上叠加向量召回(RRF 融合),补回换词/
+  # 同义召回;向量是从 .md 档案派生的旁路缓存(data/.../memory/vectors.db),不入卡片。
+  embedding:
+    enabled: false                    # 设 true 开启;需要一个 OpenAI 兼容的 embeddings 端点
+    model: "text-embedding-3-small"   # 走 OpenRouter 用 "openai/text-embedding-3-small"
+    base_url: "https://api.openai.com/v1"
+    api_key: ""                       # 留空 = 复用主对话 LLM 的端点/密钥(OpenRouter 同端点也做 embedding)
+    timeout: 10.0
+    batch_size: 64
+    rrf_k: 60                         # RRF 融合参数
+    candidate_multiplier: 4           # 融合前每路取 top_k 的多少倍候选
 
 # ============ 数据路径 ============
 paths:

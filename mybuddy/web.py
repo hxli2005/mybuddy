@@ -181,15 +181,6 @@ class DemoHandler(BaseHTTPRequestHandler):
                 )
                 self._send_json(payload)
                 return
-            if path.startswith("/api/profile/claims/"):
-                claim_id = int(path.removeprefix("/api/profile/claims/"))
-                payload = self.server.state.update_profile_claim_payload(
-                    claim_id,
-                    claim=data.get("claim"),
-                    confidence=data.get("confidence"),
-                )
-                self._send_json(payload)
-                return
             if path.startswith("/api/memory/archive/"):
                 memory_id = unquote(path.removeprefix("/api/memory/archive/"))
                 payload = self.server.state.update_memory_payload(
@@ -240,10 +231,6 @@ class DemoHandler(BaseHTTPRequestHandler):
             if path.startswith("/api/profile/fields/"):
                 key = unquote(path.removeprefix("/api/profile/fields/"))
                 self._send_json(self.server.state.delete_profile_field_payload(key))
-                return
-            if path.startswith("/api/profile/claims/"):
-                claim_id = int(path.removeprefix("/api/profile/claims/"))
-                self._send_json(self.server.state.delete_profile_claim_payload(claim_id))
                 return
             if path.startswith("/api/memory/archive/"):
                 memory_id = unquote(path.removeprefix("/api/memory/archive/"))
