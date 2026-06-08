@@ -669,14 +669,26 @@ def _preference_valence(hit: dict) -> str:
     反着做——故结构化极性优先。
     """
     meta = hit.get("metadata") or {}
-    polarity = str(meta.get("polarity") or "").strip().lower()
-    if polarity == "avoid" or meta.get("type") == "anti_preference":
+    if meta.get("type") == "anti_preference":
         return "避开"
-    if polarity == "like":
+    # polarity 容错:LLM 未必严格输出 'like'/'avoid',也可能给中文或近义词。归一后再判,
+    # 仍认不出才退回正文正则兜底(只对真的没产出 polarity 的旧卡/直接写入生效)。
+    polarity = str(meta.get("polarity") or "").strip().lower()
+    if polarity in _AVOID_POLARITY:
+        return "避开"
+    if polarity in _LIKE_POLARITY:
         return "偏好"
-    # 无结构化极性(旧卡 / 直接写入)时才退回正文正则,仅作兜底。
     text = f"{meta.get('title', '')} {hit.get('content', '')}"
     return "避开" if _NEGATIVE_INTEREST_RE.search(text) else "偏好"
+
+
+# polarity 同义词归一表(英文已 lower;中文 lower 无副作用)。
+_AVOID_POLARITY = frozenset(
+    {"avoid", "dislike", "negative", "neg", "no", "避开", "避雷", "讨厌", "不喜欢", "反感", "厌恶"}
+)
+_LIKE_POLARITY = frozenset(
+    {"like", "prefer", "positive", "pos", "yes", "偏好", "喜欢", "喜好", "想要", "希望"}
+)
 
 
 def _entity_to_card(item: dict) -> tuple[str, dict]:
