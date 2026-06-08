@@ -73,6 +73,36 @@ class MemoryManager:
     def get_recent_messages(self) -> list[Message]:
         return self._short_term.get_all()
 
+    def rehydrate_short_term(self, *, limit: int | None = None) -> int:
+        """从 messages 表回灌最近的 user/assistant 消息到短期记忆。
+
+        重启后让模型的即时上下文不断档。只回灌 user/assistant 文本,跳过 tool 消息
+        (缺少前序 tool_use 会违反协议);deque 自动截断到容量,保留最近若干条。
+        已有内容时跳过,避免重复填充。返回回灌条数。
+        """
+        if self._engine is None or not self._session_id or len(self._short_term) > 0:
+            return 0
+        from mybuddy.llm import Message as LLMMessage
+        from mybuddy.llm import Role
+        from mybuddy.storage import list_messages
+
+        cap = limit or self._config.memory.short_term_size
+        try:
+            rows = list_messages(self._engine, limit=max(cap * 4, 8), session_id=self._session_id)
+        except Exception:
+            logger.exception("回灌短期记忆失败")
+            return 0
+        restored = 0
+        for row in rows:
+            role = row.get("role")
+            content = (row.get("content") or "").strip()
+            if role not in ("user", "assistant") or not content:
+                continue
+            stm_role = Role.USER if role == "user" else Role.ASSISTANT
+            self._short_term.add(LLMMessage(role=stm_role, content=content))
+            restored += 1
+        return restored
+
     # ---- 上下文构建 ----
 
     def build_context_section(self, user_input: str) -> tuple[str, list[int]]:
@@ -157,26 +187,43 @@ class MemoryManager:
                 assistant_text=assistant_text,
             )
 
-    async def maybe_extract(self) -> bool:
-        """如果积累的对话轮数达到阈值,触发抽取。返回是否执行了抽取。"""
-        self._ensure_governance_state()
-        threshold = self._config.memory.extract_after_turns
-        if self._turns_since_extract < threshold:
-            return False
+    def take_extract_batch(self) -> tuple[list[str], list[str]] | None:
+        """达到阈值则同步快照并清空对话缓冲,返回 (turns, turn_ids);否则 None。
 
+        同步清空很关键:抽取可被后台 task 执行,先快照+清空才能保证后台抽取与
+        后续 record_turn 不会互相污染缓冲(后续轮次累计到一个干净的新缓冲)。
+        """
+        self._ensure_governance_state()
+        if self._turns_since_extract < self._config.memory.extract_after_turns:
+            return None
+        turns = list(self._recent_turns)
+        turn_ids = list(self._recent_turn_ids)
+        self._recent_turns.clear()
+        self._recent_turn_ids.clear()
+        self._turns_since_extract = 0
+        return (turns, turn_ids) if turns else None
+
+    async def maybe_extract(self) -> bool:
+        """若达到阈值则抽取并写入记忆。返回是否执行了抽取。
+
+        直接 await 时为完整同步语义(供 CLI / 测试);Agent 走后台 task 调用,
+        不阻塞用户可见回复。
+        """
+        batch = self.take_extract_batch()
+        if batch is None:
+            return False
+        return await self.run_extract(*batch)
+
+    async def run_extract(self, turns: list[str], turn_ids: list[str]) -> bool:
+        """对一批快照对话执行抽取并写入记忆。turn_ids 由快照传入,不读实例缓冲。"""
+        if self._extractor is None:
+            return False
         try:
-            result = await self._extractor.extract(self._recent_turns)
+            result = await self._extractor.extract(turns)
         except Exception:
             logger.exception("事实抽取失败")
-            self._recent_turns.clear()
-            self._recent_turn_ids.clear()
-            self._turns_since_extract = 0
             return False
-
         if result.is_empty():
-            self._recent_turns.clear()
-            self._recent_turn_ids.clear()
-            self._turns_since_extract = 0
             return False
 
         # 写入长期记忆
@@ -187,7 +234,7 @@ class MemoryManager:
                     mem_type="profile",
                     session_id=self._session_id,
                     source="fact_extraction",
-                    extra_meta={"source_turn_ids": list(self._recent_turn_ids)},
+                    extra_meta={"source_turn_ids": list(turn_ids)},
                 )
 
         # 写入画像字段
@@ -198,12 +245,12 @@ class MemoryManager:
         for claim_data in result.claims:
             if isinstance(claim_data, dict) and "claim" in claim_data:
                 conf = float(claim_data.get("confidence", 0.5))
-                if conf < 0.65 or not self._recent_turn_ids:
+                if conf < 0.65 or not turn_ids:
                     continue
                 self._profile.add_claim(
                     claim_data["claim"],
                     confidence=conf,
-                    evidence_ids=list(self._recent_turn_ids),
+                    evidence_ids=list(turn_ids),
                 )
 
         relationship_count = 0
@@ -216,7 +263,7 @@ class MemoryManager:
                     content, meta = _relation_item_to_card(item)
                     if not content:
                         continue
-                    meta.setdefault("source_turn_ids", list(self._recent_turn_ids))
+                    meta.setdefault("source_turn_ids", list(turn_ids))
                     self._governance.add_or_merge(
                         content,
                         mem_type=target_type,
@@ -233,10 +280,6 @@ class MemoryManager:
             len(result.claims),
             relationship_count,
         )
-
-        self._recent_turns.clear()
-        self._recent_turn_ids.clear()
-        self._turns_since_extract = 0
         return True
 
     # ---- 属性访问 ----
@@ -340,12 +383,6 @@ class MemoryManager:
             reverse=True,
         )
         return fallback[:top_k]
-
-    def _looks_duplicate(self, mem_type: str, content: str) -> bool:
-        if self._ltm is None:
-            return False
-        hits = self._ltm.search(content, top_k=1, mem_type=mem_type)
-        return bool(hits and hits[0].get("score", 0) >= 0.88)
 
 
 def _infer_scene(user_input: str) -> str:

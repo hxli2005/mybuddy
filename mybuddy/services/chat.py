@@ -358,6 +358,8 @@ class ChatService:
             provider=provider,
             session_id=f"user-{user.id}",
         )
+        # 重启后从持久化的 messages 表回灌最近对话,避免即时上下文断档。
+        memory.rehydrate_short_term()
         feedback_bus = FeedbackBus()
         feedback_bus.subscribe(make_trajectory_subscriber(logger))
         feedback_bus.subscribe(make_profile_claim_subscriber(profile))

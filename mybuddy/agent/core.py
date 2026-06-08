@@ -307,9 +307,12 @@ class Agent:
         traj.finish_reason = finish_reason
         self._logger.commit(traj)
 
-        # 5. 记录本轮对话,触发事实抽取(如果达到阈值)
+        # 5. 记录本轮对话;达到阈值则后台抽取——快照同步取,LLM 调用与写入走后台 task,
+        #    不阻塞用户可见回复(每 N 轮原本要在回复后多等一次 small-model 往返)。
         self._memory.record_turn(user_input, final_text, turn_id=traj.turn_id)
-        await self._memory.maybe_extract()
+        batch = self._memory.take_extract_batch()
+        if batch is not None:
+            self._spawn_extract(*batch)
 
         # 6. M6:满足"复杂任务"条件时,异步让 curator 复盘是否抽象新 skill
         self._maybe_trigger_curator(traj, all_tool_calls, finish_reason)
@@ -523,6 +526,13 @@ class Agent:
         except RuntimeError:
             # 没有 running loop(例如在同步测试里 await agent.run 之外调用过),忽略
             logger.debug("no running loop for curator task, skipping")
+
+    def _spawn_extract(self, turns: list[str], turn_ids: list[str]) -> None:
+        """后台执行事实抽取,不阻塞回复;无 running loop 时静默跳过。"""
+        try:
+            asyncio.create_task(self._memory.run_extract(turns, turn_ids))
+        except RuntimeError:
+            logger.debug("no running loop for extract task, skipping")
 
     def _enqueue_empathy_nudge(self, user_input: str) -> None:
         """连续 2 轮 negative → 延迟 30min 的主动问候,写 pending_messages。"""
