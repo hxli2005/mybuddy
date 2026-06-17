@@ -57,7 +57,11 @@ def recall_memory(query: str) -> str:
     hits = []
     seen: set[str] = set()
     for mem_type in ("open_thread", "shared_moment", "preference", "profile", "memory"):
-        for hit in ltm.search(query, top_k=cfg.memory.long_term_top_k, mem_type=mem_type):
+        # use_semantic=True:挂了语义召回时走词法+向量 RRF 融合,补回换词召回。
+        # 评测显示换词类 query 的 MRR 由此 +0.28(见 eval/RESULTS.md 第 1 轮)。
+        for hit in ltm.search(
+            query, top_k=cfg.memory.long_term_top_k, mem_type=mem_type, use_semantic=True
+        ):
             uid = str(hit.get("id") or "")
             if not uid or uid in seen:
                 continue
