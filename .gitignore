@@ -22,9 +22,9 @@ dist/
 *.swp
 .claude/
 
-# Runtime data (含隐私)
-data/
-!data/.gitkeep
+# Runtime data (含隐私)。锚定根目录,避免误伤 eval/data 等评测数据集
+/data/
+!/data/.gitkeep
 
 # Logs (botpy 等运行时日志)
 *.log

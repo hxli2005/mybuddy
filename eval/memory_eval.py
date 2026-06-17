@@ -18,10 +18,12 @@ import argparse
 import json
 import sys
 import tempfile
+from datetime import timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from mybuddy._time import utcnow
 from mybuddy.config import load_config
 from mybuddy.memory import LongTermMemory
 
@@ -32,8 +34,14 @@ TOPK = 5
 def _build_ltm(corpus: list[dict], persist_dir: Path) -> LongTermMemory:
     cfg = load_config("config.yaml")
     ltm = LongTermMemory(persist_dir=str(persist_dir), embedding_model=cfg.memory.embedding_model)
+    now = utcnow()
     for card in corpus:
-        ltm.add(card["content"], mem_type=card["type"], uid=card["id"], session_id="eval")
+        # days_ago → 真实时间戳,让"最近 / 现在 / 以前"类时序题有据可依
+        ts = (now - timedelta(days=card.get("days_ago", 30))).isoformat(timespec="seconds")
+        ltm.add(
+            card["content"], mem_type=card["type"], uid=card["id"], session_id="eval",
+            extra_meta={"observed_at": ts, "created_at": ts, "last_seen_at": ts},
+        )
     return ltm
 
 
@@ -70,37 +78,37 @@ def _metrics(ltm: LongTermMemory, queries: list[dict], *, use_semantic: bool) ->
         hit1 = 1.0 if rank == 1 else 0.0
         hit3 = 1.0 if 0 < rank <= 3 else 0.0
         mrr = 1.0 / rank if rank else 0.0
+        recall = len(set(ids[:TOPK]) & gold) / len(gold)  # 多 gold(多跳)看覆盖率
         rows.append({"q": item["q"], "kind": item["kind"], "rank": rank, "top": ids[:3]})
-        for key in ("ALL", item["kind"]):
-            buckets.setdefault(key, []).append(mrr)
-        buckets.setdefault(f"{item['kind']}__hit1", []).append(hit1)
-        buckets.setdefault("ALL__hit1", []).append(hit1)
-        buckets.setdefault(f"{item['kind']}__hit3", []).append(hit3)
-        buckets.setdefault("ALL__hit3", []).append(hit3)
+        for metric, val in (("hit1", hit1), ("hit3", hit3), ("recall", recall), ("mrr", mrr)):
+            buckets.setdefault(f"ALL__{metric}", []).append(val)
+            buckets.setdefault(f"{item['kind']}__{metric}", []).append(val)
 
     def avg(key: str) -> float:
         vals = buckets.get(key, [])
         return round(sum(vals) / len(vals), 3) if vals else 0.0
 
     kinds = sorted({q["kind"] for q in queries})
-    summary = {
-        "ALL": {"n": len(queries), "hit1": avg("ALL__hit1"), "hit3": avg("ALL__hit3"), "mrr": avg("ALL")},
-    }
-    for k in kinds:
-        summary[k] = {
-            "n": sum(1 for q in queries if q["kind"] == k),
-            "hit1": avg(f"{k}__hit1"),
-            "hit3": avg(f"{k}__hit3"),
-            "mrr": avg(k),
+    def row(bucket: str, n: int) -> dict:
+        return {
+            "n": n,
+            "hit1": avg(f"{bucket}__hit1"),
+            "hit3": avg(f"{bucket}__hit3"),
+            "recall": avg(f"{bucket}__recall"),
+            "mrr": avg(f"{bucket}__mrr"),
         }
+
+    summary = {"ALL": row("ALL", len(queries))}
+    for k in kinds:
+        summary[k] = row(k, sum(1 for q in queries if q["kind"] == k))
     return {"summary": summary, "rows": rows}
 
 
 def _print_summary(title: str, summary: dict) -> None:
     print(f"\n=== {title} ===")
-    print(f"{'bucket':<12}{'n':>4}{'Hit@1':>9}{'Hit@3':>9}{'MRR':>8}")
+    print(f"{'bucket':<12}{'n':>4}{'Hit@1':>9}{'Hit@3':>9}{'Recall@5':>10}{'MRR':>8}")
     for key, m in summary.items():
-        print(f"{key:<12}{m['n']:>4}{m['hit1']:>9}{m['hit3']:>9}{m['mrr']:>8}")
+        print(f"{key:<12}{m['n']:>4}{m['hit1']:>9}{m['hit3']:>9}{m['recall']:>10}{m['mrr']:>8}")
 
 
 def run(mode: str) -> dict:

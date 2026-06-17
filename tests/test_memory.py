@@ -180,6 +180,32 @@ def test_long_term_add_and_search(ltm) -> None:
     assert meta["observed_at"]
 
 
+def test_temporal_intent_detection() -> None:
+    from mybuddy.memory.long_term import _temporal_intent
+
+    assert _temporal_intent("最近怎么样") == "recent"
+    assert _temporal_intent("我现在住在哪") == "recent"
+    assert _temporal_intent("我以前住的地方离学校远吗") == "past"
+    assert _temporal_intent("本科实习做什么") == "past"
+    assert _temporal_intent("导师每周几开组会") is None
+
+
+def test_recency_rerank_prefers_recent_on_recent_intent(ltm) -> None:
+    from datetime import timedelta
+
+    from mybuddy._time import utcnow
+
+    old = (utcnow() - timedelta(days=300)).isoformat(timespec="seconds")
+    new = (utcnow() - timedelta(days=2)).isoformat(timespec="seconds")
+    ltm.add("之前住在城西的老公寓", uid="addr_old", extra_meta={"observed_at": old, "last_seen_at": old})
+    ltm.add("住在学校附近的新公寓", uid="addr_new", extra_meta={"observed_at": new, "last_seen_at": new})
+
+    # 含"现在" → recent 意图:两条都召回,且新址排在旧址前
+    ids = [h["id"] for h in ltm.search("我现在住在哪个公寓", top_k=5)]
+    assert "addr_new" in ids and "addr_old" in ids
+    assert ids.index("addr_new") < ids.index("addr_old")
+
+
 def test_long_term_three_layer_files(ltm, tmp_path) -> None:
     mid = ltm.add("用户正在准备项目汇报", mem_type="memory")
     tid = ltm.record_conversation_turn(

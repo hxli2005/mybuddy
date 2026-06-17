@@ -20,9 +20,10 @@ uv run python eval/memory_eval.py --mode lexical   # 纯词法基线(离线)
 uv run python eval/memory_eval.py --mode both      # 词法 vs 词法+语义RRF(hybrid 需联网做 embedding)
 ```
 
-- 数据:`data/memory_zh.json`——`corpus` 为记忆卡,`queries.gold` 为应被召回的卡片 id;`kind` ∈ {direct, paraphrase, temporal}。
-- 指标:Hit@1 / Hit@3 / MRR,总分并按 kind 分桶。
+- 数据:`data/memory_zh.json`(37 卡 / 52 query)——`corpus` 为记忆卡(`days_ago` 设时间差,供时序题),`queries.gold` 为应被召回的卡片 id;`kind` ∈ {direct, paraphrase, temporal, multihop}。
+- 指标:Hit@1 / Hit@3 / **Recall@5**(多 gold 覆盖率)/ MRR,总分并按 kind 分桶。
 - 在临时目录里独立建库,不污染 `data/`。
+- 召回侧已实现:语义 RRF 融合(c1)、时态感知 top-k 重排(c2,`最近/现在/以前` → recency 偏新/旧)。
 
 ## 记录与版本约定
 
