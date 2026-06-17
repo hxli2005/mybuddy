@@ -7,7 +7,7 @@
 
 | 维度 | 评什么 | 对标的公开方法 | 本仓库实现 |
 |---|---|---|---|
-| 长期记忆 | 召回质量:直问 / 换词 / 时序 / 多跳 | LoCoMo、LongMemEval、DMR | `memory_eval.py`(Hit@k / MRR) |
+| 长期记忆 | 召回质量:直问 / 换词 / 时序 / 多跳 | LoCoMo、LongMemEval、DMR | 自建集 `memory_eval.py`(Hit@k/MRR)+ 公开基准 `locomo_eval.py`(LoCoMo 检索召回) |
 | 情感支持 | 共情 / 有用性 / 策略恰当度 | ESConv、HEART | 计划:LLM-as-judge 场景集 |
 | 个性化与主动性 | 人格一致性 / 画像利用 / nudge 时机 | PersonaLens、ProactiveEval | 计划:LLM-as-judge 场景集 |
 
@@ -24,6 +24,21 @@ uv run python eval/memory_eval.py --mode both      # 词法 vs 词法+语义RRF(
 - 指标:Hit@1 / Hit@3 / **Recall@5**(多 gold 覆盖率)/ MRR,总分并按 kind 分桶。
 - 在临时目录里独立建库,不污染 `data/`。
 - 召回侧已实现:语义 RRF 融合(c1)、时态感知 top-k 重排(c2,`最近/现在/以前` → recency 偏新/旧)。
+
+## 公开基准:LoCoMo 检索召回(`locomo_eval.py`)
+
+```bash
+# 数据集不入库,先下载(2.7MB)
+mkdir -p eval/data/external
+curl -L -o eval/data/external/locomo10.json \
+  https://raw.githubusercontent.com/snap-research/locomo/main/data/locomo10.json
+
+uv run python eval/locomo_eval.py --samples 2 --tiers 5,10,20
+```
+
+- 测的是**检索召回**(证据 turn 是否进 top-k),按 LoCoMo 的 category 分桶(单跳/多跳/时序/开放域;对抗类排除)。
+- ⚠️ 这**不等于** LoCoMo 排行榜的端到端问答分(那是 LLM-judge 打答案正确率),口径不同、不可直接比。turn 级检索(数百选 k)是偏难设定。
+- 最新结果与解读见 `RESULTS.md` 第 3 轮。
 
 ## 记录与版本约定
 
