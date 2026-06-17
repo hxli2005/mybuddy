@@ -39,6 +39,7 @@ uv run python eval/locomo_eval.py --samples 2 --tiers 5,10,20
 - 测的是**检索召回**(证据 turn 是否进 top-k),按 LoCoMo 的 category 分桶(单跳/多跳/时序/开放域;对抗类排除)。
 - ⚠️ 这**不等于** LoCoMo 排行榜的端到端问答分(那是 LLM-judge 打答案正确率),口径不同、不可直接比。turn 级检索(数百选 k)是偏难设定。
 - 最新结果与解读见 `RESULTS.md` 第 3 轮。
+- 粒度对比实验:`locomo_granularity.py`(turn / chunk / session 在同一上下文预算下比覆盖率,见第 4 轮)。
 
 ## 记录与版本约定
 
