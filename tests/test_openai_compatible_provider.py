@@ -63,7 +63,7 @@ async def test_openai_compatible_provider_retries_transient_errors(monkeypatch) 
         def __init__(self) -> None:
             self.calls = 0
 
-        async def create(self, **kwargs):  # noqa: ANN003
+        def create(self, **kwargs):  # noqa: ANN003 —— 同步客户端,经 asyncio.to_thread 调用
             self.calls += 1
             if self.calls == 1:
                 raise TransientError("bad gateway")
