@@ -11,7 +11,7 @@ import json
 import logging
 from typing import Any
 
-from openai import AsyncOpenAI
+from openai import OpenAI
 
 from mybuddy.config import LLMConfig
 
@@ -27,7 +27,10 @@ TRANSIENT_RETRY_DELAYS = (0.5, 1.0, 2.0)
 class OpenAICompatibleProvider(BaseLLMProvider):
     def __init__(self, cfg: LLMConfig) -> None:
         self._cfg = cfg
-        self._client = AsyncOpenAI(
+        # 用同步客户端而非 AsyncOpenAI:部分环境(代理 / 安全软件 / 某些网络栈)下
+        # httpx 的 async 传输会在 TLS 阶段被重置(ConnectError(EndOfStream)),而同步
+        # 路径正常。请求统一用 asyncio.to_thread 包一层执行,既规避该问题又不阻塞事件循环。
+        self._client = OpenAI(
             api_key=cfg.api_key or "missing-key",
             base_url=_base_url_for(cfg),
         )
@@ -59,7 +62,7 @@ class OpenAICompatibleProvider(BaseLLMProvider):
         last_error: Exception | None = None
         for attempt, delay in enumerate((*TRANSIENT_RETRY_DELAYS, 0.0), start=1):
             try:
-                return await self._client.chat.completions.create(**kwargs)
+                return await asyncio.to_thread(self._client.chat.completions.create, **kwargs)
             except Exception as e:
                 last_error = e
                 if not _is_transient_error(e) or attempt > len(TRANSIENT_RETRY_DELAYS):

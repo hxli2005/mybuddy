@@ -10,7 +10,7 @@ import asyncio
 import logging
 from typing import Any
 
-from anthropic import AsyncAnthropic
+from anthropic import Anthropic
 
 from mybuddy.config import LLMConfig
 
@@ -34,7 +34,10 @@ class ClaudeProvider(BaseLLMProvider):
             # 允许不带 key 构造(方便 init 阶段 smoke test),实际 generate 时由 SDK 报错
             pass
         self._cfg = cfg
-        self._client = AsyncAnthropic(
+        # 用同步客户端而非 AsyncAnthropic:部分环境下 httpx 的 async 传输会在 TLS 阶段
+        # 被重置(ConnectError(EndOfStream)),同步路径正常。请求统一经 asyncio.to_thread
+        # 执行,既规避该问题又不阻塞事件循环。
+        self._client = Anthropic(
             api_key=cfg.api_key or None,
             base_url=cfg.base_url or None,
         )
@@ -68,7 +71,7 @@ class ClaudeProvider(BaseLLMProvider):
         last_error: Exception | None = None
         for attempt, delay in enumerate((*TRANSIENT_RETRY_DELAYS, 0.0), start=1):
             try:
-                return await self._client.messages.create(**kwargs)
+                return await asyncio.to_thread(self._client.messages.create, **kwargs)
             except Exception as e:
                 last_error = e
                 if not _is_transient_error(e) or attempt > len(TRANSIENT_RETRY_DELAYS):

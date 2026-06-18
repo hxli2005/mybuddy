@@ -17,6 +17,7 @@ import os
 import re
 import uuid
 from collections.abc import Callable
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -173,6 +174,9 @@ class LongTermMemory:
 
         默认纯词法(governance/profile 等沿用);``use_semantic=True`` 且挂了可用的
         语义召回时,把词法与向量两路用 RRF 融合重排,补回换词/同义召回。
+
+        若 query 含时态意图(最近 / 现在 / 以前…),对候选做 recency 加权重排:
+        "最近 / 现在"偏向新记忆,"以前"偏向旧记忆——补上纯相关度排序对时间不敏感的短板。
         """
         query = (query or "").strip()
         if not query:
@@ -181,13 +185,23 @@ class LongTermMemory:
         lexical = self._lexical_search(query, mem_type=mem_type)
         sem = self._semantic
         if not use_semantic or sem is None or not sem.enabled:
-            return lexical[:top_k]
+            ranked = lexical[:top_k]
+        else:
+            cand = max(top_k * sem.candidate_multiplier, top_k)
+            sem_hits = sem.search(query, cand, mem_type=mem_type)
+            ranked = (
+                self._fuse_rrf(lexical[:cand], sem_hits, top_k=top_k, k=sem.rrf_k, mem_type=mem_type)
+                if sem_hits
+                else lexical[:top_k]
+            )
 
-        cand = max(top_k * sem.candidate_multiplier, top_k)
-        sem_hits = sem.search(query, cand, mem_type=mem_type)
-        if not sem_hits:
-            return lexical[:top_k]
-        return self._fuse_rrf(lexical[:cand], sem_hits, top_k=top_k, k=sem.rrf_k, mem_type=mem_type)
+        # 时态意图(最近 / 现在 / 以前…):只在已召回的 top_k 内做 recency 重排,
+        # 不改变召回集合(Recall@k 不变),仅把"该时段的记忆"往前排。宽窗重排会把
+        # 近期但不相关的卡顶上来,反而有害——见 eval/RESULTS.md 第 2 轮。
+        intent = _temporal_intent(query)
+        if intent:
+            ranked = _temporal_rerank(ranked, intent)
+        return ranked
 
     def _lexical_search(self, query: str, *, mem_type: str | None = None) -> list[dict[str, Any]]:
         q_tokens = set(_tokenize(query))
@@ -506,6 +520,57 @@ def _extract_keywords(content: str, limit: int = 12) -> list[str]:
         if len(keywords) >= limit:
             break
     return keywords
+
+
+_RECENT_RE = re.compile(r"最近|近来|这几天|这两天|这段时间|这阵子|近期|目前|现在|如今|最新|刚刚|刚才")
+_PAST_RE = re.compile(r"以前|之前|当年|过去|以往|曾经|那时候|那会儿|小时候|本科|高中|早先|最初")
+
+
+def _temporal_intent(query: str) -> str | None:
+    """识别 query 的时态意图:recent(偏向新)/ past(偏向旧)/ None。"""
+    if _RECENT_RE.search(query):
+        return "recent"
+    if _PAST_RE.search(query):
+        return "past"
+    return None
+
+
+def _parse_iso_ts(value: Any) -> datetime | None:
+    try:
+        return datetime.fromisoformat(str(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def _recency_signal(meta: dict[str, Any], now: datetime) -> float:
+    """0~1 的新鲜度:越新越接近 1(半衰期约一个月)。无时间戳给中性 0.5。"""
+    ts = meta.get("observed_at") or meta.get("last_seen_at") or meta.get("updated_at") or ""
+    dt = _parse_iso_ts(ts)
+    if dt is None:
+        return 0.5
+    try:
+        age_days = max((now - dt).total_seconds() / 86400.0, 0.0)
+    except TypeError:  # tz-aware / naive 混用,保守给中性
+        return 0.5
+    return 1.0 / (1.0 + age_days / 30.0)
+
+
+def _temporal_rerank(hits: list[dict[str, Any]], intent: str) -> list[dict[str, Any]]:
+    """按时态意图对候选重排:归一化相关度(消解词法/RRF 量纲差)与 recency 加权融合。"""
+    if len(hits) < 2:
+        return hits
+    now = utcnow()
+    scores = [float(h.get("score", 0.0) or 0.0) for h in hits]
+    lo, hi = min(scores), max(scores)
+    span = (hi - lo) or 1.0
+
+    def blended(h: dict[str, Any]) -> float:
+        base = (float(h.get("score", 0.0) or 0.0) - lo) / span
+        r = _recency_signal(h.get("metadata") or {}, now)
+        rec = r if intent == "recent" else (1.0 - r)
+        return 0.55 * base + 0.45 * rec
+
+    return sorted(hits, key=blended, reverse=True)
 
 
 def _score(query: str, q_tokens: set[str], content: str, meta: dict[str, Any]) -> float:

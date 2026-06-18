@@ -156,14 +156,20 @@ class MyBuddyScheduler:
     # ---- 调试 ----
 
     def list_jobs(self) -> list[dict]:
-        return [
-            {
-                "id": j.id,
-                "next_run": j.next_run_time.isoformat() if j.next_run_time else None,
-                "trigger": str(j.trigger),
-            }
-            for j in self._scheduler.get_jobs()
-        ]
+        # 调度器未 start 时 get_jobs() 会返回 pending 作业,这些 Job 尚未计算
+        # next_run_time(apscheduler 用 __slots__,未赋值会抛 AttributeError),
+        # 故用 getattr 兜底,保证未启动状态下列表/banner 也能安全展示。
+        jobs = []
+        for j in self._scheduler.get_jobs():
+            next_run = getattr(j, "next_run_time", None)
+            jobs.append(
+                {
+                    "id": j.id,
+                    "next_run": next_run.isoformat() if next_run else None,
+                    "trigger": str(j.trigger),
+                }
+            )
+        return jobs
 
 
 def _parse_hh_mm(value: str) -> tuple[int, int]:
