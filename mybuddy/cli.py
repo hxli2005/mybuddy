@@ -140,7 +140,9 @@ def chat(
     scheduler: MyBuddyScheduler | None = None
     if cfg.scheduler.enabled:
         scheduler = MyBuddyScheduler(cfg)
-        scheduler.start()
+        # AsyncIOScheduler.start() 需要正在运行的事件循环(apscheduler>=3.10 改用
+        # get_running_loop),所以真正 start 放到 _chat_loop 协程内执行。add_job 在
+        # 停止态会进入 _pending_jobs,start 时统一注册,先注册后启动顺序无碍。
         _restore_reminders(scheduler, engine)
         scheduler.schedule_daily_greeting(cfg.scheduler.daily_greeting)
         scheduler.schedule_dream_job(cfg.scheduler.dream_job, config_path=config_path)
@@ -170,11 +172,22 @@ def chat(
 
     _print_banner(cfg, registry, scheduler=scheduler, skill_registry=skill_registry)
 
+    # AsyncIOScheduler 绑定在事件循环上,start 与 shutdown 必须在同一个存活的循环里
+    # 完成。这里手动管理 loop 而非 asyncio.run:_chat_loop 退出后循环仍开着,先让
+    # scheduler.shutdown() 的线程安全回调执行完,再关闭循环,避免 'Event loop is
+    # closed'(asyncio.run 会在协程一返回就立即关闭循环)。
+    loop = asyncio.new_event_loop()
     try:
-        asyncio.run(_chat_loop(agent, engine, feedback_bus))
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(
+            _chat_loop(agent, engine, feedback_bus, scheduler=scheduler)
+        )
     finally:
-        if scheduler is not None:
-            scheduler.shutdown()
+        if scheduler is not None and scheduler.running:
+            scheduler.shutdown(wait=False)
+            loop.run_until_complete(asyncio.sleep(0))  # flush 线程安全关闭回调
+        loop.close()
+        asyncio.set_event_loop(None)
 
 
 @app.command()
@@ -268,9 +281,19 @@ def _restore_reminders(scheduler: MyBuddyScheduler, engine) -> None:
         scheduler.schedule_reminder(rid, trigger)
 
 
-async def _chat_loop(agent: Agent, engine, feedback_bus: FeedbackBus) -> None:
+async def _chat_loop(
+    agent: Agent,
+    engine,
+    feedback_bus: FeedbackBus,
+    scheduler: MyBuddyScheduler | None = None,
+) -> None:
     last_turn_id: str | None = None
     last_triggered_skills: list[str] = []
+
+    # AsyncIOScheduler 必须在运行中的事件循环里 start(apscheduler>=3.10 用
+    # get_running_loop);此处已位于 asyncio.run 的协程内,可安全启动。
+    if scheduler is not None and not scheduler.running:
+        scheduler.start()
 
     # 启动时先 drain 一次(可能有离线期间触发的提醒/早安/nudge)
     _drain_pending_to_console(engine)
