@@ -38,6 +38,7 @@ from mybuddy.storage import append_message, enqueue
 from mybuddy.tools import ToolRegistry
 
 from .context import build_messages, build_system_prompt
+from .living_state import synthesize_living_state
 from .search import (
     build_search_context,
     build_unavailable_search_context,
@@ -185,7 +186,12 @@ class Agent:
             )
             if x
         )
-        system = build_system_prompt(self._config.persona, extras)
+        # 动态「角色生活」状态:本轮从真实信号(距上次多久 / 现在几点 / 上次聊啥)合成,
+        # 让小布「此刻」是活的且接真记忆,而非配置里写死的同一杯温水。失败回退静态。
+        life_state = synthesize_living_state(
+            self._config.persona, engine=self._engine, session_id=self._session_id
+        )
+        system = build_system_prompt(self._config.persona, extras, life=life_state)
         traj = self._logger.start(
             session_id=self._session_id,
             system=system,

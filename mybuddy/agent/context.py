@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from mybuddy.config import PersonaConfig
+from mybuddy.config import CharacterLifeConfig, PersonaConfig
 from mybuddy.llm import Message
 
 
@@ -16,14 +16,16 @@ def build_system_prompt(
     memory_context: str = "",
     *,
     now: datetime | None = None,
+    life: CharacterLifeConfig | None = None,
 ) -> str:
     """把人设配置拼成 system prompt。
 
     memory_context 为 MemoryManager.build_context_section() 的输出,
     包含本轮少量相关的长期记忆、用户画像字段和场景线索。
+    life 为本轮合成的动态「角色生活」状态(见 living_state);None 时回退静态配置。
     """
     role = persona.roleplay_style
-    life = persona.character_life
+    life = life if life is not None else persona.character_life
     relationship = persona.relationship_model
     time_block = _time_block(now)
     voice = _compact_items(
