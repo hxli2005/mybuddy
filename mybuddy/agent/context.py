@@ -97,7 +97,9 @@ def _compact_items(items: list[str], *, limit: int) -> str:
 
 def _format_dialogue_examples(examples: list[object]) -> str:
     lines: list[str] = []
-    for item in examples[:2]:
+    # few-shot 例句是文体的最高杠杆,配置了几条就用几条(上限防长):
+    # 之前 [:2] 静默丢弃第三条,配置与生效不一致。
+    for item in examples[:4]:
         user = getattr(item, "user", "").strip()
         assistant = getattr(item, "assistant", "").strip()
         if not user or not assistant:
