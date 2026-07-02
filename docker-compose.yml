@@ -1,0 +1,15 @@
+services:
+  mybuddy:
+    build: .
+    image: mybuddy:latest
+    ports:
+      - "8000:8000"
+    volumes:
+      # 密钥配置:先 cp config.example.yaml config.yaml 并填入 api_key
+      - ./config.yaml:/app/config.yaml:ro
+      # 数据持久化(记忆/画像/技能/轨迹都在这)
+      - ./data:/app/data
+    environment:
+      # living_state 的时段问候依赖本地时间,按需改
+      - TZ=Asia/Shanghai
+    restart: unless-stopped
