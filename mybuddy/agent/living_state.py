@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import re
 from datetime import datetime
+from typing import Any
 
 from mybuddy._time import utcnow
 from mybuddy.config import CharacterLifeConfig, PersonaConfig
@@ -79,18 +80,27 @@ def synthesize_living_state(
     session_id: str = "",
     now_utc: datetime | None = None,
     now_local: datetime | None = None,
+    body_state: dict[str, Any] | None = None,
+    body_state_injection: bool = False,
 ) -> CharacterLifeConfig:
     """合成小布此刻的动态生活状态;无信号时回退到静态 character_life。"""
     base = persona.character_life
+    real_body = body_state if body_state_injection and body_state else None
     if engine is None:
+        if real_body:
+            return _life_from_body_state(base, real_body, topic="")
         return base
     try:
         from mybuddy.storage import list_messages
 
         rows = list_messages(engine, limit=20, session_id=session_id or None)
     except Exception:  # noqa: BLE001 —— 合成是尽力而为,任何失败都回退静态,不阻塞对话
+        if real_body:
+            return _life_from_body_state(base, real_body, topic="")
         return base
     if not rows:
+        if real_body:
+            return _life_from_body_state(base, real_body, topic="")
         return base  # 首次对话:用 config 的静态 seed
 
     now_utc = now_utc or utcnow()
@@ -106,6 +116,8 @@ def synthesize_living_state(
             gap_min = None
 
     topic = _pick_topic(rows)
+    if real_body:
+        return _life_from_body_state(base, real_body, topic=topic)
 
     return CharacterLifeConfig(
         today_status=_status_for_hour(now_local.hour),
@@ -113,3 +125,60 @@ def synthesize_living_state(
         recent_self_event=(f"刚还在想你上次提的「{topic}」,惦记着呢" if topic else base.recent_self_event),
         availability_style=base.availability_style,
     )
+
+
+def _life_from_body_state(
+    base: CharacterLifeConfig,
+    body_state: dict[str, Any],
+    *,
+    topic: str,
+) -> CharacterLifeConfig:
+    """用 VPet 屏幕上真实身体数值接管身体相关状态。"""
+    food = _body_number(body_state, "food")
+    drink = _body_number(body_state, "drink")
+    feeling = _body_number(body_state, "feeling")
+    health = _body_number(body_state, "health")
+    strength = _body_number(body_state, "strength")
+    mode = str(body_state.get("mode") or "")
+
+    status_bits: list[str] = []
+    if food is not None and food <= 30:
+        status_bits.append("肚子有点空")
+    if drink is not None and drink <= 30:
+        status_bits.append("有点口渴")
+    if health is not None and health <= 30:
+        status_bits.append("身体不太舒服")
+    if strength is not None and strength <= 30:
+        status_bits.append("有点没力气")
+    if mode == "Ill":
+        status_bits.append("看起来在生病")
+    elif mode == "PoorCondition":
+        status_bits.append("状态不太好")
+    today_status = "、".join(status_bits) if status_bits else "身体数值看起来还稳,按眼前状态陪你"
+
+    if feeling is not None and feeling <= 30:
+        current_mood = "情绪有点低,会更黏一点"
+    elif strength is not None and strength <= 30:
+        current_mood = "偏累,说话会放轻一点"
+    elif food is not None and food <= 30:
+        current_mood = "肚子有点空,语气会更黏一点"
+    elif (health is not None and health <= 30) or mode in {"Ill", "PoorCondition"}:
+        current_mood = "不太舒服,会更想贴近一点"
+    elif feeling is not None and feeling >= 70:
+        current_mood = "心情还不错,但会照着眼前状态说话"
+    else:
+        current_mood = "情绪平稳,照着眼前身体状态说话"
+
+    return CharacterLifeConfig(
+        today_status=today_status,
+        current_mood=current_mood,
+        recent_self_event=(f"刚还在想你上次提的「{topic}」,惦记着呢" if topic else base.recent_self_event),
+        availability_style=base.availability_style,
+    )
+
+
+def _body_number(body_state: dict[str, Any], key: str) -> float | None:
+    value = body_state.get(key)
+    if isinstance(value, int | float):
+        return float(value)
+    return None

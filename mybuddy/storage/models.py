@@ -139,6 +139,34 @@ class PendingMessage(Base):
     meta_json: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
+class VPetEvent(Base):
+    """VPet 桌宠桥接事件日志。
+
+    这里同时记客户端触摸/回场事件和后端 drain 侧的丢弃、合并事件,供实验期
+    只靠 SQL 还原当时开关与派送结果。
+    """
+
+    __tablename__ = "vpet_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    client_event_id: Mapped[str | None] = mapped_column(String(160), unique=True, nullable=True)
+    event: Mapped[str] = mapped_column(String(64), index=True)
+    count: Mapped[int] = mapped_column(Integer, default=1)
+    body_state_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    context_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    want_reply: Mapped[int] = mapped_column(Integer, default=0)
+    escalated: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    replied: Mapped[int] = mapped_column(Integer, default=0)
+    gate_reason: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    turn_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    client_flags_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    server_flags_json: Mapped[str] = mapped_column(Text)
+    last_emotion_label: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    day_index: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now, index=True)
+
+
 class ProfileField(Base):
     """用户画像核心字段(hard facts):姓名/生日/偏好/禁忌等。"""
 

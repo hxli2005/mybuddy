@@ -14,6 +14,7 @@ from .models import (
     User,
     UserPersona,
     UserUsage,
+    VPetEvent,
 )
 from .queue import drain_pending, enqueue, list_undelivered
 from .users import (
@@ -40,6 +41,13 @@ from .users import (
     set_user_status,
     usage_count_today,
 )
+from .vpet_events import (
+    count_vpet_escalations_today,
+    get_message_content,
+    latest_assistant_message_id,
+    mark_vpet_event_result,
+    record_vpet_event,
+)
 
 __all__ = [
     "Base",
@@ -58,24 +66,30 @@ __all__ = [
     "UserRecord",
     "UserSummaryRecord",
     "UserUsage",
+    "VPetEvent",
     "append_message",
     "begin_inbound_event",
     "bind_external_account",
+    "count_vpet_escalations_today",
     "create_user",
     "delete_user_persona",
     "drain_pending",
     "enqueue",
     "ensure_local_user",
     "finish_inbound_event",
+    "get_message_content",
     "get_or_create_external_user",
     "get_user",
     "get_user_persona",
     "increment_usage",
     "init_db",
+    "latest_assistant_message_id",
     "list_user_summaries",
     "list_messages",
     "list_undelivered",
     "make_engine",
+    "mark_vpet_event_result",
+    "record_vpet_event",
     "resolve_external_account",
     "resolve_user_persona",
     "session_scope",

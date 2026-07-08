@@ -140,3 +140,13 @@ channels:
     allow_auto_create_user: false
     daily_message_limit: 30
     reply_on_duplicate: false
+
+# ============ VPet 桌宠桥接 ============
+vpet:
+  body_state_injection: false          # PR2 身体状态一致性护栏;默认关闭保持旧行为
+  touch_escalation: false              # 触摸事件是否允许升格成一次短句 LLM 反应
+  physical_proactive: false            # 主动消息是否允许走到桌宠前台展示
+  touch_escalation_daily_limit: 20     # 每天最多批准多少次触摸升格
+  greeting_discard_after_minutes: 120  # greeting 超过多久未派送就丢弃
+  reminder_overdue_after_minutes: 30   # reminder 超过多久转为 overdue 持久展示
+  bridge_token: ""                     # 非空时保护 /api/* 和 /v1/*,Header: X-MyBuddy-Token

@@ -205,6 +205,16 @@ class ChannelsConfig(BaseModel):
     qq: QQChannelConfig = Field(default_factory=QQChannelConfig)
 
 
+class VPetConfig(BaseModel):
+    body_state_injection: bool = False
+    touch_escalation: bool = False
+    physical_proactive: bool = False
+    touch_escalation_daily_limit: int = 20
+    greeting_discard_after_minutes: int = 120
+    reminder_overdue_after_minutes: int = 30
+    bridge_token: str = ""
+
+
 class Config(BaseModel):
     llm: LLMConfig = Field(default_factory=LLMConfig)
     persona: PersonaConfig = Field(default_factory=PersonaConfig)
@@ -214,6 +224,7 @@ class Config(BaseModel):
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
     channels: ChannelsConfig = Field(default_factory=ChannelsConfig)
+    vpet: VPetConfig = Field(default_factory=VPetConfig)
 
 
 _ENV_VAR_PATTERN = re.compile(r"\$\{([^}]+)\}")

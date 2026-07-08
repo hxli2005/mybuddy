@@ -6,22 +6,26 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import yaml
 from pydantic import BaseModel, Field
 
+from mybuddy._time import utcnow as _utcnow
 from mybuddy.agent import Agent
 from mybuddy.config import Config, PersonaConfig, ensure_dirs, load_config
 from mybuddy.emotion import EmotionDetector, EmotionTracker
 from mybuddy.integrations.vpet import (
     chat_to_vpet_payload,
+    normalize_body_state,
     pending_to_vpet_payload,
 )
 from mybuddy.learning import (
@@ -39,18 +43,24 @@ from mybuddy.memory import LongTermMemory, MemoryManager, UserProfile
 from mybuddy.scheduler import MyBuddyScheduler
 from mybuddy.storage import (
     Note,
+    PendingMessage,
     Reminder,
     UserSummaryRecord,
     append_message,
     bind_external_account,
+    count_vpet_escalations_today,
     create_user,
     delete_user_persona,
     drain_pending,
+    get_message_content,
     get_user,
     init_db,
+    latest_assistant_message_id,
     list_messages,
     list_undelivered,
     list_user_summaries,
+    mark_vpet_event_result,
+    record_vpet_event,
     resolve_user_persona,
     session_scope,
     set_user_daily_limit,
@@ -79,6 +89,20 @@ class ChatRequest(BaseModel):
 class VPetChatRequest(BaseModel):
     message: str = Field(min_length=1)
     event: str = "chat"
+    body_state: dict[str, Any] | None = None
+
+
+class VPetEventRequest(BaseModel):
+    event: str
+    count: int = 1
+    body_state: dict[str, Any] | None = None
+    context: dict[str, Any] | None = None
+    want_reply: bool = False
+    client_event_id: str | None = None
+
+
+class VPetDrainRequest(BaseModel):
+    digest: bool = False
 
 
 class OpenAICompatMessage(BaseModel):
@@ -175,6 +199,7 @@ class AppState:
     feedback_bus: FeedbackBus | None = None
     last_turn_id: str | None = None
     last_triggered_skills: list[str] = field(default_factory=list)
+    agent_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
     def startup(self) -> None:
         cfg = load_config(self.config_path)
@@ -290,59 +315,107 @@ class AppState:
             long_term=self.ltm,
         )
 
-    async def chat_payload(self, message: str) -> dict[str, Any]:
+    async def chat_payload(
+        self,
+        message: str,
+        *,
+        source: str = "chat",
+        enable_tools: bool = True,
+        meta: dict[str, Any] | None = None,
+        body_state: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         if self.agent is None:
             raise RuntimeError("LLM api_key 未配置,无法对话")
-        # 工具上下文是 ContextVar,按线程/按 task 隔离。startup() 在主线程(或 FastAPI
-        # 启动协程)里 set_context,但实际跑对话时:web.py 用 ThreadingHTTPServer 每请求
-        # 开新线程 + asyncio.run(全新 context),FastAPI 每请求是独立 task —— 两种情况下
-        # 启动时设的上下文都传不到这里,工具(web_search/weather 等)会拿到 config=None。
-        # 因此在真正会调用工具的请求协程内重新建立上下文(与多用户 ChatService 同款做法)。
-        with use_context(
-            engine=self.engine,
-            config=self.cfg,
-            scheduler=self.scheduler,
-            provider=self.provider,
-            long_term=self.ltm,
-            skill_registry=self.skill_registry,
-        ):
-            engine = _require(self.engine)
-            pending_before = _integrate_pending_messages(
-                engine,
-                session_id=self.agent.session_id,
-                items=drain_pending(engine),
-                add_to_short_term=self.agent._memory.add_message,
-            )
-            result = await self.agent.run(message.strip())
-            result_text = result.text
-            tool_calls = list(result.tool_calls)
-            deterministic_tools = await _run_deterministic_demo_tools(message, tool_calls, self)
-            if deterministic_tools:
-                tool_calls.extend(deterministic_tools)
-            result_text = _append_tool_summary(result_text, tool_calls)
-            pending_after = _integrate_pending_messages(
-                engine,
-                session_id=self.agent.session_id,
-                items=drain_pending(engine),
-                add_to_short_term=self.agent._memory.add_message,
-            )
-            self.last_turn_id = result.trajectory.turn_id
-            self.last_triggered_skills = list(result.triggered_skills)
-            return {
-                "text": result_text,
-                "turn_id": result.trajectory.turn_id,
-                "steps": result.steps,
-                "finish_reason": result.finish_reason,
-                "tool_calls": tool_calls,
-                "emotion": result.emotion.to_dict() if result.emotion else None,
-                "emotional_support": result.emotional_support,
-                "triggered_skills": result.triggered_skills,
-                "search_sources": result.search_sources,
-                "pending_messages": pending_before + pending_after,
-            }
+        async with self.agent_lock:
+            # 工具上下文是 ContextVar,按线程/按 task 隔离。startup() 在主线程(或 FastAPI
+            # 启动协程)里 set_context,但实际跑对话时:web.py 用 ThreadingHTTPServer 每请求
+            # 开新线程 + asyncio.run(全新 context),FastAPI 每请求是独立 task —— 两种情况下
+            # 启动时设的上下文都传不到这里,工具(web_search/weather 等)会拿到 config=None。
+            # 因此在真正会调用工具的请求协程内重新建立上下文(与多用户 ChatService 同款做法)。
+            with use_context(
+                engine=self.engine,
+                config=self.cfg,
+                scheduler=self.scheduler,
+                provider=self.provider,
+                long_term=self.ltm,
+                skill_registry=self.skill_registry,
+            ):
+                engine = _require(self.engine)
+                pending_before = _integrate_pending_messages(
+                    engine,
+                    session_id=self.agent.session_id,
+                    items=drain_pending(engine),
+                    add_to_short_term=self.agent._memory.add_message,
+                )
+                result = await self.agent.run(
+                    message.strip(),
+                    source=source,
+                    enable_tools=enable_tools,
+                    meta=meta,
+                    body_state=body_state,
+                )
+                result_text = result.text
+                tool_calls = list(result.tool_calls)
+                if enable_tools:
+                    deterministic_tools = await _run_deterministic_demo_tools(
+                        message, tool_calls, self
+                    )
+                    if deterministic_tools:
+                        tool_calls.extend(deterministic_tools)
+                result_text = _append_tool_summary(result_text, tool_calls)
+                pending_after = _integrate_pending_messages(
+                    engine,
+                    session_id=self.agent.session_id,
+                    items=drain_pending(engine),
+                    add_to_short_term=self.agent._memory.add_message,
+                )
+                self.last_turn_id = result.trajectory.turn_id
+                self.last_triggered_skills = list(result.triggered_skills)
+                return {
+                    "text": result_text,
+                    "turn_id": result.trajectory.turn_id,
+                    "steps": result.steps,
+                    "finish_reason": result.finish_reason,
+                    "tool_calls": tool_calls,
+                    "emotion": result.emotion.to_dict() if result.emotion else None,
+                    "emotional_support": result.emotional_support,
+                    "triggered_skills": result.triggered_skills,
+                    "search_sources": result.search_sources,
+                    "pending_messages": pending_before + pending_after,
+                }
 
-    async def vpet_chat_payload(self, message: str, *, event: str = "chat") -> dict[str, Any]:
-        return chat_to_vpet_payload(await self.chat_payload(message), source_event=event)
+    async def vpet_chat_payload(
+        self,
+        message: str,
+        *,
+        event: str = "chat",
+        body_state: dict[str, Any] | None = None,
+        client_flags: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        normalized_body = normalize_body_state(body_state)
+        body_state_used = bool(self.cfg and self.cfg.vpet.body_state_injection and normalized_body)
+        vpet_meta = {
+            "vpet": {
+                "event": event,
+                "body_state_present": bool(normalized_body),
+                "body_state_used": body_state_used,
+                "client_flags": client_flags or {},
+                "server_flags": _server_flags(self.cfg),
+            }
+        }
+        try:
+            chat = await self.chat_payload(
+                message,
+                source="vpet_chat",
+                meta=vpet_meta,
+                body_state=normalized_body if body_state_used else None,
+            )
+        except TypeError as e:
+            # 兼容少量测试/外部嵌入直接 monkeypatch 旧签名 chat_payload(message)。
+            if "unexpected keyword argument" not in str(e):
+                raise
+            chat = await self.chat_payload(message)
+        return chat_to_vpet_payload(chat, source_event=event)
 
     async def openai_chat_completion_payload(
         self,
@@ -389,10 +462,18 @@ class AppState:
             },
         }
 
-    def vpet_pending_payload(self, *, drain: bool = False) -> dict[str, Any]:
+    def vpet_pending_payload(
+        self,
+        *,
+        drain: bool = False,
+        digest: bool = False,
+        client_flags: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         engine = _require(self.engine)
         if not drain:
             return pending_to_vpet_payload(list_undelivered(engine), drained=False)
+        if digest:
+            return self._vpet_digest_pending_payload(client_flags=client_flags)
 
         items = drain_pending(engine)
         if self.agent is not None:
@@ -403,6 +484,210 @@ class AppState:
                 add_to_short_term=self.agent._memory.add_message,
             )
         return pending_to_vpet_payload(items, drained=True)
+
+    async def vpet_event_payload(
+        self,
+        req: VPetEventRequest,
+        *,
+        client_flags: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        engine = _require(self.engine)
+        event = req.event.strip()
+        if event not in {"touch_head", "touch_body", "feed", "user_back"}:
+            raise RuntimeError("unsupported vpet event")
+        count = _clamp_int(req.count, low=1, high=50)
+        body_state = normalize_body_state(req.body_state)
+        context = req.context if isinstance(req.context, dict) else {}
+        flags = _server_flags(self.cfg)
+        row, created = record_vpet_event(
+            engine,
+            event=event,
+            count=count,
+            body_state=body_state,
+            context=context,
+            want_reply=bool(req.want_reply),
+            client_event_id=req.client_event_id,
+            client_flags=client_flags or {},
+            server_flags=flags,
+            last_emotion_label=_last_emotion_label(self),
+            day_index=None,
+        )
+        if not created:
+            return _vpet_event_replay_payload(engine, row)
+
+        if not req.want_reply or event == "user_back":
+            mark_vpet_event_result(engine, row["id"], replied=False)
+            return {
+                "ok": True,
+                "replied": False,
+                "gate_reason": None,
+                "event_log_id": row["id"],
+            }
+
+        cfg = _require(self.cfg)
+        if not cfg.vpet.touch_escalation:
+            return self._mark_vpet_event_gate(row["id"], "escalation_disabled")
+        if self.agent_lock.locked():
+            return self._mark_vpet_event_gate(row["id"], "agent_busy")
+        if count_vpet_escalations_today(engine) >= max(0, cfg.vpet.touch_escalation_daily_limit):
+            return self._mark_vpet_event_gate(row["id"], "budget_exceeded")
+        if self.agent is None:
+            raise RuntimeError("LLM api_key 未配置,无法对话")
+
+        await self.agent_lock.acquire()
+        try:
+            synthetic_input = _vpet_event_prompt(event, count=count, context=context)
+            with use_context(
+                engine=self.engine,
+                config=self.cfg,
+                scheduler=self.scheduler,
+                provider=self.provider,
+                long_term=self.ltm,
+                skill_registry=self.skill_registry,
+            ):
+                result = await self.agent.run(
+                    synthetic_input,
+                    source="vpet_event",
+                    enable_tools=False,
+                    meta={
+                        "vpet": {
+                            "event": event,
+                            "count": count,
+                            "body_state_used": False,
+                            "client_event_id": req.client_event_id,
+                            "event_log_id": row["id"],
+                        }
+                    },
+                )
+        finally:
+            self.agent_lock.release()
+
+        message_id = latest_assistant_message_id(engine, turn_id=result.trajectory.turn_id)
+        mark_vpet_event_result(
+            engine,
+            row["id"],
+            escalated=True,
+            replied=True,
+            turn_id=result.trajectory.turn_id,
+            message_id=message_id,
+        )
+        payload = chat_to_vpet_payload(
+            {
+                "text": result.text,
+                "turn_id": result.trajectory.turn_id,
+                "finish_reason": result.finish_reason,
+                "emotion": result.emotion.to_dict() if result.emotion else None,
+                "emotional_support": result.emotional_support,
+                "tool_calls": result.tool_calls,
+                "triggered_skills": result.triggered_skills,
+                "search_sources": result.search_sources,
+                "pending_messages": [],
+            },
+            source_event=event,
+        )
+        payload["replied"] = True
+        payload["event_log_id"] = row["id"]
+        return payload
+
+    def _mark_vpet_event_gate(self, event_id: int, gate_reason: str) -> dict[str, Any]:
+        engine = _require(self.engine)
+        mark_vpet_event_result(engine, event_id, gate_reason=gate_reason)
+        return {
+            "ok": True,
+            "replied": False,
+            "gate_reason": gate_reason,
+            "event_log_id": event_id,
+        }
+
+    def _vpet_digest_pending_payload(
+        self,
+        *,
+        client_flags: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        engine = _require(self.engine)
+        cfg = _require(self.cfg)
+        now = _utcnow()
+        reminder_cutoff = now - timedelta(minutes=cfg.vpet.reminder_overdue_after_minutes)
+        greeting_cutoff = now - timedelta(minutes=cfg.vpet.greeting_discard_after_minutes)
+        events: list[dict[str, Any]] = []
+        digest_sources: list[str] = []
+        discarded_count = 0
+        flags = _server_flags(cfg)
+        telemetry: list[dict[str, Any]] = []
+
+        with session_scope(engine) as s:
+            rows = (
+                s.query(PendingMessage)
+                .filter(PendingMessage.delivered_at.is_(None))
+                .filter(PendingMessage.scheduled_at <= now)
+                .order_by(PendingMessage.scheduled_at.asc())
+                .all()
+            )
+            for pm in rows:
+                meta = _safe_json(pm.meta_json)
+                base = {
+                    "id": pm.id,
+                    "source": pm.source,
+                    "content": pm.content,
+                    "scheduled_at": pm.scheduled_at.isoformat(timespec="seconds"),
+                    "meta": meta,
+                }
+                if pm.source == "reminder" and pm.scheduled_at <= reminder_cutoff:
+                    overdue = dict(base)
+                    overdue["persistent"] = True
+                    overdue["interrupt"] = False
+                    overdue["meta"] = {**meta, "overdue": True}
+                    overdue["role"] = "system"
+                    events.append(overdue)
+                    if "reminder" not in digest_sources:
+                        digest_sources.append("reminder")
+                    continue
+                if pm.source == "greeting" and pm.scheduled_at <= greeting_cutoff:
+                    pm.delivered_at = now
+                    discarded_count += 1
+                    telemetry.append(
+                        {
+                            "event": "pending_discarded",
+                            "reason": "stale_greeting",
+                            "pending_message_id": pm.id,
+                            "source": pm.source,
+                        }
+                    )
+                    continue
+                if pm.source in {"nudge", "dynamic"}:
+                    pm.delivered_at = now
+                    if pm.source not in digest_sources:
+                        digest_sources.append(pm.source)
+                    telemetry.append(
+                        {
+                            "event": "pending_digested",
+                            "pending_message_id": pm.id,
+                            "source": pm.source,
+                        }
+                    )
+                    continue
+
+                pm.delivered_at = now
+                events.append(base)
+
+        for item in telemetry:
+            event_name = str(item.pop("event"))
+            record_vpet_event(
+                engine,
+                event=event_name,
+                count=1,
+                context=item,
+                client_flags=client_flags or {},
+                server_flags=flags,
+            )
+
+        payload = pending_to_vpet_payload(events, drained=True)
+        payload["digest"] = {
+            "text": _digest_text(digest_sources, discarded_count),
+            "sources": digest_sources,
+            "discarded_count": discarded_count,
+        }
+        return payload
 
     def vpet_status_payload(self) -> dict[str, Any]:
         status = self.status_payload()
@@ -813,8 +1098,8 @@ class AppState:
 
 def create_app(config_path: str = "config.yaml", max_steps: int = 6):
     try:
-        from fastapi import FastAPI, HTTPException
-        from fastapi.responses import FileResponse
+        from fastapi import FastAPI, HTTPException, Request
+        from fastapi.responses import FileResponse, JSONResponse
         from fastapi.staticfiles import StaticFiles
     except ModuleNotFoundError as e:  # pragma: no cover - 只有未安装 api extra 时触发
         raise RuntimeError("缺少 API 依赖,请运行: uv sync --extra api") from e
@@ -827,6 +1112,14 @@ def create_app(config_path: str = "config.yaml", max_steps: int = 6):
     static_dir = _frontend_static_dir(frontend_dir)
     if static_dir.exists():
         app.mount("/static", StaticFiles(directory=static_dir), name="static")
+
+    @app.middleware("http")
+    async def _bridge_auth_middleware(request: Request, call_next):  # noqa: ANN001
+        token = _bridge_token(state)
+        if token and _requires_bridge_auth(request.url.path):
+            if request.headers.get("X-MyBuddy-Token", "") != token:
+                return JSONResponse({"detail": "unauthorized"}, status_code=401)
+        return await call_next(request)
 
     @app.on_event("startup")
     async def _startup() -> None:
@@ -872,18 +1165,39 @@ def create_app(config_path: str = "config.yaml", max_steps: int = 6):
         return state.vpet_status_payload()
 
     @app.post("/api/vpet/chat")
-    async def vpet_chat(req: VPetChatRequest) -> dict[str, Any]:
+    async def vpet_chat(req: VPetChatRequest, request: Request) -> dict[str, Any]:
         if state.agent is None:
             raise HTTPException(status_code=400, detail="LLM api_key 未配置,无法对话")
-        return await state.vpet_chat_payload(req.message, event=req.event)
+        return await state.vpet_chat_payload(
+            req.message,
+            event=req.event,
+            body_state=req.body_state,
+            client_flags=_parse_client_flags(request.headers.get("X-MyBuddy-Client-Flags")),
+        )
+
+    @app.post("/api/vpet/event")
+    async def vpet_event(req: VPetEventRequest, request: Request) -> dict[str, Any]:
+        try:
+            return await state.vpet_event_payload(
+                req,
+                client_flags=_parse_client_flags(
+                    request.headers.get("X-MyBuddy-Client-Flags")
+                ),
+            )
+        except RuntimeError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
 
     @app.get("/api/vpet/pending")
     async def vpet_pending() -> dict[str, Any]:
         return state.vpet_pending_payload(drain=False)
 
     @app.post("/api/vpet/pending/drain")
-    async def vpet_pending_drain() -> dict[str, Any]:
-        return state.vpet_pending_payload(drain=True)
+    async def vpet_pending_drain(req: VPetDrainRequest, request: Request) -> dict[str, Any]:
+        return state.vpet_pending_payload(
+            drain=True,
+            digest=req.digest,
+            client_flags=_parse_client_flags(request.headers.get("X-MyBuddy-Client-Flags")),
+        )
 
     @app.post("/v1/chat/completions")
     async def openai_chat_completions(req: OpenAIChatCompletionRequest) -> dict[str, Any]:
@@ -1245,10 +1559,131 @@ def _sync_memory_backing_delete(engine: Engine, item: dict[str, Any]) -> None:
     # 命题已合并为 SQLite 单一真相源,不再以档案卡形式经记忆端点删除。
 
 
-def _restore_reminders(scheduler: MyBuddyScheduler, engine: Engine) -> None:
-    from mybuddy._time import utcnow
+def _server_flags(cfg: Config | None) -> dict[str, bool]:
+    if cfg is None:
+        return {
+            "body_state_injection": False,
+            "touch_escalation": False,
+            "physical_proactive": False,
+        }
+    return {
+        "body_state_injection": bool(cfg.vpet.body_state_injection),
+        "touch_escalation": bool(cfg.vpet.touch_escalation),
+        "physical_proactive": bool(cfg.vpet.physical_proactive),
+    }
 
-    now = utcnow()
+
+def _parse_client_flags(value: str | None) -> dict[str, Any]:
+    if not value:
+        return {}
+    try:
+        loaded = json.loads(value)
+    except json.JSONDecodeError:
+        return {}
+    if not isinstance(loaded, dict):
+        return {}
+    return {
+        str(k): v
+        for k, v in loaded.items()
+        if isinstance(v, bool | int | float | str) or v is None
+    }
+
+
+def _bridge_token(state: AppState) -> str:
+    cfg = state.cfg
+    if cfg is None:
+        try:
+            cfg = load_config(state.config_path)
+        except Exception:
+            return ""
+    return cfg.vpet.bridge_token.strip()
+
+
+def _requires_bridge_auth(path: str) -> bool:
+    return path.startswith("/api/") or path.startswith("/v1/")
+
+
+def _clamp_int(value: Any, *, low: int, high: int) -> int:
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        number = low
+    return max(low, min(high, number))
+
+
+def _vpet_event_prompt(event: str, *, count: int, context: dict[str, Any]) -> str:
+    if event == "touch_head":
+        return (
+            f"用户刚刚摸了摸你的头,30 秒内共 {count} 次。"
+            "这不是普通聊天输入;请只给一句很短的自然反应,像桌宠被轻轻碰到后的即时回应。"
+            "不要展开新话题,不要反问,不要给建议。"
+        )
+    if event == "touch_body":
+        return (
+            f"用户刚刚轻轻碰了碰你/戳了戳你,30 秒内共 {count} 次。"
+            "这不是普通聊天输入;请只给一句很短的自然反应,像桌宠被轻轻碰到后的即时回应。"
+            "不要展开新话题,不要反问,不要给建议。"
+        )
+    item = str(context.get("item") or "").strip() or "一点东西"
+    return (
+        f"用户刚刚给你喂了{item}。"
+        "这不是普通聊天输入;请只给一句很短的自然反应,像桌宠被轻轻碰到后的即时回应。"
+        "不要展开新话题,不要反问,不要给建议。"
+    )
+
+
+def _digest_text(sources: list[str], discarded_count: int) -> str:
+    parts: list[str] = []
+    if "reminder" in sources:
+        parts.append("一个提醒")
+    if any(source in sources for source in ("nudge", "dynamic")):
+        parts.append("还有一次想叫你歇会儿" if parts else "一次想叫你歇会儿")
+    if not parts:
+        if discarded_count:
+            return "你不在的时候有些过期问候,我已经替你收掉了。"
+        return ""
+    return f"你不在的时候我攒了{_cn_count(len(parts))}件事:{'、'.join(parts)}。"
+
+
+def _cn_count(value: int) -> str:
+    return {1: "一", 2: "两", 3: "三"}.get(value, str(value))
+
+
+def _last_emotion_label(state: AppState) -> str | None:
+    agent = state.agent
+    tracker = getattr(agent, "_emotion_tracker", None) if agent is not None else None
+    items = getattr(tracker, "_items", None) or getattr(tracker, "_window", None)
+    if items:
+        last = list(items)[-1]
+        return str(getattr(last, "label", "") or "") or None
+    return None
+
+
+def _vpet_event_replay_payload(engine: Engine, row: dict[str, Any]) -> dict[str, Any]:
+    if row.get("replied"):
+        text = get_message_content(engine, row.get("message_id"))
+        payload = chat_to_vpet_payload(
+            {
+                "text": text,
+                "turn_id": row.get("turn_id"),
+                "finish_reason": "stop",
+                "pending_messages": [],
+            },
+            source_event=str(row.get("event") or "event"),
+        )
+        payload["replied"] = True
+        payload["event_log_id"] = row.get("id")
+        return payload
+    return {
+        "ok": True,
+        "replied": False,
+        "gate_reason": row.get("gate_reason"),
+        "event_log_id": row.get("id"),
+    }
+
+
+def _restore_reminders(scheduler: MyBuddyScheduler, engine: Engine) -> None:
+    now = _utcnow()
     with session_scope(engine) as s:
         rows = (
             s.query(Reminder)

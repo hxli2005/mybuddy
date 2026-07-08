@@ -18,7 +18,15 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 
-from mybuddy.api import AppState, _frontend_index_path, _frontend_not_built_html
+from mybuddy.api import (
+    AppState,
+    VPetEventRequest,
+    _bridge_token,
+    _frontend_index_path,
+    _frontend_not_built_html,
+    _parse_client_flags,
+    _requires_bridge_auth,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -79,10 +87,10 @@ class _BackgroundLoop:
 
 class DemoServer(ThreadingHTTPServer):
     def __init__(self, server_address, handler, *, state: AppState, frontend_dir: Path):
-        super().__init__(server_address, handler)
         self.state = state
         self.frontend_dir = frontend_dir
         self.bg = _BackgroundLoop()
+        super().__init__(server_address, handler)
 
     def server_close(self) -> None:
         # 关闭前把在途后台 task(记忆抽取 / skill 复盘)跑完,再停常驻 loop,最后关 socket。
@@ -97,6 +105,8 @@ class DemoHandler(BaseHTTPRequestHandler):
     server: DemoServer
 
     def do_GET(self) -> None:  # noqa: N802
+        if not self._authorize_request():
+            return
         try:
             parsed = urlparse(self.path)
             path = parsed.path
@@ -167,6 +177,8 @@ class DemoHandler(BaseHTTPRequestHandler):
             self._send_error(HTTPStatus.INTERNAL_SERVER_ERROR, str(e))
 
     def do_POST(self) -> None:  # noqa: N802
+        if not self._authorize_request():
+            return
         try:
             path = urlparse(self.path).path
             data = self._read_json()
@@ -187,12 +199,35 @@ class DemoHandler(BaseHTTPRequestHandler):
                     return
                 event = str(data.get("event", "chat")).strip() or "chat"
                 payload = self.server.bg.run(
-                    self.server.state.vpet_chat_payload(message, event=event)
+                    self.server.state.vpet_chat_payload(
+                        message,
+                        event=event,
+                        body_state=data.get("body_state") if isinstance(data, dict) else None,
+                        client_flags=_parse_client_flags(
+                            self.headers.get("X-MyBuddy-Client-Flags")
+                        ),
+                    )
+                )
+                self._send_json(payload)
+                return
+            if path == "/api/vpet/event":
+                req = VPetEventRequest.model_validate(data)
+                payload = self.server.bg.run(
+                    self.server.state.vpet_event_payload(
+                        req,
+                        client_flags=_parse_client_flags(
+                            self.headers.get("X-MyBuddy-Client-Flags")
+                        ),
+                    )
                 )
                 self._send_json(payload)
                 return
             if path == "/api/vpet/pending/drain":
-                payload = self.server.state.vpet_pending_payload(drain=True)
+                payload = self.server.state.vpet_pending_payload(
+                    drain=True,
+                    digest=bool(data.get("digest")),
+                    client_flags=_parse_client_flags(self.headers.get("X-MyBuddy-Client-Flags")),
+                )
                 self._send_json(payload)
                 return
             if path == "/v1/chat/completions":
@@ -256,6 +291,8 @@ class DemoHandler(BaseHTTPRequestHandler):
             self._send_error(HTTPStatus.INTERNAL_SERVER_ERROR, str(e))
 
     def do_PUT(self) -> None:  # noqa: N802
+        if not self._authorize_request():
+            return
         try:
             path = urlparse(self.path).path
             data = self._read_json()
@@ -277,6 +314,8 @@ class DemoHandler(BaseHTTPRequestHandler):
             self._send_error(HTTPStatus.INTERNAL_SERVER_ERROR, str(e))
 
     def do_PATCH(self) -> None:  # noqa: N802
+        if not self._authorize_request():
+            return
         try:
             path = urlparse(self.path).path
             data = self._read_json()
@@ -338,6 +377,8 @@ class DemoHandler(BaseHTTPRequestHandler):
             self._send_error(HTTPStatus.INTERNAL_SERVER_ERROR, str(e))
 
     def do_DELETE(self) -> None:  # noqa: N802
+        if not self._authorize_request():
+            return
         try:
             path = urlparse(self.path).path
             user_persona_id = _match_user_persona_route(path)
@@ -406,6 +447,16 @@ class DemoHandler(BaseHTTPRequestHandler):
 
     def _send_error(self, status: HTTPStatus, detail: str) -> None:
         self._send_json({"detail": detail}, status=status)
+
+    def _authorize_request(self) -> bool:
+        path = urlparse(self.path).path
+        token = _bridge_token(self.server.state)
+        if not token or not _requires_bridge_auth(path):
+            return True
+        if self.headers.get("X-MyBuddy-Token", "") == token:
+            return True
+        self._send_error(HTTPStatus.UNAUTHORIZED, "unauthorized")
+        return False
 
 
 def serve(

@@ -11,6 +11,31 @@ from __future__ import annotations
 from typing import Any
 
 BRIDGE_VERSION = "vpet-bridge/1"
+_NUM_0_100 = {"food", "drink", "feeling", "health", "strength"}
+_UNBOUNDED_NONNEG = {"likability", "money"}
+_MODES = {"Happy", "Nomal", "PoorCondition", "Ill"}
+
+
+def normalize_body_state(value: Any) -> dict[str, Any]:
+    """白名单归一化 VPet 身体数值,供事件遥测落表。"""
+    if not isinstance(value, dict):
+        return {}
+    out: dict[str, Any] = {}
+    for key, item in value.items():
+        clean_key = str(key)
+        if clean_key in _NUM_0_100:
+            number = _number(item)
+            if number is not None:
+                out[clean_key] = max(0, min(100, number))
+            continue
+        if clean_key in _UNBOUNDED_NONNEG:
+            number = _number(item)
+            if number is not None:
+                out[clean_key] = max(0, min(100000, number))
+            continue
+        if clean_key == "mode" and str(item) in _MODES:
+            out[clean_key] = str(item)
+    return out
 
 
 def chat_to_vpet_payload(
@@ -61,15 +86,19 @@ def pending_to_vpet_event(item: dict[str, Any]) -> dict[str, Any]:
     source = str(item.get("source") or "unknown")
     content = str(item.get("content") or "")
     action = action_for_pending(source)
+    interrupt = bool(item.get("interrupt", source == "reminder"))
+    speech = {
+        "text": content,
+        "interrupt": interrupt,
+    }
+    if "persistent" in item:
+        speech["persistent"] = bool(item.get("persistent"))
     return {
         "id": item.get("id"),
         "source": source,
         "role": item.get("role") or _role_for_pending(source),
         "text": content,
-        "speech": {
-            "text": content,
-            "interrupt": source == "reminder",
-        },
+        "speech": speech,
         "action": action,
         "expression": expression_for_action(action["name"]),
         "scheduled_at": item.get("scheduled_at"),
@@ -155,3 +184,13 @@ def _float(value: Any) -> float:
         return float(value)
     except (TypeError, ValueError):
         return 0.0
+
+
+def _number(value: Any) -> int | float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if number.is_integer():
+        return int(number)
+    return number

@@ -143,7 +143,15 @@ class Agent:
     def history(self) -> list[Message]:
         return self._memory.get_recent_messages()
 
-    async def run(self, user_input: str) -> AgentResult:
+    async def run(
+        self,
+        user_input: str,
+        *,
+        source: str = "chat",
+        enable_tools: bool = True,
+        meta: dict[str, Any] | None = None,
+        body_state: dict[str, Any] | None = None,
+    ) -> AgentResult:
         # 1. 情绪检测(可选)
         emotion = await self._detect_emotion(user_input)
         emotional_support = build_emotional_support(user_input, emotion)
@@ -171,7 +179,10 @@ class Agent:
         skill_hint, triggered_skills = self._match_skills(user_input, emotion)
 
         # 4. 时效事实预检索:不要把新闻/最新信息完全交给模型自由决定是否调用工具
-        search_context, search_call, search_sources = await self._prefetch_web_search(user_input)
+        if enable_tools:
+            search_context, search_call, search_sources = await self._prefetch_web_search(user_input)
+        else:
+            search_context, search_call, search_sources = "", None, []
         if search_call is not None:
             all_tool_calls.append(search_call)
 
@@ -189,7 +200,11 @@ class Agent:
         # 动态「角色生活」状态:本轮从真实信号(距上次多久 / 现在几点 / 上次聊啥)合成,
         # 让小布「此刻」是活的且接真记忆,而非配置里写死的同一杯温水。失败回退静态。
         life_state = synthesize_living_state(
-            self._config.persona, engine=self._engine, session_id=self._session_id
+            self._config.persona,
+            engine=self._engine,
+            session_id=self._session_id,
+            body_state=body_state,
+            body_state_injection=self._config.vpet.body_state_injection,
         )
         system = build_system_prompt(self._config.persona, extras, life=life_state)
         traj = self._logger.start(
@@ -200,6 +215,10 @@ class Agent:
         if emotion is not None:
             traj.meta["emotion"] = emotion.to_dict()
         traj.meta["emotional_support"] = emotional_support.to_dict()
+        if source != "chat":
+            traj.meta["source"] = source
+        if meta:
+            traj.meta["input_meta"] = dict(meta)
         if triggered_skills:
             traj.meta["triggered_skills"] = list(triggered_skills)
         if search_call is not None:
@@ -216,7 +235,8 @@ class Agent:
             user_input,
             meta={
                 "turn_id": traj.turn_id,
-                "source": "chat",
+                "source": source,
+                **(meta or {}),
             },
         )
         self._memory.add_message(Message(role=Role.USER, content=user_input))
@@ -229,13 +249,14 @@ class Agent:
             messages = build_messages(self._memory.get_recent_messages())
             resp = await self._provider.generate(
                 messages,
-                tools=self._registry.specs() or None,
+                tools=(self._registry.specs() or None) if enable_tools else None,
                 system=system,
             )
 
+            response_tool_calls = list(resp.tool_calls) if enable_tools else []
             tool_call_records = [
                 {"id": tc.id, "name": tc.name, "arguments": tc.arguments}
-                for tc in resp.tool_calls
+                for tc in response_tool_calls
             ]
             all_tool_calls.extend(tool_call_records)
 
@@ -244,7 +265,7 @@ class Agent:
                 tool_calls=tool_call_records,
             )
 
-            if resp.text or resp.tool_calls:
+            if resp.text or response_tool_calls:
                 self._persist_chat_message(
                     Role.ASSISTANT,
                     resp.text or "",
@@ -252,30 +273,32 @@ class Agent:
                         "turn_id": traj.turn_id,
                         "step_index": _step,
                         "finish_reason": resp.finish_reason,
-                        "tool_calls": [tc.model_dump() for tc in resp.tool_calls],
+                        "tool_calls": [tc.model_dump() for tc in response_tool_calls],
                         "usage": resp.usage,
                         **(
                             {"search_sources": search_sources}
-                            if search_sources and not resp.tool_calls
+                            if search_sources and not response_tool_calls
                             else {}
                         ),
+                        **({"source": source} if source != "chat" else {}),
+                        **(meta or {}),
                     },
                 )
                 self._memory.add_message(
                     Message(
                         role=Role.ASSISTANT,
                         content=resp.text or "",
-                        tool_calls=list(resp.tool_calls),
+                        tool_calls=response_tool_calls,
                     )
                 )
 
-            if not resp.tool_calls:
+            if not response_tool_calls:
                 final_text = resp.text
                 finish_reason = resp.finish_reason or "stop"
                 traj.steps.append(step_record)
                 break
 
-            for tc in resp.tool_calls:
+            for tc in response_tool_calls:
                 result_text = await self._registry.execute(tc.name, tc.arguments)
                 self._persist_chat_message(
                     Role.TOOL,
@@ -286,6 +309,8 @@ class Agent:
                         "tool_call_id": tc.id,
                         "tool_name": tc.name,
                         "arguments": tc.arguments,
+                        **({"source": source} if source != "chat" else {}),
+                        **(meta or {}),
                     },
                 )
                 for record in tool_call_records:
