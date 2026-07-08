@@ -12,6 +12,7 @@ from mybuddy.agent.context import build_system_prompt
 from mybuddy.agent.living_state import synthesize_living_state
 from mybuddy.api import AppState, VPetEventRequest
 from mybuddy.config import Config, PersonaConfig
+from mybuddy.emotion import EmotionResult, EmotionTracker
 from mybuddy.integrations.vpet import normalize_body_state
 from mybuddy.storage import (
     Message,
@@ -242,6 +243,7 @@ def test_vpet_pending_drain_digest_three_way(tmp_path) -> None:
     enqueue(engine, source="nudge", content="起来走走?", scheduled_at=old)
 
     payload = state.vpet_pending_payload(drain=True, digest=True)
+    repeat = state.vpet_pending_payload(drain=True, digest=False)
 
     assert payload["drained"] is True
     assert len(payload["events"]) == 1
@@ -253,9 +255,125 @@ def test_vpet_pending_drain_digest_three_way(tmp_path) -> None:
         "sources": ["reminder", "nudge"],
         "discarded_count": 1,
     }
+    assert repeat["events"] == []
     with session_scope(engine) as s:
         telemetry = [row.event for row in s.query(VPetEvent).order_by(VPetEvent.id.asc()).all()]
-        assert telemetry == ["pending_discarded", "pending_digested"]
+        assert telemetry == ["pending_overdue", "pending_discarded", "pending_digested"]
+        assert {row.day_index for row in s.query(VPetEvent).all()} == {1}
+
+
+@pytest.mark.asyncio
+async def test_vpet_event_uses_body_state_and_shortens_reply(tmp_path) -> None:
+    engine = init_db(str(tmp_path / "event_body.db"))
+    cfg = Config()
+    cfg.vpet.touch_escalation = True
+    cfg.vpet.body_state_injection = True
+    state = AppState(config_path="config.yaml")
+    state.engine = engine
+    state.cfg = cfg
+    state.agent = _FakeEventAgent(
+        engine,
+        response_text="我刚吃饱了,现在一点都不饿。顺便说,这句话应该被截掉。",
+    )
+
+    payload = await state.vpet_event_payload(
+        VPetEventRequest(
+            event="touch_head",
+            count=7,
+            body_state={"food": 20},
+            want_reply=True,
+            client_event_id="short-body",
+        )
+    )
+    replay = await state.vpet_event_payload(
+        VPetEventRequest(event="touch_head", want_reply=True, client_event_id="short-body")
+    )
+    aggregate_flush = await state.vpet_event_payload(
+        VPetEventRequest(
+            event="touch_head",
+            count=9,
+            want_reply=False,
+            client_event_id="short-body",
+        )
+    )
+
+    assert payload["speech"]["text"] == "我刚吃饱了,现在一点都不饿。"
+    assert len(payload["speech"]["text"]) <= 28
+    assert replay["speech"]["text"] == payload["speech"]["text"]
+    assert aggregate_flush == {
+        "ok": True,
+        "replied": False,
+        "gate_reason": None,
+        "event_log_id": 1,
+    }
+    assert state.agent.calls[0]["body_state"] == {"food": 20}
+    assert state.agent.calls[0]["meta"]["vpet"]["body_state_present"] is True
+    assert state.agent.calls[0]["meta"]["vpet"]["body_state_used"] is True
+    with session_scope(engine) as s:
+        rows = s.query(VPetEvent).order_by(VPetEvent.id.asc()).all()
+        assert rows[0].event == "touch_head"
+        assert rows[0].count == 9
+        assert rows[0].day_index == 1
+        assert rows[1].event == "body_state_conflict"
+        conflict_context = json.loads(rows[1].context_json or "{}")
+        assert conflict_context["source_event"] == "touch_head"
+        assert "food_low_but_reply_satiated" in conflict_context["reasons"]
+        assistant = s.query(Message).filter(Message.role == "assistant").one()
+        assert assistant.content == payload["speech"]["text"]
+
+
+@pytest.mark.asyncio
+async def test_vpet_chat_records_telemetry_and_body_conflicts(tmp_path) -> None:
+    engine = init_db(str(tmp_path / "chat_telemetry.db"))
+    cfg = Config()
+    cfg.vpet.body_state_injection = True
+    state = AppState(config_path="config.yaml")
+    state.engine = engine
+    state.cfg = cfg
+    state.agent = _FakeChatAgent(engine, response_text="我刚吃饱了,不饿。")
+
+    payload = await state.vpet_chat_payload(
+        "饿了吗",
+        event="user_chat",
+        body_state={"food": 10},
+        client_flags={"body_state_injection": True},
+    )
+
+    assert payload["speech"]["text"] == "我刚吃饱了,不饿。"
+    with session_scope(engine) as s:
+        rows = s.query(VPetEvent).order_by(VPetEvent.id.asc()).all()
+        assert [row.event for row in rows] == ["user_chat", "body_state_conflict"]
+        assert rows[0].replied == 1
+        assert rows[0].turn_id == "turn-chat"
+        assert rows[0].message_id is not None
+        assert rows[0].day_index == 1
+        assert json.loads(rows[0].body_state_json or "{}") == {"food": 10}
+        assert json.loads(rows[0].client_flags_json or "{}") == {
+            "body_state_injection": True
+        }
+        conflict_context = json.loads(rows[1].context_json or "{}")
+        assert conflict_context["source_event"] == "user_chat"
+        assert "food_low_but_reply_satiated" in conflict_context["reasons"]
+
+
+@pytest.mark.asyncio
+async def test_vpet_event_records_latest_emotion_label(tmp_path) -> None:
+    engine = init_db(str(tmp_path / "event_emotion.db"))
+    cfg = Config()
+    state = AppState(config_path="config.yaml")
+    state.engine = engine
+    state.cfg = cfg
+    tracker = EmotionTracker(window=5)
+    tracker.add(EmotionResult(label="negative", strength=0.8, reason="压力"))
+    state.agent = SimpleNamespace(_emotion_tracker=tracker)
+
+    await state.vpet_event_payload(
+        VPetEventRequest(event="touch_head", want_reply=False, client_event_id="emotion")
+    )
+
+    with session_scope(engine) as s:
+        row = s.query(VPetEvent).one()
+        assert row.last_emotion_label == "negative"
 
 
 def test_web_token_auth_guards_api_and_v1_but_not_root() -> None:
@@ -273,8 +391,9 @@ def test_web_token_auth_guards_api_and_v1_but_not_root() -> None:
 class _FakeEventAgent:
     session_id = "fake-session"
 
-    def __init__(self, engine: Any) -> None:
+    def __init__(self, engine: Any, response_text: str = "轻点嘛,我在呢。") -> None:
         self.engine = engine
+        self.response_text = response_text
         self.calls: list[dict[str, Any]] = []
 
     async def run(
@@ -284,6 +403,7 @@ class _FakeEventAgent:
         source: str = "chat",
         enable_tools: bool = True,
         meta: dict[str, Any] | None = None,
+        body_state: dict[str, Any] | None = None,
     ) -> Any:
         self.calls.append(
             {
@@ -291,6 +411,7 @@ class _FakeEventAgent:
                 "source": source,
                 "enable_tools": enable_tools,
                 "meta": meta,
+                "body_state": body_state,
             }
         )
         turn_id = "turn-event"
@@ -305,11 +426,11 @@ class _FakeEventAgent:
             self.engine,
             session_id=self.session_id,
             role="assistant",
-            content="轻点嘛,我在呢。",
+            content=self.response_text,
             meta={"turn_id": turn_id, "source": source, **(meta or {})},
         )
         return SimpleNamespace(
-            text="轻点嘛,我在呢。",
+            text=self.response_text,
             steps=1,
             finish_reason="stop",
             trajectory=SimpleNamespace(turn_id=turn_id),
@@ -324,8 +445,9 @@ class _FakeEventAgent:
 class _FakeChatAgent:
     session_id = "fake-chat"
 
-    def __init__(self, engine: Any) -> None:
+    def __init__(self, engine: Any, response_text: str = "我在。") -> None:
         self.engine = engine
+        self.response_text = response_text
         self.calls: list[dict[str, Any]] = []
         self._memory = SimpleNamespace(add_message=lambda _message: None)
 
@@ -359,11 +481,11 @@ class _FakeChatAgent:
             self.engine,
             session_id=self.session_id,
             role="assistant",
-            content="我在。",
+            content=self.response_text,
             meta={"turn_id": turn_id, "source": source},
         )
         return SimpleNamespace(
-            text="我在。",
+            text=self.response_text,
             steps=1,
             finish_reason="stop",
             trajectory=SimpleNamespace(turn_id=turn_id),

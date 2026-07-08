@@ -58,7 +58,7 @@ public sealed class MyBuddyPlugin : IDisposable
             TimeSpan.FromSeconds(5),
             TimeSpan.FromSeconds(5));
 
-        _host.ShowBridgeStatus("MyBuddy bridge ready.", BridgeStatusKind.Normal);
+        RunFireAndForget(CheckStatusAsync);
     }
 
     public void Stop()
@@ -81,11 +81,13 @@ public sealed class MyBuddyPlugin : IDisposable
         _settings.TouchEscalation = settings.TouchEscalation;
         _settings.PhysicalProactive = settings.PhysicalProactive;
         _settings.TodayQuiet = settings.TodayQuiet;
+        _settings.TodayQuietDate = settings.TodayQuietDate;
         _settings.IdlePauseMinutes = settings.IdlePauseMinutes;
         _settings.DrainPollSeconds = settings.DrainPollSeconds;
         _settings.PresencePollSeconds = settings.PresencePollSeconds;
         _settings.PhysicalCooldownMinutes = settings.PhysicalCooldownMinutes;
         _settings.PhysicalDailyLimit = settings.PhysicalDailyLimit;
+        _settings.NormalizeTodayQuiet();
         _client.UpdateSettings(_settings);
     }
 
@@ -145,6 +147,15 @@ public sealed class MyBuddyPlugin : IDisposable
             _host.CaptureBodyState(),
             cancellationToken).ConfigureAwait(false);
         _drain.DispatchBridgeResponse(response);
+    }
+
+    private async Task CheckStatusAsync(CancellationToken cancellationToken)
+    {
+        var status = await _client.GetStatusAsync(cancellationToken).ConfigureAwait(false);
+        if (status?.Ok == true)
+        {
+            _host.ShowBridgeStatus("bridge connected.", BridgeStatusKind.Normal);
+        }
     }
 
     private async Task<VPetEventResponse> PostEventAndMaybeShowAsync(

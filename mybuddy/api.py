@@ -42,10 +42,14 @@ from mybuddy.llm import Role, make_provider
 from mybuddy.memory import LongTermMemory, MemoryManager, UserProfile
 from mybuddy.scheduler import MyBuddyScheduler
 from mybuddy.storage import (
+    Message as StoredMessage,
+)
+from mybuddy.storage import (
     Note,
     PendingMessage,
     Reminder,
     UserSummaryRecord,
+    VPetEvent,
     append_message,
     bind_external_account,
     count_vpet_escalations_today,
@@ -394,13 +398,35 @@ class AppState:
     ) -> dict[str, Any]:
         normalized_body = normalize_body_state(body_state)
         body_state_used = bool(self.cfg and self.cfg.vpet.body_state_injection and normalized_body)
+        event_log_id: int | None = None
+        flags = _server_flags(self.cfg)
+        engine = self.engine
+        if engine is not None:
+            row, _ = record_vpet_event(
+                engine,
+                event=event or "chat",
+                count=1,
+                body_state=normalized_body,
+                context={
+                    "kind": "chat",
+                    "message_length": len(message.strip()),
+                    "body_state_used": body_state_used,
+                },
+                want_reply=True,
+                client_flags=client_flags or {},
+                server_flags=flags,
+                last_emotion_label=_last_emotion_label(self),
+                day_index=_vpet_day_index(engine),
+            )
+            event_log_id = int(row["id"])
         vpet_meta = {
             "vpet": {
                 "event": event,
                 "body_state_present": bool(normalized_body),
                 "body_state_used": body_state_used,
                 "client_flags": client_flags or {},
-                "server_flags": _server_flags(self.cfg),
+                "server_flags": flags,
+                **({"event_log_id": event_log_id} if event_log_id is not None else {}),
             }
         }
         try:
@@ -415,6 +441,29 @@ class AppState:
             if "unexpected keyword argument" not in str(e):
                 raise
             chat = await self.chat_payload(message)
+        turn_id = str(chat.get("turn_id") or "") or None
+        message_id = (
+            latest_assistant_message_id(engine, turn_id=turn_id)
+            if engine is not None and turn_id is not None
+            else None
+        )
+        if engine is not None and event_log_id is not None:
+            mark_vpet_event_result(
+                engine,
+                event_log_id,
+                replied=bool(chat.get("text")),
+                turn_id=turn_id,
+                message_id=message_id,
+            )
+        text = str(chat.get("text") or "")
+        self._record_body_state_conflicts(
+            body_state=normalized_body,
+            text=text,
+            source_event=event,
+            turn_id=turn_id,
+            message_id=message_id,
+            client_flags=client_flags,
+        )
         return chat_to_vpet_payload(chat, source_event=event)
 
     async def openai_chat_completion_payload(
@@ -476,6 +525,11 @@ class AppState:
             return self._vpet_digest_pending_payload(client_flags=client_flags)
 
         items = drain_pending(engine)
+        self._record_vpet_pending_delivery_telemetry(
+            items,
+            event="pending_drained",
+            client_flags=client_flags,
+        )
         if self.agent is not None:
             items = _integrate_pending_messages(
                 engine,
@@ -499,6 +553,7 @@ class AppState:
         body_state = normalize_body_state(req.body_state)
         context = req.context if isinstance(req.context, dict) else {}
         flags = _server_flags(self.cfg)
+        body_state_used = bool(self.cfg and self.cfg.vpet.body_state_injection and body_state)
         row, created = record_vpet_event(
             engine,
             event=event,
@@ -510,9 +565,16 @@ class AppState:
             client_flags=client_flags or {},
             server_flags=flags,
             last_emotion_label=_last_emotion_label(self),
-            day_index=None,
+            day_index=_vpet_day_index(engine),
         )
         if not created:
+            if not req.want_reply:
+                return {
+                    "ok": True,
+                    "replied": False,
+                    "gate_reason": row.get("gate_reason"),
+                    "event_log_id": row["id"],
+                }
             return _vpet_event_replay_payload(engine, row)
 
         if not req.want_reply or event == "user_back":
@@ -553,16 +615,23 @@ class AppState:
                         "vpet": {
                             "event": event,
                             "count": count,
-                            "body_state_used": False,
+                            "body_state_present": bool(body_state),
+                            "body_state_used": body_state_used,
                             "client_event_id": req.client_event_id,
                             "event_log_id": row["id"],
+                            "client_flags": client_flags or {},
+                            "server_flags": flags,
                         }
                     },
+                    body_state=body_state if body_state_used else None,
                 )
         finally:
             self.agent_lock.release()
 
         message_id = latest_assistant_message_id(engine, turn_id=result.trajectory.turn_id)
+        reply_text = _short_vpet_reaction(result.text)
+        if message_id is not None and reply_text != result.text:
+            _update_message_content(engine, message_id, reply_text)
         mark_vpet_event_result(
             engine,
             row["id"],
@@ -573,7 +642,7 @@ class AppState:
         )
         payload = chat_to_vpet_payload(
             {
-                "text": result.text,
+                "text": reply_text,
                 "turn_id": result.trajectory.turn_id,
                 "finish_reason": result.finish_reason,
                 "emotion": result.emotion.to_dict() if result.emotion else None,
@@ -587,6 +656,14 @@ class AppState:
         )
         payload["replied"] = True
         payload["event_log_id"] = row["id"]
+        self._record_body_state_conflicts(
+            body_state=body_state,
+            text=reply_text,
+            source_event=event,
+            turn_id=result.trajectory.turn_id,
+            message_id=message_id,
+            client_flags=client_flags,
+        )
         return payload
 
     def _mark_vpet_event_gate(self, event_id: int, gate_reason: str) -> dict[str, Any]:
@@ -639,8 +716,17 @@ class AppState:
                     overdue["meta"] = {**meta, "overdue": True}
                     overdue["role"] = "system"
                     events.append(overdue)
+                    pm.delivered_at = now
                     if "reminder" not in digest_sources:
                         digest_sources.append("reminder")
+                    telemetry.append(
+                        {
+                            "event": "pending_overdue",
+                            "pending_message_id": pm.id,
+                            "source": pm.source,
+                            "reason": "overdue_reminder",
+                        }
+                    )
                     continue
                 if pm.source == "greeting" and pm.scheduled_at <= greeting_cutoff:
                     pm.delivered_at = now
@@ -669,6 +755,13 @@ class AppState:
 
                 pm.delivered_at = now
                 events.append(base)
+                telemetry.append(
+                    {
+                        "event": "pending_drained",
+                        "pending_message_id": pm.id,
+                        "source": pm.source,
+                    }
+                )
 
         for item in telemetry:
             event_name = str(item.pop("event"))
@@ -679,6 +772,7 @@ class AppState:
                 context=item,
                 client_flags=client_flags or {},
                 server_flags=flags,
+                day_index=_vpet_day_index(engine),
             )
 
         payload = pending_to_vpet_payload(events, drained=True)
@@ -688,6 +782,62 @@ class AppState:
             "discarded_count": discarded_count,
         }
         return payload
+
+    def _record_vpet_pending_delivery_telemetry(
+        self,
+        items: list[dict[str, Any]],
+        *,
+        event: str,
+        client_flags: dict[str, Any] | None = None,
+    ) -> None:
+        if not items or self.engine is None:
+            return
+        flags = _server_flags(self.cfg)
+        for item in items:
+            record_vpet_event(
+                self.engine,
+                event=event,
+                count=1,
+                context={
+                    "pending_message_id": item.get("id"),
+                    "source": item.get("source"),
+                },
+                client_flags=client_flags or {},
+                server_flags=flags,
+                day_index=_vpet_day_index(self.engine),
+            )
+
+    def _record_body_state_conflicts(
+        self,
+        *,
+        body_state: dict[str, Any],
+        text: str,
+        source_event: str,
+        turn_id: str | None,
+        message_id: int | None,
+        client_flags: dict[str, Any] | None = None,
+    ) -> None:
+        if not body_state or not text or self.engine is None:
+            return
+        reasons = _body_state_conflicts(text, body_state)
+        if not reasons:
+            return
+        record_vpet_event(
+            self.engine,
+            event="body_state_conflict",
+            count=len(reasons),
+            body_state=body_state,
+            context={
+                "source_event": source_event,
+                "turn_id": turn_id,
+                "message_id": message_id,
+                "reasons": reasons,
+                "text_sample": text[:80],
+            },
+            client_flags=client_flags or {},
+            server_flags=_server_flags(self.cfg),
+            day_index=_vpet_day_index(self.engine),
+        )
 
     def vpet_status_payload(self) -> dict[str, Any]:
         status = self.status_payload()
@@ -1611,6 +1761,15 @@ def _clamp_int(value: Any, *, low: int, high: int) -> int:
     return max(low, min(high, number))
 
 
+def _vpet_day_index(engine: Engine) -> int:
+    today = _utcnow().date()
+    with session_scope(engine) as s:
+        first = s.query(VPetEvent.created_at).order_by(VPetEvent.created_at.asc()).first()
+    if first is None or first[0] is None:
+        return 1
+    return max((today - first[0].date()).days + 1, 1)
+
+
 def _vpet_event_prompt(event: str, *, count: int, context: dict[str, Any]) -> str:
     if event == "touch_head":
         return (
@@ -1652,16 +1811,84 @@ def _cn_count(value: int) -> str:
 def _last_emotion_label(state: AppState) -> str | None:
     agent = state.agent
     tracker = getattr(agent, "_emotion_tracker", None) if agent is not None else None
-    items = getattr(tracker, "_items", None) or getattr(tracker, "_window", None)
+    latest = getattr(tracker, "latest", None)
+    if callable(latest):
+        item = latest()
+        if item is not None:
+            return str(getattr(item, "label", "") or "") or None
+    items = (
+        getattr(tracker, "_results", None)
+        or getattr(tracker, "_items", None)
+        or getattr(tracker, "_window", None)
+    )
     if items:
         last = list(items)[-1]
         return str(getattr(last, "label", "") or "") or None
     return None
 
 
+def _short_vpet_reaction(text: str, *, limit: int = 28) -> str:
+    clean = " ".join(str(text or "").split())
+    if not clean:
+        return ""
+    match = re.search(r"[。！？!?]", clean)
+    if match is not None:
+        clean = clean[: match.end()]
+    else:
+        clean = re.split(r"[；;]", clean, maxsplit=1)[0].strip()
+    if len(clean) <= limit:
+        return clean
+    return clean[:limit].rstrip("，,、；;。！？!? ")
+
+
+def _update_message_content(engine: Engine, message_id: int, text: str) -> None:
+    with session_scope(engine) as s:
+        row = s.query(StoredMessage).filter(StoredMessage.id == message_id).one_or_none()
+        if row is not None:
+            row.content = text
+
+
+def _body_state_conflicts(text: str, body_state: dict[str, Any]) -> list[str]:
+    clean = str(text or "")
+    reasons: list[str] = []
+    food = _body_state_number(body_state, "food")
+    drink = _body_state_number(body_state, "drink")
+    feeling = _body_state_number(body_state, "feeling")
+    health = _body_state_number(body_state, "health")
+    strength = _body_state_number(body_state, "strength")
+    mode = str(body_state.get("mode") or "")
+
+    if food is not None and food <= 30 and _contains_any(clean, ["不饿", "吃饱", "饱了", "刚吃", "吃撑"]):
+        reasons.append("food_low_but_reply_satiated")
+    if food is not None and food >= 70 and _contains_any(clean, ["饿坏", "饿扁", "饿得不行", "肚子空"]):
+        reasons.append("food_high_but_reply_hungry")
+    if drink is not None and drink <= 30 and _contains_any(clean, ["不渴", "刚喝", "喝饱", "水还温"]):
+        reasons.append("drink_low_but_reply_not_thirsty")
+    if feeling is not None and feeling <= 30 and _contains_any(clean, ["心情很好", "超开心", "开心得很", "很高兴"]):
+        reasons.append("feeling_low_but_reply_happy")
+    if strength is not None and strength <= 30 and _contains_any(clean, ["精力满满", "元气满满", "有力气", "不累"]):
+        reasons.append("strength_low_but_reply_energetic")
+    if (
+        (health is not None and health <= 30) or mode in {"Ill", "PoorCondition"}
+    ) and _contains_any(clean, ["身体很好", "很健康", "没不舒服", "状态很好"]):
+        reasons.append("health_low_or_bad_mode_but_reply_healthy")
+    return reasons
+
+
+def _body_state_number(body_state: dict[str, Any], key: str) -> float | None:
+    value = body_state.get(key)
+    if isinstance(value, int | float):
+        return float(value)
+    return None
+
+
+def _contains_any(text: str, needles: list[str]) -> bool:
+    return any(item in text for item in needles)
+
+
 def _vpet_event_replay_payload(engine: Engine, row: dict[str, Any]) -> dict[str, Any]:
     if row.get("replied"):
-        text = get_message_content(engine, row.get("message_id"))
+        text = _short_vpet_reaction(get_message_content(engine, row.get("message_id")))
         payload = chat_to_vpet_payload(
             {
                 "text": text,

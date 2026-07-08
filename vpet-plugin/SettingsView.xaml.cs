@@ -36,13 +36,13 @@ public partial class SettingsView : Window
             BodyStateInjection = BodyStateInjectionBox.IsChecked == true,
             TouchEscalation = TouchEscalationBox.IsChecked == true,
             PhysicalProactive = PhysicalProactiveBox.IsChecked == true,
-            TodayQuiet = TodayQuietBox.IsChecked == true,
             IdlePauseMinutes = _current.IdlePauseMinutes,
             DrainPollSeconds = _current.DrainPollSeconds,
             PresencePollSeconds = _current.PresencePollSeconds,
             PhysicalCooldownMinutes = _current.PhysicalCooldownMinutes,
             PhysicalDailyLimit = _current.PhysicalDailyLimit,
         };
+        updated.SetTodayQuiet(TodayQuietBox.IsChecked == true);
         SaveRequested?.Invoke(this, new SettingsSavedEventArgs(updated));
         DialogResult = true;
         Close();

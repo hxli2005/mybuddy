@@ -38,6 +38,15 @@ def record_vpet_event(
                 .one_or_none()
             )
             if existing is not None:
+                if count > existing.count:
+                    existing.count = count
+                if body_state:
+                    existing.body_state_json = _dump_json_or_none(body_state)
+                if context:
+                    existing.context_json = _dump_json_or_none(context)
+                if client_flags:
+                    existing.client_flags_json = _dump_json_or_none(client_flags)
+                s.flush()
                 return _event_payload(existing), False
 
         row = VPetEvent(

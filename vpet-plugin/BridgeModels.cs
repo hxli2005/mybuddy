@@ -12,6 +12,7 @@ public sealed class BridgeSettings
     public bool TouchEscalation { get; set; }
     public bool PhysicalProactive { get; set; }
     public bool TodayQuiet { get; set; }
+    public string? TodayQuietDate { get; set; }
     public int IdlePauseMinutes { get; set; } = 30;
     public int DrainPollSeconds { get; set; } = 20;
     public int PresencePollSeconds { get; set; } = 5;
@@ -24,6 +25,35 @@ public sealed class BridgeSettings
         TouchEscalation = TouchEscalation,
         PhysicalProactive = PhysicalProactive,
     };
+
+    public void SetTodayQuiet(bool enabled, DateTimeOffset? now = null)
+    {
+        TodayQuiet = enabled;
+        TodayQuietDate = enabled ? TodayKey(now ?? DateTimeOffset.Now) : null;
+    }
+
+    public void NormalizeTodayQuiet(DateTimeOffset? now = null)
+    {
+        if (!TodayQuiet)
+        {
+            TodayQuietDate = null;
+            return;
+        }
+
+        var today = TodayKey(now ?? DateTimeOffset.Now);
+        if (string.IsNullOrWhiteSpace(TodayQuietDate))
+        {
+            TodayQuietDate = today;
+            return;
+        }
+        if (!string.Equals(TodayQuietDate, today, StringComparison.Ordinal))
+        {
+            TodayQuiet = false;
+            TodayQuietDate = null;
+        }
+    }
+
+    private static string TodayKey(DateTimeOffset now) => now.ToString("yyyy-MM-dd");
 }
 
 public sealed class ClientFlags

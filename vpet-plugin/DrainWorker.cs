@@ -115,6 +115,7 @@ public sealed class DrainWorker
     private bool CanPhysicalInterrupt()
     {
         ResetDailyIfNeeded();
+        _settings.NormalizeTodayQuiet();
         if (!_settings.PhysicalProactive || _settings.TodayQuiet)
         {
             return false;
@@ -147,5 +148,6 @@ public sealed class DrainWorker
         _physicalDay = today;
         _physicalCountToday = 0;
         _lastPhysicalAt = DateTimeOffset.MinValue;
+        _settings.NormalizeTodayQuiet();
     }
 }
