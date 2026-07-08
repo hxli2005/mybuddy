@@ -121,6 +121,12 @@ class DemoHandler(BaseHTTPRequestHandler):
             if path == "/api/status":
                 self._send_json(self.server.state.status_payload())
                 return
+            if path == "/api/vpet/status":
+                self._send_json(self.server.state.vpet_status_payload())
+                return
+            if path == "/api/vpet/pending":
+                self._send_json(self.server.state.vpet_pending_payload(drain=False))
+                return
             if path == "/api/persona":
                 self._send_json(self.server.state.persona_payload())
                 return
@@ -172,6 +178,37 @@ class DemoHandler(BaseHTTPRequestHandler):
                 # 投递到常驻 loop:回复返回后,agent 起的后台抽取/复盘 task 仍能跑完
                 # (不像 asyncio.run 那样在请求结束时把它们一起取消)。
                 payload = self.server.bg.run(self.server.state.chat_payload(message))
+                self._send_json(payload)
+                return
+            if path == "/api/vpet/chat":
+                message = str(data.get("message", "")).strip()
+                if not message:
+                    self._send_error(HTTPStatus.BAD_REQUEST, "message is required")
+                    return
+                event = str(data.get("event", "chat")).strip() or "chat"
+                payload = self.server.bg.run(
+                    self.server.state.vpet_chat_payload(message, event=event)
+                )
+                self._send_json(payload)
+                return
+            if path == "/api/vpet/pending/drain":
+                payload = self.server.state.vpet_pending_payload(drain=True)
+                self._send_json(payload)
+                return
+            if path == "/v1/chat/completions":
+                if bool(data.get("stream")):
+                    self._send_error(HTTPStatus.BAD_REQUEST, "stream=true 暂不支持")
+                    return
+                messages = data.get("messages")
+                if not isinstance(messages, list):
+                    self._send_error(HTTPStatus.BAD_REQUEST, "messages is required")
+                    return
+                payload = self.server.bg.run(
+                    self.server.state.openai_chat_completion_payload(
+                        messages=messages,
+                        model=str(data.get("model", "mybuddy")),
+                    )
+                )
                 self._send_json(payload)
                 return
             if path == "/api/feedback":

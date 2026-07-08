@@ -11,6 +11,7 @@ from mybuddy.api import (
     _append_tool_summary,
     _extract_weather_city,
     _integrate_pending_messages,
+    _last_user_message_text,
     _run_deterministic_demo_tools,
 )
 from mybuddy.config import Config, PersonaConfig, load_config
@@ -73,6 +74,109 @@ def test_append_weather_summary() -> None:
     )
 
     assert "北京当前晴" in text
+
+
+@pytest.mark.asyncio
+async def test_vpet_chat_payload_maps_chat_result(monkeypatch) -> None:
+    state = AppState(config_path="config.yaml")
+
+    async def fake_chat_payload(message: str) -> dict:
+        assert message == "今天有点撑不住"
+        return {
+            "text": "先坐会儿,别硬顶。",
+            "turn_id": "turn-vpet",
+            "finish_reason": "stop",
+            "emotion": {"label": "negative", "strength": 0.8, "reason": "疲惫"},
+            "emotional_support": {"mode": "strong_support"},
+            "tool_calls": [],
+            "triggered_skills": [],
+            "search_sources": [],
+            "pending_messages": [
+                {
+                    "id": 7,
+                    "source": "greeting",
+                    "content": "早上好呀",
+                    "scheduled_at": "2026-06-05T09:17:00",
+                }
+            ],
+        }
+
+    monkeypatch.setattr(state, "chat_payload", fake_chat_payload)
+
+    payload = await state.vpet_chat_payload("今天有点撑不住", event="user_chat")
+
+    assert payload["bridge"] == "vpet-bridge/1"
+    assert payload["speech"]["text"] == "先坐会儿,别硬顶。"
+    assert payload["action"]["name"] == "concern"
+    assert payload["expression"]["name"] == "worried"
+    assert payload["pending"][0]["action"]["name"] == "greet"
+
+
+def test_vpet_pending_payload_can_peek_and_drain(tmp_path) -> None:
+    engine = init_db(str(tmp_path / "vpet_pending.db"))
+    state = AppState(config_path="config.yaml")
+    state.engine = engine
+    enqueue(engine, source="reminder", content="提醒:喝水", meta={"reminder_id": 3})
+
+    peek = state.vpet_pending_payload(drain=False)
+    drained = state.vpet_pending_payload(drain=True)
+    after = state.vpet_pending_payload(drain=False)
+
+    assert peek["drained"] is False
+    assert peek["events"][0]["action"]["name"] == "remind"
+    assert peek["events"][0]["speech"]["interrupt"] is True
+    assert drained["drained"] is True
+    assert drained["events"][0]["expression"]["name"] == "alert"
+    assert after["events"] == []
+
+
+def test_last_user_message_text_supports_openai_content_parts() -> None:
+    assert (
+        _last_user_message_text(
+            [
+                {"role": "system", "content": "ignore"},
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "你好"},
+                        {"type": "input_text", "text": "讲个笑话"},
+                    ],
+                },
+            ]
+        )
+        == "你好\n讲个笑话"
+    )
+
+
+@pytest.mark.asyncio
+async def test_openai_chat_completion_payload_wraps_mybuddy(monkeypatch) -> None:
+    state = AppState(config_path="config.yaml")
+
+    async def fake_chat_payload(message: str) -> dict:
+        assert message == "你好"
+        return {
+            "text": "你好,我在。",
+            "turn_id": "abc123",
+            "finish_reason": "stop",
+            "emotion": {"label": "neutral", "strength": 0.0},
+            "emotional_support": {"mode": "neutral"},
+            "tool_calls": [],
+            "triggered_skills": [],
+            "search_sources": [],
+            "pending_messages": [],
+        }
+
+    monkeypatch.setattr(state, "chat_payload", fake_chat_payload)
+
+    payload = await state.openai_chat_completion_payload(
+        model="mybuddy-vpet",
+        messages=[{"role": "user", "content": "你好"}],
+    )
+
+    assert payload["object"] == "chat.completion"
+    assert payload["model"] == "mybuddy-vpet"
+    assert payload["choices"][0]["message"] == {"role": "assistant", "content": "你好,我在。"}
+    assert payload["mybuddy"]["action"]["name"] == "talk"
 
 
 def test_update_persona_payload_persists_only_persona_section(tmp_path) -> None:

@@ -2,7 +2,7 @@
 
 生活陪伴型 AI 小伙伴「小布」。借鉴 [NousResearch Hermes Agent](https://github.com/nousresearch/hermes-agent) 的自学习机制,自研 ReAct 主循环、三层文本长期记忆、角色关系编排与动态角色生活状态,配本地 Web 前端。
 
-- 开发日志:[`docs/DEVLOG.md`](docs/DEVLOG.md) · 项目报告:[`docs/项目报告.md`](docs/项目报告.md) · 评测:[`eval/README.md`](eval/README.md)
+- 开发日志:[`docs/DEVLOG.md`](docs/DEVLOG.md) · 项目报告:[`docs/项目报告.md`](docs/项目报告.md) · 评测:[`eval/README.md`](eval/README.md) · VPet 集成:[`docs/VPET.md`](docs/VPET.md)
 
 ## 部署方式一:Docker(推荐,无需 Python/Node 环境)
 

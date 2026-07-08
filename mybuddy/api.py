@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -19,6 +20,10 @@ from pydantic import BaseModel, Field
 from mybuddy.agent import Agent
 from mybuddy.config import Config, PersonaConfig, ensure_dirs, load_config
 from mybuddy.emotion import EmotionDetector, EmotionTracker
+from mybuddy.integrations.vpet import (
+    chat_to_vpet_payload,
+    pending_to_vpet_payload,
+)
 from mybuddy.learning import (
     FeedbackBus,
     FeedbackEvent,
@@ -69,6 +74,22 @@ if TYPE_CHECKING:
 
 class ChatRequest(BaseModel):
     message: str = Field(min_length=1)
+
+
+class VPetChatRequest(BaseModel):
+    message: str = Field(min_length=1)
+    event: str = "chat"
+
+
+class OpenAICompatMessage(BaseModel):
+    role: str
+    content: Any
+
+
+class OpenAIChatCompletionRequest(BaseModel):
+    model: str = "mybuddy"
+    messages: list[OpenAICompatMessage] = Field(default_factory=list)
+    stream: bool = False
 
 
 class FeedbackRequest(BaseModel):
@@ -319,6 +340,92 @@ class AppState:
                 "search_sources": result.search_sources,
                 "pending_messages": pending_before + pending_after,
             }
+
+    async def vpet_chat_payload(self, message: str, *, event: str = "chat") -> dict[str, Any]:
+        return chat_to_vpet_payload(await self.chat_payload(message), source_event=event)
+
+    async def openai_chat_completion_payload(
+        self,
+        *,
+        messages: list[dict[str, Any]],
+        model: str = "mybuddy",
+    ) -> dict[str, Any]:
+        user_text = _last_user_message_text(messages)
+        if not user_text:
+            raise RuntimeError("messages 中缺少 user 内容")
+        chat = await self.chat_payload(user_text)
+        vpet = chat_to_vpet_payload(chat, source_event="chat")
+        finish_reason = chat.get("finish_reason") or "stop"
+        if finish_reason not in {"stop", "length", "tool_calls", "content_filter"}:
+            finish_reason = "stop"
+        turn_id = str(chat.get("turn_id") or int(time.time()))
+        return {
+            "id": f"chatcmpl-mybuddy-{turn_id}",
+            "object": "chat.completion",
+            "created": int(time.time()),
+            "model": model or "mybuddy",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": chat.get("text") or "",
+                    },
+                    "finish_reason": finish_reason,
+                }
+            ],
+            "usage": {
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "total_tokens": 0,
+            },
+            "mybuddy": {
+                "turn_id": chat.get("turn_id"),
+                "emotion": chat.get("emotion"),
+                "emotional_support": chat.get("emotional_support"),
+                "action": vpet["action"],
+                "expression": vpet["expression"],
+                "pending": vpet["pending"],
+            },
+        }
+
+    def vpet_pending_payload(self, *, drain: bool = False) -> dict[str, Any]:
+        engine = _require(self.engine)
+        if not drain:
+            return pending_to_vpet_payload(list_undelivered(engine), drained=False)
+
+        items = drain_pending(engine)
+        if self.agent is not None:
+            items = _integrate_pending_messages(
+                engine,
+                session_id=self.agent.session_id,
+                items=items,
+                add_to_short_term=self.agent._memory.add_message,
+            )
+        return pending_to_vpet_payload(items, drained=True)
+
+    def vpet_status_payload(self) -> dict[str, Any]:
+        status = self.status_payload()
+        return {
+            "ok": True,
+            "bridge": "vpet-bridge/1",
+            "configured": status["configured"],
+            "persona": status.get("persona", {}),
+            "model": status.get("model"),
+            "actions": [
+                "talk",
+                "happy",
+                "comfort",
+                "concern",
+                "safety",
+                "thinking",
+                "greet",
+                "remind",
+                "notify",
+                "react",
+                "idle",
+            ],
+        }
 
     def feedback_payload(self, label: str, turn_id: str | None = None) -> dict[str, Any]:
         if self.feedback_bus is None:
@@ -759,6 +866,38 @@ def create_app(config_path: str = "config.yaml", max_steps: int = 6):
         if state.agent is None:
             raise HTTPException(status_code=400, detail="LLM api_key 未配置,无法对话")
         return await state.chat_payload(req.message)
+
+    @app.get("/api/vpet/status")
+    async def vpet_status() -> dict[str, Any]:
+        return state.vpet_status_payload()
+
+    @app.post("/api/vpet/chat")
+    async def vpet_chat(req: VPetChatRequest) -> dict[str, Any]:
+        if state.agent is None:
+            raise HTTPException(status_code=400, detail="LLM api_key 未配置,无法对话")
+        return await state.vpet_chat_payload(req.message, event=req.event)
+
+    @app.get("/api/vpet/pending")
+    async def vpet_pending() -> dict[str, Any]:
+        return state.vpet_pending_payload(drain=False)
+
+    @app.post("/api/vpet/pending/drain")
+    async def vpet_pending_drain() -> dict[str, Any]:
+        return state.vpet_pending_payload(drain=True)
+
+    @app.post("/v1/chat/completions")
+    async def openai_chat_completions(req: OpenAIChatCompletionRequest) -> dict[str, Any]:
+        if req.stream:
+            raise HTTPException(status_code=400, detail="stream=true 暂不支持")
+        if state.agent is None:
+            raise HTTPException(status_code=400, detail="LLM api_key 未配置,无法对话")
+        try:
+            return await state.openai_chat_completion_payload(
+                messages=[m.model_dump() for m in req.messages],
+                model=req.model,
+            )
+        except RuntimeError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
 
     @app.get("/api/messages")
     async def messages(limit: int = 100, session_id: str | None = None) -> dict[str, Any]:
@@ -1325,6 +1464,35 @@ def _safe_json(value: Any) -> dict[str, Any]:
     except json.JSONDecodeError:
         return {}
     return data if isinstance(data, dict) else {}
+
+
+def _last_user_message_text(messages: list[dict[str, Any]]) -> str:
+    for msg in reversed(messages):
+        if str(msg.get("role") or "").lower() != "user":
+            continue
+        text = _message_content_text(msg.get("content"))
+        if text:
+            return text
+    return ""
+
+
+def _message_content_text(content: Any) -> str:
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            if isinstance(item, dict):
+                if item.get("type") in {None, "text", "input_text"}:
+                    value = item.get("text") or item.get("content")
+                    if value:
+                        parts.append(str(value))
+            elif item:
+                parts.append(str(item))
+        return "\n".join(p.strip() for p in parts if p.strip()).strip()
+    if content is None:
+        return ""
+    return str(content).strip()
 
 
 def _extract_weather_city(message: str) -> str:
