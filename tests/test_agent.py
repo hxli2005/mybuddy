@@ -71,6 +71,35 @@ def _make_memory(engine, config, provider) -> MemoryManager:
 
 
 @pytest.mark.asyncio
+async def test_sensor_event_is_audited_but_not_learned_as_user_fact(tmp_path) -> None:
+    cfg = Config()
+    engine = init_db(str(tmp_path / "sensor.db"))
+    provider = ScriptedProvider([LLMResponse(text="嗯，在呢。", finish_reason="stop")])
+    memory = _make_memory(engine, cfg, provider)
+    agent = Agent(
+        provider=provider,
+        config=cfg,
+        registry=ToolRegistry(),
+        memory=memory,
+        trajectory_logger=TrajectoryLogger(tmp_path / "traj"),
+        engine=engine,
+    )
+
+    result = await agent.run(
+        "用户刚刚摸了摸你的头。",
+        source="vpet_event",
+        enable_tools=False,
+    )
+
+    assert result.text == "嗯，在呢。"
+    assert memory._recent_turns == []
+    with session_scope(engine) as session:
+        user = session.query(DBMessage).filter(DBMessage.role == "user").one()
+        assert user.content == "用户刚刚摸了摸你的头。"
+        assert '"source": "vpet_event"' in (user.meta_json or "")
+
+
+@pytest.mark.asyncio
 async def test_agent_runs_tool_call_then_finishes(tmp_path) -> None:
     cfg = Config()
     engine = init_db(str(tmp_path / "a.db"))

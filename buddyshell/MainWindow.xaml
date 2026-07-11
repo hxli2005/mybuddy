@@ -1,0 +1,39 @@
+<Window x:Class="BuddyShell.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="小布" Width="410" Height="650" WindowStyle="None"
+        AllowsTransparency="True" Background="Transparent" Topmost="True"
+        ShowInTaskbar="False" ResizeMode="NoResize">
+    <Grid>
+        <Border Background="#18000000" CornerRadius="26" />
+        <Grid Margin="9">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="330" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+            <local:Bubble x:Name="SpeechBubble" xmlns:local="clr-namespace:BuddyShell" Margin="8,0" />
+            <Border Grid.Row="1" AllowDrop="True" Drop="AnimationHost_Drop">
+                <ContentControl x:Name="AnimationHostSlot" />
+            </Border>
+            <local:FoodTray x:Name="Foods" xmlns:local="clr-namespace:BuddyShell" Grid.Row="2"
+                            HorizontalAlignment="Center" Margin="0,5" />
+            <local:ChatPanel x:Name="Chat" xmlns:local="clr-namespace:BuddyShell" Grid.Row="3" />
+            <Border x:Name="DragBar" Grid.Row="4" Margin="3,7,3,0" Padding="10,7"
+                    Background="#E8232732" CornerRadius="14">
+                <DockPanel>
+                    <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                        <Button Content="设置" Click="Settings_Click" Margin="8,0,0,0" />
+                        <Button Content="退出" Click="Exit_Click" Margin="4,0,0,0" />
+                    </StackPanel>
+                    <Ellipse x:Name="StatusDot" Width="9" Height="9" Fill="#7ED7A4"
+                             Margin="0,0,8,0" VerticalAlignment="Center" />
+                    <TextBlock x:Name="StatusText" Text="正在加载小布…" Foreground="White"
+                               FontSize="12" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                </DockPanel>
+            </Border>
+        </Grid>
+    </Grid>
+</Window>

@@ -2,6 +2,7 @@
 
 > 形态依据:PRODUCT_V1 §3 + 宪法 1/2(一魂一声;壳无策略,只渲染与传感)。
 > 新顶层目录 `buddyshell/`,net8.0-windows WPF 应用(非插件)。`vpet-plugin/` 冻结为探针,不改不删。
+> 状态:`FINAL`(2026-07-11);Core/帧播放器之外不再存在宿主分叉。
 
 ## 1. 项目结构
 
@@ -18,12 +19,12 @@ buddyshell/
   ChatPanel.xaml(.cs)        # 简易聊天面板:输入 + 最近 20 轮;truncated 时自动展示全文
   FoodTray.xaml(.cs)         # 食盘:五样(协议 §5 目录硬编码),拖到宠物身上 = feed 事件
   TouchLayer.cs              # 头/身两区命中;移植 EventAggregator(30s 聚合/误触过滤/升格启发式)
-  Presence.cs                # 移植 PresenceGate:GetLastInputInfo + 全屏检测 + user_back 流程
+  Presence.cs                # 移植 PresenceGate + user_back + 每20min presence_heartbeat
   Notices.cs                 # 移植 DrainWorker:轮询/digest/overdue/物理主动约束(冷却45min/日上限/今天安静)
-  StateLoop.cs               # 新:GET /api/vpet/state 20s 轮询 → 驱动 idle/生理渲染/warmth
+  StateLoop.cs               # GET state 20s 轮询;server_time 是唯一业务时钟
   Bridge/*.cs                # 移植 BridgeClient + BridgeModels,升 v2 字段
   Tray.cs                    # 托盘:陪我干活(work_start/stop)/今天安静/设置/这句好·差(POST /api/feedback)/退出
-  SettingsWindow.xaml(.cs)   # URL/token/开关镜像/TTS(占位,默认关不实现)/时钟偏移(验收用)
+  SettingsWindow.xaml(.cs)   # URL/token/开关镜像/TTS占位;只显示服务端时钟偏移与重启提示
   assets/pet/                # VPet 默认宠物素材拷贝(见 §4 授权义务)
 ```
 
@@ -37,6 +38,9 @@ buddyshell/
 - **聊天**:发送瞬间播 thinking 动画(延迟掩蔽);超时 15s 气泡示歉 + 状态点黄;token 401 → 状态点红 + 设置窗提示。**任何网络失败不冻结 UI**。
 - **共处**:托盘"陪我干活"→ work_start,宠物进 work 姿态;再点结束 → work_stop,气泡收尾语。
 - **反馈**:托盘"这句好/差"→ POST /api/feedback(phase-2 端点零改动),常开基础设施。
+- **在场心跳**:用户在场时每 20 分钟 POST `presence_heartbeat`;离场暂停,恢复时第一条只覆盖恢复后的实际分钟数。失败进入幂等重发队列,不得把离线时长补成在场。
+- **展示确认**:Bubble/持久卡完成 UI 显示后 POST `notice_shown`;被全屏、睡眠或"今天安静"拦下的不确认。drain 成功但 UI 渲染失败同样不确认。
+- **时钟单一真相源**:壳不计算睡眠窗、不叠加验收偏移;所有日期切换、今天安静复位和验收显示都以 state 的 `server_time` 为准。state 不可用时只维持最后动画,禁止本地推导新的业务行为。
 
 ## 3. IAnimationHost(spike 的隔离层)
 
@@ -49,9 +53,12 @@ public interface IAnimationHost {
     event EventHandler<TouchZone> TouchDetected;            // 头/身命中(含命中区几何)
 }
 ```
-- **实现 A `VPetCoreHost`**(7/12 spike 通过时):包 `VPet-Simulator.Core` 的 graph/display,把 intent 映射到 graph 动画名;touch 区取 Core 的判定或按素材元数据自算。
-- **实现 B `FramePlayerHost`**(spike 失败时):自写帧序列播放器,直接读 `assets/pet/` 的 VPet 素材目录结构(png 帧 + 目录名即状态),intent→目录映射表可配置。
+- **实现 A `VPetCoreHost`**(7/12 spike 四项全过时):包 `VPet-Simulator.Core` 的 graph/display,把 intent 映射到 graph 动画名;touch 区取 Core 的判定或按素材元数据自算。
+- **实现 B `FramePlayerHost`**(任一 spike 条件失败时立即锁定):自写帧序列播放器,直接读 `assets/pet/` 的 VPet 素材目录结构(png 帧 + 目录名即状态),intent→目录映射表可配置。默认素材尚未转换时先用可分发占位帧保全链路,不得延长 Core 调研。
 - 除这两个文件外,**全壳代码不得 import 任何 VPet 命名空间**——spike 结果只波及一个文件。
+
+**7/12 spike 通过条件(缺一即失败)**:默认素材可见、idle 连续播放、头/身命中可区分、进程连续 30 分钟无未处理异常。结论与失败证据写
+`eval/acceptance/v1/spike/decision.md`,18:00 后路线冻结。
 
 ## 4. 素材与授权(义务,不可省)
 
@@ -59,7 +66,10 @@ public interface IAnimationHost {
 
 ## 5. 设置持久化
 
-`%APPDATA%/BuddyShell/settings.json`(URL/token/开关镜像/位置/今天安静的当日日期)。开关镜像随每个请求带 `X-MyBuddy-Client-Flags`(phase-2 机制)。
+`%APPDATA%/BuddyShell/settings.json`(URL/token/开关镜像/位置/今天安静的服务端日期)。开关镜像随每个请求带 `X-MyBuddy-Client-Flags`(phase-2 机制)。不保存时钟偏移。
+
+本地幂等重发队列 `%APPDATA%/BuddyShell/outbox.jsonl` 只允许 event 类请求;每条保存
+`client_event_id/payload/created_at/attempts`,成功后删除,超过 24h 标 dead-letter 并留日志。chat 请求绝不自动重放。
 
 ## 6. 移植映射(来源 vpet-plugin/,处置表联动)
 
@@ -75,5 +85,6 @@ public interface IAnimationHost {
 
 ## 7. 验收钩子
 
-- 时钟偏移设置(SettingsWindow)与引擎 `MYBUDDY_TIME_OFFSET_MINUTES` 配套,ACCEPTANCE 用。
+- SettingsWindow 显示引擎 `server_time/time_offset_minutes`;验收人员通过启动脚本设置环境变量并重启后端,壳不改偏移。
 - 全局日志 `%APPDATA%/BuddyShell/logs/`,证据包引用。
+- 每条日志包含 `server_time/client_event_id/session_id/pending_id` 中适用字段,便于与 SQLite 遥测一一对齐。

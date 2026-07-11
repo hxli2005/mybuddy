@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from mybuddy._time import utcnow as _now
@@ -165,6 +165,45 @@ class VPetEvent(Base):
     last_emotion_label: Mapped[str | None] = mapped_column(String(32), nullable=True)
     day_index: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now, index=True)
+
+
+class PhysioState(Base):
+    """生理曲线当前值;全库固定 id=1。"""
+
+    __tablename__ = "physio_state"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    hunger: Mapped[float] = mapped_column(Float, default=70.0)
+    energy: Mapped[float] = mapped_column(Float, default=70.0)
+    mood: Mapped[float] = mapped_column(Float, default=60.0)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    last_interaction_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    woken_until: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_levels_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class PhysioDaily(Base):
+    """按服务端本地日期持久化的生理限额与聚合账本。"""
+
+    __tablename__ = "physio_daily"
+
+    local_date: Mapped[str] = mapped_column(String(10), primary_key=True)
+    touch_mood_gain: Mapped[float] = mapped_column(Float, default=0.0)
+    chat_mood_gain: Mapped[float] = mapped_column(Float, default=0.0)
+    touch_count: Mapped[int] = mapped_column(Integer, default=0)
+    murmur_count: Mapped[int] = mapped_column(Integer, default=0)
+    feed_items_json: Mapped[str] = mapped_column(Text, default="[]")
+    touch_memory_written: Mapped[bool] = mapped_column(Boolean, default=False)
+    work_stop_speech_count: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class PhysioCooldown(Base):
+    """身体哼唧三条曲线的持久冷却。"""
+
+    __tablename__ = "physio_cooldowns"
+
+    kind: Mapped[str] = mapped_column(String(16), primary_key=True)
+    last_emitted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 class ProfileField(Base):

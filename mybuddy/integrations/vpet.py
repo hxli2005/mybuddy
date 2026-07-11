@@ -8,9 +8,10 @@ without understanding Agent internals.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
-BRIDGE_VERSION = "vpet-bridge/1"
+BRIDGE_VERSION = "vpet-bridge/2"
 _NUM_0_100 = {"food", "drink", "feeling", "health", "strength"}
 _UNBOUNDED_NONNEG = {"likability", "money"}
 _MODES = {"Happy", "Nomal", "PoorCondition", "Ill"}
@@ -45,6 +46,7 @@ def chat_to_vpet_payload(
 ) -> dict[str, Any]:
     """Convert an `/api/chat` style payload into a VPet-facing response."""
     text = str(chat.get("text") or "")
+    speech_text = _short_speech(text)
     action = action_for_chat(chat, source_event=source_event)
     return {
         "ok": True,
@@ -52,8 +54,9 @@ def chat_to_vpet_payload(
         "source_event": source_event,
         "text": text,
         "speech": {
-            "text": text,
+            "text": speech_text,
             "interrupt": action["priority"] >= 80,
+            "truncated": speech_text != text,
         },
         "action": action,
         "expression": expression_for_action(action["name"]),
@@ -144,7 +147,7 @@ def action_for_pending(source: str) -> dict[str, Any]:
         return _action("remind", priority=90, reason="scheduled_reminder")
     if source == "greeting":
         return _action("greet", priority=50, reason="daily_greeting")
-    if source in {"nudge", "dynamic"}:
+    if source in {"nudge", "dynamic", "cowork_break", "body_murmur"}:
         return _action("concern", priority=75, reason=f"proactive_{source}")
     return _action("notify", priority=45, reason=f"pending_{source or 'unknown'}")
 
@@ -194,3 +197,15 @@ def _number(value: Any) -> int | float | None:
     if number.is_integer():
         return int(number)
     return number
+
+
+_SENTENCE_RE = re.compile(r".*?[。！？!?](?:[\"'”’）】])?|.+$", re.S)
+
+
+def _short_speech(text: str) -> str:
+    """气泡最多两句;完整文本仍保留在顶层 text。"""
+    clean = text.strip()
+    if not clean:
+        return ""
+    parts = [part.strip() for part in _SENTENCE_RE.findall(clean) if part.strip()]
+    return "".join(parts[:2]) if parts else clean

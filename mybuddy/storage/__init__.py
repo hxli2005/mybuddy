@@ -9,6 +9,9 @@ from .models import (
     Message,
     Note,
     PendingMessage,
+    PhysioCooldown,
+    PhysioDaily,
+    PhysioState,
     ProfileField,
     Reminder,
     User,
@@ -47,6 +50,7 @@ from .vpet_events import (
     latest_assistant_message_id,
     mark_vpet_event_result,
     record_vpet_event,
+    update_vpet_event_context,
 )
 
 __all__ = [
@@ -57,6 +61,9 @@ __all__ = [
     "Message",
     "Note",
     "PendingMessage",
+    "PhysioCooldown",
+    "PhysioDaily",
+    "PhysioState",
     "ProfileField",
     "Reminder",
     "ResolvedPersonaRecord",
@@ -90,6 +97,7 @@ __all__ = [
     "make_engine",
     "mark_vpet_event_result",
     "record_vpet_event",
+    "update_vpet_event_context",
     "resolve_external_account",
     "resolve_user_persona",
     "session_scope",

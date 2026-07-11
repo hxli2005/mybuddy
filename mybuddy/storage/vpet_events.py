@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
-from mybuddy._time import utcnow
+from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError
+
+from mybuddy._time import localnow
 from mybuddy.storage.db import session_scope
 from mybuddy.storage.models import Message, VPetEvent
 
@@ -30,42 +32,78 @@ def record_vpet_event(
 ) -> tuple[dict[str, Any], bool]:
     """记录一条 VPet 事件;client_event_id 命中时返回旧行和 created=False。"""
     clean_client_event_id = (client_event_id or "").strip() or None
-    with session_scope(engine) as s:
-        if clean_client_event_id is not None:
+    server_now = localnow()
+    enriched_context = dict(context or {})
+    enriched_context.update(
+        {
+            "local_date": server_now.date().isoformat(),
+            "server_time": server_now.isoformat(timespec="seconds"),
+            "client_event_id": clean_client_event_id,
+        }
+    )
+    try:
+        with session_scope(engine) as s:
+            if clean_client_event_id is not None:
+                existing = (
+                    s.query(VPetEvent)
+                    .filter(VPetEvent.client_event_id == clean_client_event_id)
+                    .one_or_none()
+                )
+                if existing is not None:
+                    return _event_payload(existing), False
+
+            row = VPetEvent(
+                client_event_id=clean_client_event_id,
+                event=event,
+                count=count,
+                body_state_json=_dump_json_or_none(body_state),
+                context_json=_dump_json_or_none(enriched_context),
+                want_reply=1 if want_reply else 0,
+                escalated=0,
+                replied=0,
+                client_flags_json=_dump_json_or_none(client_flags),
+                server_flags_json=json.dumps(server_flags, ensure_ascii=False, default=str),
+                last_emotion_label=last_emotion_label,
+                day_index=day_index,
+            )
+            s.add(row)
+            s.flush()
+            return _event_payload(row), True
+    except IntegrityError:
+        if clean_client_event_id is None:
+            raise
+        with session_scope(engine) as s:
             existing = (
                 s.query(VPetEvent)
                 .filter(VPetEvent.client_event_id == clean_client_event_id)
                 .one_or_none()
             )
-            if existing is not None:
-                if count > existing.count:
-                    existing.count = count
-                if body_state:
-                    existing.body_state_json = _dump_json_or_none(body_state)
-                if context:
-                    existing.context_json = _dump_json_or_none(context)
-                if client_flags:
-                    existing.client_flags_json = _dump_json_or_none(client_flags)
-                s.flush()
-                return _event_payload(existing), False
+            if existing is None:
+                raise
+            return _event_payload(existing), False
 
-        row = VPetEvent(
-            client_event_id=clean_client_event_id,
-            event=event,
-            count=count,
-            body_state_json=_dump_json_or_none(body_state),
-            context_json=_dump_json_or_none(context),
-            want_reply=1 if want_reply else 0,
-            escalated=0,
-            replied=0,
-            client_flags_json=_dump_json_or_none(client_flags),
-            server_flags_json=json.dumps(server_flags, ensure_ascii=False, default=str),
-            last_emotion_label=last_emotion_label,
-            day_index=day_index,
+
+def update_vpet_event_context(
+    engine: Engine,
+    event_id: int,
+    updates: dict[str, Any],
+) -> dict[str, Any] | None:
+    """合并回填事件上下文,保留服务端审计字段。"""
+    with session_scope(engine) as s:
+        row = s.get(VPetEvent, event_id)
+        if row is None:
+            return None
+        context = _load_json(row.context_json)
+        context.update(
+            {
+                key: value
+                for key, value in updates.items()
+                if key not in {"local_date", "server_time", "client_event_id"}
+            }
         )
-        s.add(row)
+        row.context_json = _dump_json_or_none(context)
         s.flush()
-        return _event_payload(row), True
+        return _event_payload(row)
 
 
 def mark_vpet_event_result(
@@ -93,14 +131,14 @@ def mark_vpet_event_result(
 
 
 def count_vpet_escalations_today(engine: Engine) -> int:
-    """统计 UTC 当日已批准升格次数。"""
-    today = utcnow().date()
-    start = datetime(today.year, today.month, today.day)
+    """按服务端 local_date 统计当日已批准升格次数。"""
+    today = localnow().date().isoformat()
     with session_scope(engine) as s:
         return (
             s.query(VPetEvent)
-            .filter(VPetEvent.created_at >= start)
+            .filter(VPetEvent.event.in_(["touch_head", "touch_body"]))
             .filter(VPetEvent.escalated == 1)
+            .filter(func.json_extract(VPetEvent.context_json, "$.local_date") == today)
             .count()
         )
 

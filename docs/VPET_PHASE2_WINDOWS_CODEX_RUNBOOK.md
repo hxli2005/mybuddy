@@ -1,5 +1,8 @@
 # VPet Phase 2 Windows Codex Runbook
 
+> **历史运行手册**:仅用于冻结的 O1 调试探针。v1 不再向 `vpet-plugin/` 增加产品功能;
+> Windows v1 施工入口是 `VPET_V1_KICKOFF.md`。
+
 这份文档给 Windows 环境里的 Codex 使用,目标是把 `docs/VPET_PHASE2_SPEC.md`
 最后剩余的 VPet 实机联调跑完。不要用 macOS/Linux 的编译结果替代本清单;最终完成需要真实
 Windows + VPet 窗口行为证据。
@@ -59,6 +62,18 @@ uv run pytest -q
 uv run mybuddy web --host 127.0.0.1 --port 8000
 ```
 
+需要把后端作为单独 Windows 进程留给 VPet 联调时,也可以运行:
+
+```powershell
+Start-Process powershell -ArgumentList @(
+  "-NoProfile",
+  "-ExecutionPolicy", "Bypass",
+  "-File", ".\scripts\start_mybuddy_web.ps1",
+  "-HostAddress", "127.0.0.1",
+  "-Port", "8000"
+) -WindowStyle Hidden
+```
+
 另开 PowerShell 验证状态:
 
 ```powershell
@@ -75,7 +90,13 @@ Invoke-RestMethod http://127.0.0.1:8000/api/vpet/status
 bash scripts/package_vpet_plugin.sh
 ```
 
-如果 Windows 没有 `bash`,用 Git Bash 运行同一命令。成功后应出现:
+如果 Windows 没有 `bash` 或 Git Bash,用 PowerShell 原生脚本运行:
+
+```powershell
+.\scripts\package_vpet_plugin.ps1
+```
+
+成功后应出现:
 
 ```text
 dist/vpet/1114_MyBuddyBridge/
@@ -194,7 +215,7 @@ sqlite3 .\data\mybuddy.db "select event, count, escalated, replied, gate_reason,
 ```powershell
 uv run ruff check mybuddy tests
 uv run pytest -q
-bash scripts/package_vpet_plugin.sh
+.\scripts\package_vpet_plugin.ps1
 ```
 
 4. 重新复制 MOD,重启 VPet,重测失败项。

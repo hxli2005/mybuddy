@@ -41,6 +41,16 @@ htmlcov/
 .ruff_cache/
 .mypy_cache/
 *.tsbuildinfo
+.uv-cache/
+.dotnet-sdk/
+.dotnet-install.ps1
+.dotnet-home/
+.nuget-packages/
+buddyshell/bin/
+buddyshell/obj/
+.tmp/
+vpet-plugin/bin/
+vpet-plugin/obj/
 
 config.yaml
 

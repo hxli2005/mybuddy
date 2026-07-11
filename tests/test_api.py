@@ -13,6 +13,7 @@ from mybuddy.api import (
     _integrate_pending_messages,
     _last_user_message_text,
     _run_deterministic_demo_tools,
+    create_app,
 )
 from mybuddy.config import Config, PersonaConfig, load_config
 from mybuddy.learning import SkillRegistry
@@ -33,6 +34,36 @@ from mybuddy.tools import set_context
 def test_extract_weather_city() -> None:
     assert _extract_weather_city("北京天气怎么样?") == "北京"
     assert _extract_weather_city("请问上海今天气温") == "上海"
+
+
+def test_vpet_business_errors_use_protocol_v2_shape(tmp_path) -> None:
+    from fastapi.testclient import TestClient
+
+    app = create_app(str(tmp_path / "unused.yaml"))
+    state = app.state.mybuddy
+    state.cfg = Config()
+    state.engine = init_db(str(tmp_path / "errors.db"))
+    client = TestClient(app)
+
+    invalid = client.post("/api/vpet/event", json={"event": "not-an-event"})
+    chat = client.post("/api/vpet/chat", json={"message": "在吗"})
+
+    assert invalid.status_code == 400
+    assert invalid.json() == {
+        "ok": False,
+        "error": {"code": "invalid_request", "message": "unsupported vpet event"},
+    }
+    assert chat.status_code == 400
+    assert chat.json()["error"]["code"] == "llm_not_configured"
+
+    state.cfg.vpet.bridge_token = "secret"
+    assert client.get("/api/vpet/state").status_code == 401
+    authorized = client.get(
+        "/api/vpet/state",
+        headers={"X-MyBuddy-Token": "secret"},
+    )
+    assert authorized.status_code == 200
+    assert authorized.json()["bridge"] == "vpet-bridge/2"
 
 
 @pytest.mark.asyncio
@@ -105,7 +136,7 @@ async def test_vpet_chat_payload_maps_chat_result(monkeypatch) -> None:
 
     payload = await state.vpet_chat_payload("今天有点撑不住", event="user_chat")
 
-    assert payload["bridge"] == "vpet-bridge/1"
+    assert payload["bridge"] == "vpet-bridge/2"
     assert payload["speech"]["text"] == "先坐会儿,别硬顶。"
     assert payload["action"]["name"] == "concern"
     assert payload["expression"]["name"] == "worried"

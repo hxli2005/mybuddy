@@ -31,6 +31,7 @@ def admin_env(tmp_path, monkeypatch):
     skills_dir = tmp_path / "skills"
     chroma_dir.mkdir()
     skills_dir.mkdir()
+    trajectories_dir = tmp_path / "traj"
 
     cfg_path.write_text(
         f"""
@@ -40,11 +41,11 @@ llm:
 memory:
   embedding_model: "BAAI/bge-m3"
 paths:
-  data_dir: "{tmp_path}"
-  db_file: "{db_file}"
-  chroma_dir: "{chroma_dir}"
-  skills_dir: "{skills_dir}"
-  trajectories_dir: "{tmp_path}/traj"
+  data_dir: "{tmp_path.as_posix()}"
+  db_file: "{db_file.as_posix()}"
+  chroma_dir: "{chroma_dir.as_posix()}"
+  skills_dir: "{skills_dir.as_posix()}"
+  trajectories_dir: "{trajectories_dir.as_posix()}"
 """,
         encoding="utf-8",
     )

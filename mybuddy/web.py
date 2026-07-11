@@ -27,6 +27,7 @@ from mybuddy.api import (
     _parse_client_flags,
     _requires_bridge_auth,
 )
+from mybuddy.body import PhysioBusyError
 
 logger = logging.getLogger(__name__)
 
@@ -134,6 +135,9 @@ class DemoHandler(BaseHTTPRequestHandler):
             if path == "/api/vpet/status":
                 self._send_json(self.server.state.vpet_status_payload())
                 return
+            if path == "/api/vpet/state":
+                self._send_json(self.server.state.vpet_state_payload())
+                return
             if path == "/api/vpet/pending":
                 self._send_json(self.server.state.vpet_pending_payload(drain=False))
                 return
@@ -171,6 +175,14 @@ class DemoHandler(BaseHTTPRequestHandler):
                 self._send_json(self.server.state.user_persona_payload(user_persona_id))
                 return
             self._send_error(HTTPStatus.NOT_FOUND, "not found")
+        except PhysioBusyError as e:
+            self._send_json(
+                {
+                    "ok": False,
+                    "error": {"code": "physio_busy", "message": str(e)},
+                },
+                status=HTTPStatus.SERVICE_UNAVAILABLE,
+            )
         except ValueError as e:
             self._send_error(HTTPStatus.BAD_REQUEST, str(e))
         except Exception as e:  # noqa: BLE001
@@ -195,7 +207,13 @@ class DemoHandler(BaseHTTPRequestHandler):
             if path == "/api/vpet/chat":
                 message = str(data.get("message", "")).strip()
                 if not message:
-                    self._send_error(HTTPStatus.BAD_REQUEST, "message is required")
+                    self._send_vpet_error("invalid_chat", "message is required")
+                    return
+                if self.server.state.agent is None:
+                    self._send_vpet_error(
+                        "llm_not_configured",
+                        "LLM api_key 未配置,无法对话",
+                    )
                     return
                 event = str(data.get("event", "chat")).strip() or "chat"
                 payload = self.server.bg.run(
@@ -283,10 +301,24 @@ class DemoHandler(BaseHTTPRequestHandler):
                 self._send_json(payload)
                 return
             self._send_error(HTTPStatus.NOT_FOUND, "not found")
+        except PhysioBusyError as e:
+            self._send_json(
+                {
+                    "ok": False,
+                    "error": {"code": "physio_busy", "message": str(e)},
+                },
+                status=HTTPStatus.SERVICE_UNAVAILABLE,
+            )
         except RuntimeError as e:
-            self._send_error(HTTPStatus.BAD_REQUEST, str(e))
+            if path.startswith("/api/vpet/"):
+                self._send_vpet_error("invalid_request", str(e))
+            else:
+                self._send_error(HTTPStatus.BAD_REQUEST, str(e))
         except ValueError as e:
-            self._send_error(HTTPStatus.BAD_REQUEST, str(e))
+            if path.startswith("/api/vpet/"):
+                self._send_vpet_error("invalid_request", str(e))
+            else:
+                self._send_error(HTTPStatus.BAD_REQUEST, str(e))
         except Exception as e:  # noqa: BLE001
             self._send_error(HTTPStatus.INTERNAL_SERVER_ERROR, str(e))
 
@@ -417,11 +449,15 @@ class DemoHandler(BaseHTTPRequestHandler):
 
     def _send_json(self, payload: dict[str, Any], status: HTTPStatus = HTTPStatus.OK) -> None:
         body = json.dumps(payload, ensure_ascii=False, default=str).encode("utf-8")
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
+            # 桌宠有明确请求超时;客户端先离开时不再尝试对同一 socket 回写 500。
+            return
 
     def _send_file(self, path: Path) -> None:
         root = self.server.frontend_dir.resolve()
@@ -447,6 +483,17 @@ class DemoHandler(BaseHTTPRequestHandler):
 
     def _send_error(self, status: HTTPStatus, detail: str) -> None:
         self._send_json({"detail": detail}, status=status)
+
+    def _send_vpet_error(
+        self,
+        code: str,
+        message: str,
+        status: HTTPStatus = HTTPStatus.BAD_REQUEST,
+    ) -> None:
+        self._send_json(
+            {"ok": False, "error": {"code": code, "message": message}},
+            status=status,
+        )
 
     def _authorize_request(self) -> bool:
         path = urlparse(self.path).path

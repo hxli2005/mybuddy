@@ -2,7 +2,7 @@
 
 生活陪伴型 AI 小伙伴「小布」。借鉴 [NousResearch Hermes Agent](https://github.com/nousresearch/hermes-agent) 的自学习机制,自研 ReAct 主循环、三层文本长期记忆、角色关系编排与动态角色生活状态,配本地 Web 前端。
 
-- 开发日志:[`docs/DEVLOG.md`](docs/DEVLOG.md) · 项目报告:[`docs/项目报告.md`](docs/项目报告.md) · 评测:[`eval/README.md`](eval/README.md) · VPet 集成:[`docs/VPET.md`](docs/VPET.md)
+- 开发日志:[`docs/DEVLOG.md`](docs/DEVLOG.md) · 项目报告:[`docs/项目报告.md`](docs/项目报告.md) · 评测:[`eval/README.md`](eval/README.md) · 小布桌宠 v1:[`docs/VPET_V1_KICKOFF.md`](docs/VPET_V1_KICKOFF.md) · O1 历史接入:[`docs/VPET.md`](docs/VPET.md)
 
 ## 部署方式一:Docker(推荐,无需 Python/Node 环境)
 
@@ -35,6 +35,30 @@ uv run mybuddy web                     # Web:http://127.0.0.1:8000
 uv run mybuddy chat                    # 或命令行对话
 ```
 
+## 小布桌宠（Windows）
+
+`buddyshell/` 是 v1 的 WPF 桌宠壳。先启动 MyBuddy Web 后端，再运行：
+
+```powershell
+dotnet run --project buddyshell/BuddyShell.csproj
+```
+
+开发机若已安装 VPet，会自动查找默认宠物素材；也可设置
+`BUDDYSHELL_PET_ROOT` 指向 `0000_core/pet/vup`。发布包由
+`scripts/package_buddyshell.ps1` 生成。
+
+桌宠动画素材版权归[虚拟主播模拟器制作组](https://github.com/LorisYounger/VPet)，
+本项目仅按非商用条件使用；商业化前须另行取得授权。
+
+六拍验收时按拍采集只读证据（初始结果固定为 `FAIL`，不会自动冒充通过）：
+
+```powershell
+uv run python scripts/vpet_acceptance_capture.py --beat 3
+uv run python scripts/vpet_weekly_check.py
+uv run python scripts/vpet_acceptance_finalize.py
+uv run python scripts/vpet_acceptance_verify.py --root eval/acceptance/v1
+```
+
 前端产物不入库:要本机由 `mybuddy web` 托管页面,先 `cd frontend && npm ci && npm run build`(仅改前端时需要;Docker 构建自动完成这步)。
 
 ## 项目状态
@@ -46,6 +70,10 @@ uv run mybuddy chat                    # 或命令行对话
 - 情绪识别与主动关怀(定时问候 / 沉默回访 / 夜间记忆整理 Dream Job);
 - 自生长技能(Markdown 存储,置信度随反馈升降,连败自动归档);
 - 评测:自建中文召回集 + LoCoMo 公开基准,结果与方法见 [`eval/RESULTS.md`](eval/RESULTS.md)。
+
+桌宠 v1 当前按 2026-08-01 硬交付施工:Windows 独立 WPF 壳负责渲染与传感,
+MyBuddy 引擎统一负责生理、人格、记忆、时机和遥测。产品形态、桥协议、验收与实验口径
+已在 [`docs/VPET_V1_KICKOFF.md`](docs/VPET_V1_KICKOFF.md) 所列规格包中冻结。
 
 ## QQ 机器人(冻结)
 

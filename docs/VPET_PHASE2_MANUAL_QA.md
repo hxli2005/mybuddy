@@ -1,5 +1,8 @@
 # VPet Phase 2 Windows Manual QA
 
+> **历史验收清单**:保留 O1 真机证据口径。v1 的正式完成判定只看
+> `VPET_ACCEPTANCE.md`;两者冲突时以后者为准。
+
 本清单用于完成 `docs/VPET_PHASE2_SPEC.md` 第 7 节的 Windows/VPet 实机联调。自动化测试和
 跨平台 C# build 只能证明代码可编译,不能替代这些桌宠窗口行为验证。
 

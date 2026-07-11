@@ -222,8 +222,8 @@ confidence: 0.6
     assert s.success_count == 3
 
 
-def test_registry_record_unknown_skill() -> None:
-    reg = SkillRegistry("/tmp/does-not-matter-xxxxxx")
+def test_registry_record_unknown_skill(tmp_path) -> None:
+    reg = SkillRegistry(tmp_path / "does-not-matter-xxxxxx")
     assert reg.record_success("不存在") is False
     assert reg.record_failure("不存在") is False
 

@@ -80,13 +80,18 @@ def synthesize_living_state(
     session_id: str = "",
     now_utc: datetime | None = None,
     now_local: datetime | None = None,
+    physio: dict[str, Any] | None = None,
+    physio_injection: bool = False,
     body_state: dict[str, Any] | None = None,
     body_state_injection: bool = False,
 ) -> CharacterLifeConfig:
     """合成小布此刻的动态生活状态;无信号时回退到静态 character_life。"""
     base = persona.character_life
+    real_physio = physio if physio_injection and physio else None
     real_body = body_state if body_state_injection and body_state else None
     if engine is None:
+        if real_physio:
+            return _life_from_physio(base, real_physio, topic="")
         if real_body:
             return _life_from_body_state(base, real_body, topic="")
         return base
@@ -95,10 +100,14 @@ def synthesize_living_state(
 
         rows = list_messages(engine, limit=20, session_id=session_id or None)
     except Exception:  # noqa: BLE001 —— 合成是尽力而为,任何失败都回退静态,不阻塞对话
+        if real_physio:
+            return _life_from_physio(base, real_physio, topic="")
         if real_body:
             return _life_from_body_state(base, real_body, topic="")
         return base
     if not rows:
+        if real_physio:
+            return _life_from_physio(base, real_physio, topic="")
         if real_body:
             return _life_from_body_state(base, real_body, topic="")
         return base  # 首次对话:用 config 的静态 seed
@@ -116,12 +125,55 @@ def synthesize_living_state(
             gap_min = None
 
     topic = _pick_topic(rows)
+    if real_physio:
+        return _life_from_physio(base, real_physio, topic=topic)
     if real_body:
         return _life_from_body_state(base, real_body, topic=topic)
 
     return CharacterLifeConfig(
         today_status=_status_for_hour(now_local.hour),
         current_mood=_mood_for_gap(gap_min),
+        recent_self_event=(f"刚还在想你上次提的「{topic}」,惦记着呢" if topic else base.recent_self_event),
+        availability_style=base.availability_style,
+    )
+
+
+def _life_from_physio(
+    base: CharacterLifeConfig,
+    physio: dict[str, Any],
+    *,
+    topic: str,
+) -> CharacterLifeConfig:
+    """用引擎内生理快照接管身体措辞。"""
+    levels = physio.get("levels") if isinstance(physio.get("levels"), dict) else {}
+    sleeping = bool(physio.get("sleeping"))
+    woken = bool(physio.get("woken"))
+
+    if sleeping:
+        today_status = "已经蜷起来睡了,呼吸慢慢的"
+    elif woken:
+        today_status = "刚被叫醒,还带着一点困意"
+    elif levels.get("tired"):
+        today_status = "有点没力气,正慢吞吞地打盹"
+    elif levels.get("hungry"):
+        today_status = "肚子有点空,动作也蔫了一点"
+    else:
+        today_status = "身体状态还稳,在桌角做自己的事"
+
+    if woken or sleeping:
+        current_mood = "困着,回应会轻一点、慢一点"
+    elif levels.get("low"):
+        current_mood = "心情有点低,会安静地靠近一点"
+    elif levels.get("hungry"):
+        current_mood = "肚子有点空,语气会更黏一点"
+    elif levels.get("bright"):
+        current_mood = "心情挺亮,但不会没由头地吵你"
+    else:
+        current_mood = "情绪平稳,照着眼前身体状态说话"
+
+    return CharacterLifeConfig(
+        today_status=today_status,
+        current_mood=current_mood,
         recent_self_event=(f"刚还在想你上次提的「{topic}」,惦记着呢" if topic else base.recent_self_event),
         availability_style=base.availability_style,
     )

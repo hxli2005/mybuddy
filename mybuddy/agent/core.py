@@ -150,10 +150,12 @@ class Agent:
         source: str = "chat",
         enable_tools: bool = True,
         meta: dict[str, Any] | None = None,
+        physio: dict[str, Any] | None = None,
         body_state: dict[str, Any] | None = None,
     ) -> AgentResult:
         # 1. 情绪检测(可选)
-        emotion = await self._detect_emotion(user_input)
+        is_sensor_event = source == "vpet_event"
+        emotion = None if is_sensor_event else await self._detect_emotion(user_input)
         emotional_support = build_emotional_support(user_input, emotion)
         consecutive_negative = self._has_consecutive_negative()
         scene_hint = support_system_hint(
@@ -176,7 +178,9 @@ class Agent:
             memory_context = self._memory.build_context_section(user_input)
 
         # 3. Skill 匹配(可选)
-        skill_hint, triggered_skills = self._match_skills(user_input, emotion)
+        skill_hint, triggered_skills = (
+            ("", []) if is_sensor_event else self._match_skills(user_input, emotion)
+        )
 
         # 4. 时效事实预检索:不要把新闻/最新信息完全交给模型自由决定是否调用工具
         if enable_tools:
@@ -203,8 +207,13 @@ class Agent:
             self._config.persona,
             engine=self._engine,
             session_id=self._session_id,
+            physio=physio,
+            physio_injection=(
+                self._config.physio.enabled and self._config.vpet.physio_injection
+            ),
+            # bridge/1 参数只为签名兼容保留;v2 API 不再传入语义路径。
             body_state=body_state,
-            body_state_injection=self._config.vpet.body_state_injection,
+            body_state_injection=False,
         )
         system = build_system_prompt(self._config.persona, extras, life=life_state)
         traj = self._logger.start(
@@ -240,7 +249,8 @@ class Agent:
             },
         )
         self._memory.add_message(Message(role=Role.USER, content=user_input))
-        self._schedule_silence_followup(user_input, user_message_id)
+        if not is_sensor_event:
+            self._schedule_silence_followup(user_input, user_message_id)
 
         final_text = ""
         finish_reason = "stop"
@@ -349,13 +359,15 @@ class Agent:
 
         # 5. 记录本轮对话;达到阈值则后台抽取——快照同步取,LLM 调用与写入走后台 task,
         #    不阻塞用户可见回复(每 N 轮原本要在回复后多等一次 small-model 往返)。
-        self._memory.record_turn(user_input, final_text, turn_id=traj.turn_id)
-        batch = self._memory.take_extract_batch()
-        if batch is not None:
-            self._spawn_extract(*batch)
+        if not is_sensor_event:
+            self._memory.record_turn(user_input, final_text, turn_id=traj.turn_id)
+            batch = self._memory.take_extract_batch()
+            if batch is not None:
+                self._spawn_extract(*batch)
 
         # 6. M6:满足"复杂任务"条件时,异步让 curator 复盘是否抽象新 skill
-        self._maybe_trigger_curator(traj, all_tool_calls, finish_reason)
+        if not is_sensor_event:
+            self._maybe_trigger_curator(traj, all_tool_calls, finish_reason)
 
         return AgentResult(
             text=final_text,

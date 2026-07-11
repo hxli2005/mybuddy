@@ -1,0 +1,15 @@
+{
+  "host": "VPetCoreHost",
+  "asset_root": "d:\\steam\\steamapps\\common\\VPet\\mod\\0000_core\\pet\\vup",
+  "asset_visible": true,
+  "current_frame_count": 8,
+  "idle_playing": true,
+  "touch_head_zone": "Head",
+  "touch_body_zone": "Body",
+  "touch_zones_distinct": true,
+  "started_at": "2026-07-11T12:40:32.2675226+08:00",
+  "checked_at": "2026-07-11T13:10:42.7733185+08:00",
+  "running_seconds": 1810,
+  "unhandled_exceptions": 0,
+  "stable_30_minutes": true
+}

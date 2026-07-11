@@ -19,8 +19,16 @@ import re
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 
-from mybuddy._time import utcnow
-from mybuddy.storage import Message, PendingMessage, Reminder, enqueue, init_db, session_scope
+from mybuddy._time import localnow, utcnow
+from mybuddy.storage import (
+    Message,
+    PendingMessage,
+    Reminder,
+    VPetEvent,
+    enqueue,
+    init_db,
+    session_scope,
+)
 
 if TYPE_CHECKING:
     pass
@@ -62,6 +70,21 @@ def fire_daily_greeting(db_file: str, persona_name: str = "小布") -> None:
     logger.info("daily greeting enqueued")
 
 
+def fire_cowork_break(db_file: str, session_id: str) -> None:
+    """共处满 50 分钟且会话仍开放时入队一次久坐提醒。"""
+    engine = init_db(db_file)
+    if not _cowork_session_is_open(engine, session_id):
+        logger.info("cowork break skipped: session %s already closed", session_id)
+        return
+    enqueue(
+        engine,
+        source="cowork_break",
+        content="坐得够久了。起来活动一下吧,我在这儿等你。",
+        meta={"session_id": session_id, "origin": "cowork_50m"},
+    )
+    logger.info("cowork break enqueued for session %s", session_id)
+
+
 def fire_silence_followup(
     db_file: str,
     session_id: str,
@@ -79,7 +102,7 @@ def fire_silence_followup(
     if reason is None:
         logger.info("silence followup skipped: no concrete reason")
         return
-    if _in_quiet_hours(datetime.now(), quiet_start, quiet_end):
+    if _in_quiet_hours(localnow(), quiet_start, quiet_end):
         logger.info("silence followup skipped: quiet hours")
         return
 
@@ -291,3 +314,20 @@ def _brief_text(text: str, limit: int = 28) -> str:
     if len(clean) <= limit:
         return clean
     return clean[:limit] + "..."
+
+
+def _cowork_session_is_open(engine, session_id: str) -> bool:  # noqa: ANN001
+    with session_scope(engine) as session:
+        rows = (
+            session.query(VPetEvent)
+            .filter(VPetEvent.event.in_(["work_start", "work_stop"]))
+            .order_by(VPetEvent.id.asc())
+            .all()
+        )
+    open_state = False
+    for row in rows:
+        context = _safe_json(row.context_json)
+        if context.get("session_id") != session_id:
+            continue
+        open_state = row.event == "work_start"
+    return open_state

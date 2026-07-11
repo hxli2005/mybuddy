@@ -33,6 +33,11 @@ class EchoProvider(BaseLLMProvider):
 
 
 def _write_config(path: Path, tmp_path: Path) -> None:
+    data_dir = (tmp_path / "data").as_posix()
+    db_file = (tmp_path / "data" / "master.db").as_posix()
+    chroma_dir = (tmp_path / "data" / "memory").as_posix()
+    skills_dir = (tmp_path / "data" / "skills").as_posix()
+    trajectories_dir = (tmp_path / "data" / "trajectories").as_posix()
     path.write_text(
         f"""
 llm:
@@ -42,11 +47,11 @@ llm:
 memory:
   extract_after_turns: 99
 paths:
-  data_dir: "{tmp_path / 'data'}"
-  db_file: "{tmp_path / 'data' / 'master.db'}"
-  chroma_dir: "{tmp_path / 'data' / 'memory'}"
-  skills_dir: "{tmp_path / 'data' / 'skills'}"
-  trajectories_dir: "{tmp_path / 'data' / 'trajectories'}"
+  data_dir: "{data_dir}"
+  db_file: "{db_file}"
+  chroma_dir: "{chroma_dir}"
+  skills_dir: "{skills_dir}"
+  trajectories_dir: "{trajectories_dir}"
 scheduler:
   enabled: false
 tools:

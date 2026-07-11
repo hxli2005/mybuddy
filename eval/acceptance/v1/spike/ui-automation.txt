@@ -1,0 +1,19 @@
+2026-07-11T12:46+08:00 Windows UI Automation control tree (excerpt)
+
+ControlType.Window|小布
+  ControlType.Button|粥
+  ControlType.Button|咖喱
+  ControlType.Button|奶茶
+  ControlType.Button|咖啡
+  ControlType.Button|水
+  ControlType.List|
+  ControlType.Button|发送
+  ControlType.Edit|
+  ControlType.Button|设置
+  ControlType.Button|退出
+  ControlType.Text|已连接 · 07-11 12:46
+
+2026-07-11T13:10:34+08:00
+visible_window=461118|小布
+process_id=29828
+responding=true

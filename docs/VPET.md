@@ -1,5 +1,8 @@
 # VPet 集成说明
 
+> **O1 历史接入说明**:本文描述冻结的 VPet 插件探针与 bridge v1。小布桌宠 v1 已转向
+> 独立 WPF `buddyshell/`,施工与协议真相源见 `VPET_V1_KICKOFF.md`、`VPET_V1_PROTOCOL_V2.md`。
+
 MyBuddy 可以作为 VPet 的本地 AI 引擎运行。推荐架构是:VPet 负责桌宠窗口、
 动画、气泡和语音;MyBuddy 负责人格、记忆、情绪、工具调用和主动关怀。
 
@@ -38,6 +41,12 @@ dotnet build vpet-plugin/MyBuddy.VPetPlugin.csproj -p:EnableWindowsTargeting=tru
 
 ```bash
 bash scripts/package_vpet_plugin.sh
+```
+
+Windows 没有 Bash 时可用:
+
+```powershell
+.\scripts\package_vpet_plugin.ps1
 ```
 
 输出目录:

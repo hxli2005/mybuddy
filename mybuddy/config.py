@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import os
 import re
+import warnings
 from pathlib import Path
 from typing import Literal
 
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class LLMConfig(BaseModel):
@@ -205,7 +206,24 @@ class ChannelsConfig(BaseModel):
     qq: QQChannelConfig = Field(default_factory=QQChannelConfig)
 
 
+class PhysioConfig(BaseModel):
+    """小布生理引擎配置。
+
+    数值真相源在 MyBuddy 引擎;壳只消费派生快照。
+    """
+
+    enabled: bool = False
+    sleep_start: str = "00:30"
+    sleep_end: str = "08:30"
+    hunger_decay_per_hour: float = 6.0
+    mood_baseline: float = 60.0
+    mood_half_life_hours: float = 8.0
+    murmur_daily_limit: int = 3
+
+
 class VPetConfig(BaseModel):
+    physio_injection: bool = False
+    # 兼容 bridge/1 配置文件;只保留一个版本窗口,运行语义由 physio_injection 接管。
     body_state_injection: bool = False
     touch_escalation: bool = False
     physical_proactive: bool = False
@@ -213,6 +231,25 @@ class VPetConfig(BaseModel):
     greeting_discard_after_minutes: int = 120
     reminder_overdue_after_minutes: int = 30
     bridge_token: str = ""
+    acceptance_mode: bool = False
+
+    @model_validator(mode="before")
+    @classmethod
+    def _upgrade_body_state_key(cls, value: object) -> object:
+        if not isinstance(value, dict):
+            return value
+        data = dict(value)
+        if "body_state_injection" in data and "physio_injection" not in data:
+            warnings.warn(
+                "vpet.body_state_injection 已弃用;请改用 vpet.physio_injection",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            data["physio_injection"] = bool(data["body_state_injection"])
+        if "physio_injection" in data:
+            # 旧调用方读取该字段时看到同一开关,但 body_state 请求内容仍会被忽略。
+            data["body_state_injection"] = bool(data["physio_injection"])
+        return data
 
 
 class Config(BaseModel):
@@ -224,6 +261,7 @@ class Config(BaseModel):
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
     channels: ChannelsConfig = Field(default_factory=ChannelsConfig)
+    physio: PhysioConfig = Field(default_factory=PhysioConfig)
     vpet: VPetConfig = Field(default_factory=VPetConfig)
 
 

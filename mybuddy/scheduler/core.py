@@ -16,6 +16,7 @@ CLI 重启后已调度任务自动继续;错过执行时间的任务由 APSchedu
 from __future__ import annotations
 
 import logging
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
 from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
@@ -23,7 +24,9 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.date import DateTrigger
 
+from mybuddy._time import time_offset_minutes
 from mybuddy.scheduler.jobs import (
+    fire_cowork_break,
     fire_daily_greeting,
     fire_reminder,
     fire_silence_followup,
@@ -31,8 +34,6 @@ from mybuddy.scheduler.jobs import (
 )
 
 if TYPE_CHECKING:
-    from datetime import datetime
-
     from mybuddy.config import Config
 
 logger = logging.getLogger(__name__)
@@ -42,6 +43,7 @@ REMINDER_JOB_PREFIX = "reminder_"
 SILENCE_FOLLOWUP_JOB_PREFIX = "silence_followup_"
 DAILY_GREETING_JOB_ID = "daily_greeting"
 DREAM_JOB_ID = "dream_job"
+COWORK_JOB_PREFIX = "vpet_cowork:"
 
 
 class MyBuddyScheduler:
@@ -80,7 +82,7 @@ class MyBuddyScheduler:
         job_id = f"{REMINDER_JOB_PREFIX}{reminder_id}"
         self._scheduler.add_job(
             fire_reminder,
-            trigger=DateTrigger(run_date=trigger_at),
+            trigger=DateTrigger(run_date=_scheduler_run_date(trigger_at)),
             args=[reminder_id, self._db_file],
             id=job_id,
             replace_existing=True,
@@ -109,7 +111,7 @@ class MyBuddyScheduler:
         job_id = f"{SILENCE_FOLLOWUP_JOB_PREFIX}{session_id}"
         self._scheduler.add_job(
             fire_silence_followup,
-            trigger=DateTrigger(run_date=run_at),
+            trigger=DateTrigger(run_date=_scheduler_run_date(run_at)),
             args=[
                 self._db_file,
                 session_id,
@@ -128,11 +130,31 @@ class MyBuddyScheduler:
         )
         logger.info("scheduled silence followup check for session %s @ %s", session_id, run_at)
 
+    def schedule_cowork_break(self, *, session_id: str, run_at: datetime) -> None:
+        """注册持久共处休息提醒;同 session 幂等替换。"""
+        self._scheduler.add_job(
+            fire_cowork_break,
+            trigger=DateTrigger(run_date=_scheduler_run_date(run_at)),
+            args=[self._db_file, session_id],
+            id=f"{COWORK_JOB_PREFIX}{session_id}",
+            replace_existing=True,
+            misfire_grace_time=3600,
+        )
+        logger.info("scheduled cowork break for %s @ %s", session_id, run_at)
+
+    def cancel_cowork_break(self, session_id: str) -> bool:
+        try:
+            self._scheduler.remove_job(f"{COWORK_JOB_PREFIX}{session_id}")
+            return True
+        except Exception:
+            return False
+
     # ---- 周期任务 ----
 
     def schedule_daily_greeting(self, hh_mm: str) -> None:
         """每日早安。hh_mm 形如 '09:17',按本地时间解释。"""
         hour, minute = _parse_hh_mm(hh_mm)
+        hour, minute = _scheduler_cron_time(hour, minute)
         self._scheduler.add_job(
             fire_daily_greeting,
             trigger=CronTrigger(hour=hour, minute=minute),
@@ -144,6 +166,7 @@ class MyBuddyScheduler:
 
     def schedule_dream_job(self, hh_mm: str, *, config_path: str = "config.yaml") -> None:
         hour, minute = _parse_hh_mm(hh_mm)
+        hour, minute = _scheduler_cron_time(hour, minute)
         self._scheduler.add_job(
             run_dream_job,
             trigger=CronTrigger(hour=hour, minute=minute),
@@ -170,6 +193,18 @@ class MyBuddyScheduler:
                 }
             )
         return jobs
+
+
+def _scheduler_run_date(value: datetime) -> datetime:
+    """把模拟 UTC 截止时间还原为 APScheduler 使用的真实 UTC 时刻。"""
+    simulated_utc = value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+    return simulated_utc - timedelta(minutes=time_offset_minutes())
+
+
+def _scheduler_cron_time(hour: int, minute: int) -> tuple[int, int]:
+    """把模拟本地钟点换成真实本地 cron 钟点。"""
+    anchor = datetime(2000, 1, 2, hour, minute) - timedelta(minutes=time_offset_minutes())
+    return anchor.hour, anchor.minute
 
 
 def _parse_hh_mm(value: str) -> tuple[int, int]:
