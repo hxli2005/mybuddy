@@ -5,7 +5,12 @@ import threading
 import urllib.error
 import urllib.request
 
-from fastapi.testclient import TestClient
+import pytest
+
+# 双服务路径一致性测试需要 fastapi;未装 api extra 的环境跳过而非收集失败。
+pytest.importorskip("fastapi")
+
+from fastapi.testclient import TestClient  # noqa: E402
 
 from mybuddy.api import AppState, create_app
 from mybuddy.config import Config

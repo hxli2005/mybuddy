@@ -37,6 +37,7 @@ def test_extract_weather_city() -> None:
 
 
 def test_vpet_business_errors_use_protocol_v2_shape(tmp_path) -> None:
+    pytest.importorskip("fastapi")  # FastAPI 路径专属;未装 api extra 时跳过
     from fastapi.testclient import TestClient
 
     app = create_app(str(tmp_path / "unused.yaml"))

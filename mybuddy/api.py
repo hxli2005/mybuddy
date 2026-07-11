@@ -19,8 +19,14 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import yaml
-from fastapi import Request
 from pydantic import BaseModel, Field
+
+try:
+    # fastapi 是可选依赖(api extra):FastAPI 需要在运行时解析路由签名注解,装了就用真符号;
+    # 未装时走 stdlib `mybuddy web` 路径,注解因 __future__ annotations 永不求值,占位即可。
+    from fastapi import Request
+except ModuleNotFoundError:  # pragma: no cover - 未装 api extra 的环境
+    Request = Any  # type: ignore[misc, assignment]
 
 from mybuddy._time import (
     configure_time_offset,
