@@ -27,37 +27,22 @@ public static class AssetLocator
         return Path.GetFullPath(found);
     }
 
-    public static string FindAnimationFolder(string root, params string[] categories)
+    public static string? FindFoodImage(string petRoot, string itemId)
     {
-        foreach (var category in categories)
+        var coreRoot = Directory.GetParent(Directory.GetParent(petRoot)?.FullName ?? "")?.FullName;
+        if (string.IsNullOrWhiteSpace(coreRoot)) return null;
+        var imageRoot = Path.Combine(coreRoot, "image", "food");
+        var fileName = itemId switch
         {
-            var categoryRoot = Path.Combine(root, category);
-            if (!Directory.Exists(categoryRoot))
-            {
-                continue;
-            }
-            var folders = Directory.EnumerateDirectories(categoryRoot, "*", SearchOption.AllDirectories)
-                .Prepend(categoryRoot)
-                .Where(path => Directory.EnumerateFiles(path, "*.png", SearchOption.TopDirectoryOnly).Any())
-                .OrderByDescending(ScoreFolder)
-                .ThenBy(path => path.Length)
-                .ToList();
-            if (folders.Count > 0)
-            {
-                return folders[0];
-            }
-        }
-        throw new DirectoryNotFoundException($"素材中缺少动画目录:{string.Join('/', categories)}");
-    }
-
-    private static int ScoreFolder(string path)
-    {
-        var score = 0;
-        if (path.Contains("Nomal", StringComparison.OrdinalIgnoreCase)) score += 20;
-        if (path.Contains("Happy", StringComparison.OrdinalIgnoreCase)) score += 10;
-        if (path.Contains("Ill", StringComparison.OrdinalIgnoreCase)) score -= 20;
-        if (path.Contains("Poor", StringComparison.OrdinalIgnoreCase)) score -= 10;
-        return score;
+            "congee" => "罗宋汤.png",
+            "curry" => "番茄意面.png",
+            "milk_tea" => "奶茶.png",
+            "coffee" => "咖啡饮料.png",
+            "water" => "矿泉水.png",
+            _ => "矿泉水.png",
+        };
+        var path = Path.Combine(imageRoot, fileName);
+        return File.Exists(path) ? path : null;
     }
 
     private static string? FindSteamPetRoot()

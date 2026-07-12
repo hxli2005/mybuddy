@@ -59,7 +59,7 @@ uv run pytest -q
 启动后端:
 
 ```powershell
-uv run mybuddy web --host 127.0.0.1 --port 8000
+uv run --extra api mybuddy web --host 127.0.0.1 --port 8000
 ```
 
 需要把后端作为单独 Windows 进程留给 VPet 联调时,也可以运行:

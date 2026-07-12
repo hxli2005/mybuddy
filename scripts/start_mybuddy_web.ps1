@@ -12,4 +12,4 @@ if (-not $env:UV_CACHE_DIR) {
     $env:UV_CACHE_DIR = Join-Path $Root ".uv-cache"
 }
 
-uv run mybuddy web --host $HostAddress --port $Port
+uv run --extra api mybuddy web --host $HostAddress --port $Port

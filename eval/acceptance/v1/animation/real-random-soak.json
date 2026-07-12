@@ -1,0 +1,29 @@
+{
+  "mode": "real_time_random_actions",
+  "renderer": "FramePlayerHost",
+  "asset_root": "D:\\steam\\steamapps\\common\\VPet\\mod\\0000_core\\pet\\vup",
+  "started_at": "2026-07-12T10:47:09.4336249+08:00",
+  "checked_at": "2026-07-12T11:17:09.4468536+08:00",
+  "running_seconds": 1800,
+  "target_seconds": 1800,
+  "responding": true,
+  "working_set_bytes": 156540928,
+  "transition_count": 1680,
+  "current": {
+    "Generation": 1690,
+    "PlanId": "speech.happy",
+    "Phase": 0,
+    "Execution": 1,
+    "CorrelationId": "soak-1795580",
+    "BaselinePlanId": "sleep.normal",
+    "ThinkPending": false,
+    "QueuedCount": 0,
+    "CurrentFrameCount": 7,
+    "IsPlaying": true
+  },
+  "composited_layers": 1,
+  "cached_frame_count": 16,
+  "cached_frame_bytes": 64000000,
+  "errors": [],
+  "stable": true
+}

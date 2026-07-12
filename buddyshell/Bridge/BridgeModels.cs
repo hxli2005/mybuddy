@@ -12,6 +12,8 @@ public sealed class ShellSettings
     public bool TodayQuiet { get; set; }
     public string? TodayQuietDate { get; set; }
     public string? PetAssetRoot { get; set; }
+    // Legacy JSON compatibility only. The animation route is now fixed to
+    // AnimationController + FramePlayerHost and this value is intentionally ignored.
     public bool ForceFramePlayer { get; set; }
     public int IdlePauseMinutes { get; set; } = 30;
     public int PhysicalCooldownMinutes { get; set; } = 45;

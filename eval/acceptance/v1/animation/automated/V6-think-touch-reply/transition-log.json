@@ -1,0 +1,170 @@
+[
+  {
+    "capture": "01-think-loop-before-touch.png",
+    "label": "think-loop-before-touch",
+    "elapsed_ms": 250,
+    "Generation": 3,
+    "PlanId": "think.normal",
+    "phase": "Body",
+    "execution": "Pending",
+    "CorrelationId": "v6-chat",
+    "BaselinePlanId": "idle.default.normal",
+    "ThinkPending": true,
+    "QueuedCount": 0,
+    "layers": [
+      {
+        "Name": "main",
+        "ZIndex": 0,
+        "source": "Think/Nomal/B/_000_125.png",
+        "Placement": null,
+        "Rotation": 0,
+        "Opacity": 1,
+        "Visible": true
+      }
+    ]
+  },
+  {
+    "capture": "02-touch-entry-A.png",
+    "label": "touch-entry-A",
+    "elapsed_ms": 250,
+    "Generation": 4,
+    "PlanId": "touch.body.happy",
+    "phase": "Entry",
+    "execution": "Transient",
+    "CorrelationId": "ac32f4601f5f4f15bd53bfc03f9ad456",
+    "BaselinePlanId": "idle.default.normal",
+    "ThinkPending": true,
+    "QueuedCount": 0,
+    "layers": [
+      {
+        "Name": "main",
+        "ZIndex": 0,
+        "source": "Touch_Body/A_Happy/tb1/\u6478\u9AD8\u5174A_000_125.png",
+        "Placement": null,
+        "Rotation": 0,
+        "Opacity": 1,
+        "Visible": true
+      }
+    ]
+  },
+  {
+    "capture": "03-touch-body-B.png",
+    "label": "touch-body-B",
+    "elapsed_ms": 2375,
+    "Generation": 5,
+    "PlanId": "touch.body.happy",
+    "phase": "Body",
+    "execution": "Transient",
+    "CorrelationId": "ac32f4601f5f4f15bd53bfc03f9ad456",
+    "BaselinePlanId": "idle.default.normal",
+    "ThinkPending": true,
+    "QueuedCount": 0,
+    "layers": [
+      {
+        "Name": "main",
+        "ZIndex": 0,
+        "source": "Touch_Body/B_Happy/tb1/\u9AD8\u5174\u5FAA\u73AF_000_125.png",
+        "Placement": null,
+        "Rotation": 0,
+        "Opacity": 1,
+        "Visible": true
+      }
+    ]
+  },
+  {
+    "capture": "04-touch-exit-C.png",
+    "label": "touch-exit-C",
+    "elapsed_ms": 4500,
+    "Generation": 6,
+    "PlanId": "touch.body.happy",
+    "phase": "Exit",
+    "execution": "Transient",
+    "CorrelationId": "ac32f4601f5f4f15bd53bfc03f9ad456",
+    "BaselinePlanId": "idle.default.normal",
+    "ThinkPending": true,
+    "QueuedCount": 0,
+    "layers": [
+      {
+        "Name": "main",
+        "ZIndex": 0,
+        "source": "Touch_Body/C_Happy/tb1/\u6478\u9AD8\u5174C_000_125.png",
+        "Placement": null,
+        "Rotation": 0,
+        "Opacity": 1,
+        "Visible": true
+      }
+    ]
+  },
+  {
+    "capture": "05-think-loop-resumed.png",
+    "label": "think-loop-resumed",
+    "elapsed_ms": 4875,
+    "Generation": 7,
+    "PlanId": "think.normal",
+    "phase": "Body",
+    "execution": "Pending",
+    "CorrelationId": "v6-chat",
+    "BaselinePlanId": "idle.default.normal",
+    "ThinkPending": true,
+    "QueuedCount": 0,
+    "layers": [
+      {
+        "Name": "main",
+        "ZIndex": 0,
+        "source": "Think/Nomal/B/_000_125.png",
+        "Placement": null,
+        "Rotation": 0,
+        "Opacity": 1,
+        "Visible": true
+      }
+    ]
+  },
+  {
+    "capture": "06-think-exit-before-reply.png",
+    "label": "think-exit-before-reply",
+    "elapsed_ms": 4875,
+    "Generation": 8,
+    "PlanId": "think.normal",
+    "phase": "Exit",
+    "execution": "Pending",
+    "CorrelationId": "v6-chat",
+    "BaselinePlanId": "idle.default.normal",
+    "ThinkPending": false,
+    "QueuedCount": 1,
+    "layers": [
+      {
+        "Name": "main",
+        "ZIndex": 0,
+        "source": "Think/Nomal/C/_000_125.png",
+        "Placement": null,
+        "Rotation": 0,
+        "Opacity": 1,
+        "Visible": true
+      }
+    ]
+  },
+  {
+    "capture": "07-reply-entry-after-think-exit.png",
+    "label": "reply-entry-after-think-exit",
+    "elapsed_ms": 5125,
+    "Generation": 9,
+    "PlanId": "speech.neutral",
+    "phase": "Entry",
+    "execution": "Transient",
+    "CorrelationId": "v6-chat:reaction",
+    "BaselinePlanId": "idle.default.normal",
+    "ThinkPending": false,
+    "QueuedCount": 0,
+    "layers": [
+      {
+        "Name": "main",
+        "ZIndex": 0,
+        "source": "Say/Self/A/\u6307\u7740\u81EA\u5DF1\u8BF4\u8BDD_000_125.png",
+        "Placement": null,
+        "Rotation": 0,
+        "Opacity": 1,
+        "Visible": true
+      }
+    ]
+  }
+]

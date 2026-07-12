@@ -8,14 +8,14 @@ namespace BuddyShell;
 public sealed class SpikeEvidence : IDisposable
 {
     private readonly string? _path = Environment.GetEnvironmentVariable("BUDDYSHELL_SPIKE_EVIDENCE");
-    private readonly IAnimationHostDiagnostics _host;
+    private readonly IAnimationDiagnostics _host;
     private readonly DateTimeOffset _startedAt = DateTimeOffset.Now;
     private readonly int _unhandledAtStart = App.UnhandledExceptionCount;
     private readonly DispatcherTimer _timer = new() { Interval = TimeSpan.FromSeconds(10) };
 
-    public SpikeEvidence(IAnimationHost host)
+    public SpikeEvidence(IAnimationController host)
     {
-        _host = host as IAnimationHostDiagnostics
+        _host = host as IAnimationDiagnostics
             ?? throw new InvalidOperationException("动画宿主未提供 spike 诊断接口。");
         _timer.Tick += (_, _) => Write();
         _timer.Start();

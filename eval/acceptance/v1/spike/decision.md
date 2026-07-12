@@ -13,3 +13,9 @@
 4. 30 分钟稳定:从 12:40:32 到 13:10:32 连续 1800 秒,`unhandled_exceptions=0`,`stable_30_minutes=true`。
 
 因此 v1 固定走 `VPetCoreHost`;`FramePlayerHost` 仅保留为设置项可选的兼容降级,不再重开宿主路线讨论。
+
+## 2026-07-12 deviation：宿主可见不等于动作语义正确
+
+后续集中验收发现 Sleep A、Think A、Work A 被错误循环，Touch/Feed 缺少完整阶段或共享图层时间轴。原四项只证明“素材可见、进程可运行、命中可区分”，没有覆盖 A/B/C 语义、中断恢复和多层同步，因此原 `PASS — 锁定 VPetCoreHost` 不足以签动画 Gate A。
+
+整改裁决：产品路线改锁 `AnimationController + FramePlayerHost`；`VPetCoreHost` 从产品构建排除。原 30 分钟证据仍只作为 spike 历史，不可抵扣新状态机的 V1–V10、人工视觉复核或新 30 分钟 soak。详见 `docs/VPET_V1_ANIMATION_STATE_MACHINE.md`。

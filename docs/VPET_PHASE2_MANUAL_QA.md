@@ -17,7 +17,7 @@
 - MyBuddy 后端:
 
 ```bash
-uv run mybuddy web --host 127.0.0.1 --port 8000
+uv run --extra api mybuddy web --host 127.0.0.1 --port 8000
 ```
 
 - 插件构建:

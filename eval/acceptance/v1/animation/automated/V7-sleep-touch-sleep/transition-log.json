@@ -1,0 +1,146 @@
+[
+  {
+    "capture": "01-sleep-loop-before-touch.png",
+    "label": "sleep-loop-before-touch",
+    "elapsed_ms": 500,
+    "Generation": 3,
+    "PlanId": "sleep.normal",
+    "phase": "Body",
+    "execution": "Baseline",
+    "CorrelationId": null,
+    "BaselinePlanId": "sleep.normal",
+    "ThinkPending": false,
+    "QueuedCount": 0,
+    "layers": [
+      {
+        "Name": "main",
+        "ZIndex": 0,
+        "source": "Sleep/B_Nomal/\u7761\u89C9\u5FAA\u73AF_000_125.png",
+        "Placement": null,
+        "Rotation": 0,
+        "Opacity": 1,
+        "Visible": true
+      }
+    ]
+  },
+  {
+    "capture": "02-touch-entry-A.png",
+    "label": "touch-entry-A",
+    "elapsed_ms": 500,
+    "Generation": 4,
+    "PlanId": "touch.head.normal",
+    "phase": "Entry",
+    "execution": "Transient",
+    "CorrelationId": "badb4dcd236540e792e7456cd1cafee7",
+    "BaselinePlanId": "sleep.normal",
+    "ThinkPending": false,
+    "QueuedCount": 0,
+    "layers": [
+      {
+        "Name": "main",
+        "ZIndex": 0,
+        "source": "Touch_Head/A_Nomal/\u6478\u5934_0_250.png",
+        "Placement": null,
+        "Rotation": 0,
+        "Opacity": 1,
+        "Visible": true
+      }
+    ]
+  },
+  {
+    "capture": "03-touch-body-B.png",
+    "label": "touch-body-B",
+    "elapsed_ms": 875,
+    "Generation": 5,
+    "PlanId": "touch.head.normal",
+    "phase": "Body",
+    "execution": "Transient",
+    "CorrelationId": "badb4dcd236540e792e7456cd1cafee7",
+    "BaselinePlanId": "sleep.normal",
+    "ThinkPending": false,
+    "QueuedCount": 0,
+    "layers": [
+      {
+        "Name": "main",
+        "ZIndex": 0,
+        "source": "Touch_Head/B_Nomal/\u6478\u5934_000_125.png",
+        "Placement": null,
+        "Rotation": 0,
+        "Opacity": 1,
+        "Visible": true
+      }
+    ]
+  },
+  {
+    "capture": "04-touch-exit-C.png",
+    "label": "touch-exit-C",
+    "elapsed_ms": 2375,
+    "Generation": 6,
+    "PlanId": "touch.head.normal",
+    "phase": "Exit",
+    "execution": "Transient",
+    "CorrelationId": "badb4dcd236540e792e7456cd1cafee7",
+    "BaselinePlanId": "sleep.normal",
+    "ThinkPending": false,
+    "QueuedCount": 0,
+    "layers": [
+      {
+        "Name": "main",
+        "ZIndex": 0,
+        "source": "Touch_Head/C_Nomal/\u6478\u5934_0_125.png",
+        "Placement": null,
+        "Rotation": 0,
+        "Opacity": 1,
+        "Visible": true
+      }
+    ]
+  },
+  {
+    "capture": "05-sleep-entry-rebuild-after-touch.png",
+    "label": "sleep-entry-rebuild-after-touch",
+    "elapsed_ms": 2750,
+    "Generation": 7,
+    "PlanId": "sleep.normal",
+    "phase": "Entry",
+    "execution": "Baseline",
+    "CorrelationId": null,
+    "BaselinePlanId": "sleep.normal",
+    "ThinkPending": false,
+    "QueuedCount": 0,
+    "layers": [
+      {
+        "Name": "main",
+        "ZIndex": 0,
+        "source": "Sleep/A_Nomal/\u8EBA\u4E0B_000_125.png",
+        "Placement": null,
+        "Rotation": 0,
+        "Opacity": 1,
+        "Visible": true
+      }
+    ]
+  },
+  {
+    "capture": "06-sleep-loop-after-entry-rebuild.png",
+    "label": "sleep-loop-after-entry-rebuild",
+    "elapsed_ms": 3250,
+    "Generation": 8,
+    "PlanId": "sleep.normal",
+    "phase": "Body",
+    "execution": "Baseline",
+    "CorrelationId": null,
+    "BaselinePlanId": "sleep.normal",
+    "ThinkPending": false,
+    "QueuedCount": 0,
+    "layers": [
+      {
+        "Name": "main",
+        "ZIndex": 0,
+        "source": "Sleep/B_Nomal/\u7761\u89C9\u5FAA\u73AF_000_125.png",
+        "Placement": null,
+        "Rotation": 0,
+        "Opacity": 1,
+        "Visible": true
+      }
+    ]
+  }
+]

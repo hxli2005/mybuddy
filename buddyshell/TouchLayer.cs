@@ -12,7 +12,7 @@ public sealed class TouchLayer : IDisposable
     private string? _firstDate;
 
     public TouchLayer(
-        IAnimationHost host,
+        ITouchSource host,
         BridgeClient client,
         Outbox outbox,
         Func<string?> serverDate)
@@ -24,7 +24,7 @@ public sealed class TouchLayer : IDisposable
         Host = host;
     }
 
-    private IAnimationHost Host { get; }
+    private ITouchSource Host { get; }
     public event EventHandler<VPetEventResponse>? ResponseReceived;
 
     private async void OnTouchDetected(object? sender, TouchDetectedEventArgs args)
@@ -49,6 +49,7 @@ public sealed class TouchLayer : IDisposable
             var request = new VPetEventRequest
             {
                 Event = args.Zone == TouchZone.Head ? "touch_head" : "touch_body",
+                ClientEventId = args.CorrelationId,
                 Count = 1,
                 WantReply = firstToday || thresholdCrossed,
                 Context = new()

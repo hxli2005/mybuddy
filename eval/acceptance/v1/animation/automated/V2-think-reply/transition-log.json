@@ -1,0 +1,170 @@
+[
+  {
+    "capture": "01-think-entry-A.png",
+    "label": "think-entry-A",
+    "elapsed_ms": 0,
+    "Generation": 2,
+    "PlanId": "think.normal",
+    "phase": "Entry",
+    "execution": "Pending",
+    "CorrelationId": "v2-chat",
+    "BaselinePlanId": "idle.default.normal",
+    "ThinkPending": true,
+    "QueuedCount": 0,
+    "layers": [
+      {
+        "Name": "main",
+        "ZIndex": 0,
+        "source": "Think/Nomal/A/_000_125.png",
+        "Placement": null,
+        "Rotation": 0,
+        "Opacity": 1,
+        "Visible": true
+      }
+    ]
+  },
+  {
+    "capture": "02-think-loop-B.png",
+    "label": "think-loop-B",
+    "elapsed_ms": 250,
+    "Generation": 3,
+    "PlanId": "think.normal",
+    "phase": "Body",
+    "execution": "Pending",
+    "CorrelationId": "v2-chat",
+    "BaselinePlanId": "idle.default.normal",
+    "ThinkPending": true,
+    "QueuedCount": 0,
+    "layers": [
+      {
+        "Name": "main",
+        "ZIndex": 0,
+        "source": "Think/Nomal/B/_000_125.png",
+        "Placement": null,
+        "Rotation": 0,
+        "Opacity": 1,
+        "Visible": true
+      }
+    ]
+  },
+  {
+    "capture": "03-think-exit-C.png",
+    "label": "think-exit-C",
+    "elapsed_ms": 250,
+    "Generation": 4,
+    "PlanId": "think.normal",
+    "phase": "Exit",
+    "execution": "Pending",
+    "CorrelationId": "v2-chat",
+    "BaselinePlanId": "idle.default.normal",
+    "ThinkPending": false,
+    "QueuedCount": 1,
+    "layers": [
+      {
+        "Name": "main",
+        "ZIndex": 0,
+        "source": "Think/Nomal/C/_000_125.png",
+        "Placement": null,
+        "Rotation": 0,
+        "Opacity": 1,
+        "Visible": true
+      }
+    ]
+  },
+  {
+    "capture": "04-reaction-entry-A.png",
+    "label": "reaction-entry-A",
+    "elapsed_ms": 500,
+    "Generation": 5,
+    "PlanId": "speech.happy",
+    "phase": "Entry",
+    "execution": "Transient",
+    "CorrelationId": "v2-chat:reaction",
+    "BaselinePlanId": "idle.default.normal",
+    "ThinkPending": false,
+    "QueuedCount": 0,
+    "layers": [
+      {
+        "Name": "main",
+        "ZIndex": 0,
+        "source": "Say/Shining/A/talkstar_000_125.png",
+        "Placement": null,
+        "Rotation": 0,
+        "Opacity": 1,
+        "Visible": true
+      }
+    ]
+  },
+  {
+    "capture": "05-reaction-body-B.png",
+    "label": "reaction-body-B",
+    "elapsed_ms": 1375,
+    "Generation": 6,
+    "PlanId": "speech.happy",
+    "phase": "Body",
+    "execution": "Transient",
+    "CorrelationId": "v2-chat:reaction",
+    "BaselinePlanId": "idle.default.normal",
+    "ThinkPending": false,
+    "QueuedCount": 0,
+    "layers": [
+      {
+        "Name": "main",
+        "ZIndex": 0,
+        "source": "Say/Shining/B_1/talkwink_000_125.png",
+        "Placement": null,
+        "Rotation": 0,
+        "Opacity": 1,
+        "Visible": true
+      }
+    ]
+  },
+  {
+    "capture": "06-reaction-exit-C.png",
+    "label": "reaction-exit-C",
+    "elapsed_ms": 2250,
+    "Generation": 7,
+    "PlanId": "speech.happy",
+    "phase": "Exit",
+    "execution": "Transient",
+    "CorrelationId": "v2-chat:reaction",
+    "BaselinePlanId": "idle.default.normal",
+    "ThinkPending": false,
+    "QueuedCount": 0,
+    "layers": [
+      {
+        "Name": "main",
+        "ZIndex": 0,
+        "source": "Say/Shining/C/talkstar_000_125.png",
+        "Placement": null,
+        "Rotation": 0,
+        "Opacity": 1,
+        "Visible": true
+      }
+    ]
+  },
+  {
+    "capture": "07-idle-resumed.png",
+    "label": "idle-resumed",
+    "elapsed_ms": 2750,
+    "Generation": 8,
+    "PlanId": "idle.default.normal",
+    "phase": "Body",
+    "execution": "Baseline",
+    "CorrelationId": null,
+    "BaselinePlanId": "idle.default.normal",
+    "ThinkPending": false,
+    "QueuedCount": 0,
+    "layers": [
+      {
+        "Name": "main",
+        "ZIndex": 0,
+        "source": "Default/Nomal/1/_000_250.png",
+        "Placement": null,
+        "Rotation": 0,
+        "Opacity": 1,
+        "Visible": true
+      }
+    ]
+  }
+]

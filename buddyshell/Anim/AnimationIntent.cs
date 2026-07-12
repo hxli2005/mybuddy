@@ -27,28 +27,44 @@ public enum TouchZone
     Body,
 }
 
-public sealed class TouchDetectedEventArgs(TouchZone zone) : EventArgs
+public sealed class TouchDetectedEventArgs(TouchZone zone, string? correlationId = null) : EventArgs
 {
     public TouchZone Zone { get; } = zone;
+    public string CorrelationId { get; } = correlationId ?? Guid.NewGuid().ToString("N");
 }
 
 public sealed record PhysioLevels(bool Hungry, bool Tired, bool Low, bool Bright);
 
 public static class ActionMapper
 {
-    public static AnimationIntent From(string? action, string? expression, string? idleHint = null)
+    public static AnimationIntent? TryFrom(string? action, string? expression)
     {
         var actionValue = (action ?? "").Trim().ToLowerInvariant();
         var mappedAction = actionValue switch
         {
             "comfort" or "concern" => AnimationIntent.Worried,
             "greet" or "happy" => AnimationIntent.Happy,
-            "remind" => AnimationIntent.Alert,
+            "remind" or "safety" => AnimationIntent.Alert,
             "thinking" => AnimationIntent.Think,
             "react" or "talk" or "notify" => AnimationIntent.Neutral,
-            "safety" => AnimationIntent.Alert,
             _ => (AnimationIntent?)null,
         };
+        if (mappedAction is not null) return mappedAction;
+
+        return (expression ?? "").Trim().ToLowerInvariant() switch
+        {
+            "happy" or "smile" => AnimationIntent.Happy,
+            "sad" => AnimationIntent.Sad,
+            "worried" => AnimationIntent.Worried,
+            "alert" => AnimationIntent.Alert,
+            "neutral" => AnimationIntent.Neutral,
+            _ => null,
+        };
+    }
+
+    public static AnimationIntent From(string? action, string? expression, string? idleHint = null)
+    {
+        var mappedAction = TryFrom(action, expression);
         if (mappedAction is not null) return mappedAction.Value;
         var value = (idleHint ?? expression ?? action ?? "idle").Trim().ToLowerInvariant();
         return value switch

@@ -1,0 +1,165 @@
+[
+  {
+    "capture": "01-offline-touch-local-entry.png",
+    "label": "offline-touch-local-entry",
+    "elapsed_ms": 0,
+    "Generation": 2,
+    "PlanId": "touch.head.normal",
+    "phase": "Entry",
+    "execution": "Transient",
+    "CorrelationId": "offline-touch",
+    "BaselinePlanId": "idle.default.normal",
+    "ThinkPending": false,
+    "QueuedCount": 0,
+    "layers": [
+      {
+        "Name": "main",
+        "ZIndex": 0,
+        "source": "Touch_Head/A_Nomal/\u6478\u5934_0_250.png",
+        "Placement": null,
+        "Rotation": 0,
+        "Opacity": 1,
+        "Visible": true
+      }
+    ]
+  },
+  {
+    "capture": "02-offline-touch-local-resume.png",
+    "label": "offline-touch-local-resume",
+    "elapsed_ms": 2250,
+    "Generation": 5,
+    "PlanId": "idle.default.normal",
+    "phase": "Body",
+    "execution": "Baseline",
+    "CorrelationId": null,
+    "BaselinePlanId": "idle.default.normal",
+    "ThinkPending": false,
+    "QueuedCount": 0,
+    "layers": [
+      {
+        "Name": "main",
+        "ZIndex": 0,
+        "source": "Default/Nomal/1/_000_250.png",
+        "Placement": null,
+        "Rotation": 0,
+        "Opacity": 1,
+        "Visible": true
+      }
+    ]
+  },
+  {
+    "capture": "03-offline-feed-local-start.png",
+    "label": "offline-feed-local-start",
+    "elapsed_ms": 2250,
+    "Generation": 6,
+    "PlanId": "feed.drink.normal:water",
+    "phase": "Body",
+    "execution": "Transient",
+    "CorrelationId": "offline-feed",
+    "BaselinePlanId": "idle.default.normal",
+    "ThinkPending": false,
+    "QueuedCount": 0,
+    "layers": [
+      {
+        "Name": "back",
+        "ZIndex": 0,
+        "source": "Drink/Nomal/back_lay/\u666E\u901A\u559D\u6C34_000_125.png",
+        "Placement": null,
+        "Rotation": 0,
+        "Opacity": 1,
+        "Visible": true
+      },
+      {
+        "Name": "item",
+        "ZIndex": 1,
+        "source": "../../image/food/\u77FF\u6CC9\u6C34.png",
+        "Placement": null,
+        "Rotation": 0,
+        "Opacity": 1,
+        "Visible": false
+      },
+      {
+        "Name": "front",
+        "ZIndex": 2,
+        "source": "Drink/front_lay/\u624B_000_1125.png",
+        "Placement": null,
+        "Rotation": 0,
+        "Opacity": 1,
+        "Visible": true
+      }
+    ]
+  },
+  {
+    "capture": "04-offline-feed-local-aligned.png",
+    "label": "offline-feed-local-aligned",
+    "elapsed_ms": 3300,
+    "Generation": 6,
+    "PlanId": "feed.drink.normal:water",
+    "phase": "Body",
+    "execution": "Transient",
+    "CorrelationId": "offline-feed",
+    "BaselinePlanId": "idle.default.normal",
+    "ThinkPending": false,
+    "QueuedCount": 0,
+    "layers": [
+      {
+        "Name": "back",
+        "ZIndex": 0,
+        "source": "Drink/Nomal/back_lay/\u666E\u901A\u559D\u6C34_008_125.png",
+        "Placement": null,
+        "Rotation": 0,
+        "Opacity": 1,
+        "Visible": true
+      },
+      {
+        "Name": "item",
+        "ZIndex": 1,
+        "source": "../../image/food/\u77FF\u6CC9\u6C34.png",
+        "Placement": {
+          "Width": 77,
+          "Height": 77,
+          "OffsetX": 268,
+          "OffsetY": 286,
+          "CoordinateSpace": 1,
+          "CanvasSize": 500
+        },
+        "Rotation": 60,
+        "Opacity": 1,
+        "Visible": true
+      },
+      {
+        "Name": "front",
+        "ZIndex": 2,
+        "source": "Drink/front_lay/\u624B_000_1125.png",
+        "Placement": null,
+        "Rotation": 0,
+        "Opacity": 1,
+        "Visible": true
+      }
+    ]
+  },
+  {
+    "capture": "05-offline-feed-local-resume.png",
+    "label": "offline-feed-local-resume",
+    "elapsed_ms": 6050,
+    "Generation": 7,
+    "PlanId": "idle.default.normal",
+    "phase": "Body",
+    "execution": "Baseline",
+    "CorrelationId": null,
+    "BaselinePlanId": "idle.default.normal",
+    "ThinkPending": false,
+    "QueuedCount": 0,
+    "layers": [
+      {
+        "Name": "main",
+        "ZIndex": 0,
+        "source": "Default/Nomal/1/_000_250.png",
+        "Placement": null,
+        "Rotation": 0,
+        "Opacity": 1,
+        "Visible": true
+      }
+    ]
+  }
+]

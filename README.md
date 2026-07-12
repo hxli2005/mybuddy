@@ -28,10 +28,10 @@ docker compose restart mybuddy
 ## 部署方式二:本机运行(开发)
 
 ```bash
-uv sync                                # 需 Python 3.12+ 与 uv
+uv sync --extra api                    # 需 Python 3.12+ 与 uv
 cp config.example.yaml config.yaml     # 填入 api_key
 
-uv run mybuddy web                     # Web:http://127.0.0.1:8000
+uv run --extra api mybuddy web         # Web:http://127.0.0.1:8000
 uv run mybuddy chat                    # 或命令行对话
 ```
 
@@ -40,12 +40,21 @@ uv run mybuddy chat                    # 或命令行对话
 `buddyshell/` 是 v1 的 WPF 桌宠壳。先启动 MyBuddy Web 后端，再运行：
 
 ```powershell
-dotnet run --project buddyshell/BuddyShell.csproj
+.\scripts\start_mybuddy_web.ps1
+# 另开一个 PowerShell；仓库本地 SDK 可避免系统未安装 dotnet SDK
+.\.dotnet-sdk\dotnet.exe run --project .\buddyshell\BuddyShell.csproj
 ```
 
 开发机若已安装 VPet，会自动查找默认宠物素材；也可设置
 `BUDDYSHELL_PET_ROOT` 指向 `0000_core/pet/vup`。发布包由
 `scripts/package_buddyshell.ps1` 生成。
+
+动画状态机回归、安装素材校验和 V1–V10 截图证据可用以下命令重跑：
+
+```powershell
+$env:BUDDYSHELL_PET_ROOT="D:\steam\steamapps\common\VPet\mod\0000_core\pet\vup"
+.\.dotnet-sdk\dotnet.exe run --project .\buddyshell.Tests\BuddyShell.Tests.csproj -c Release -- --assets
+```
 
 桌宠动画素材版权归[虚拟主播模拟器制作组](https://github.com/LorisYounger/VPet)，
 本项目仅按非商用条件使用；商业化前须另行取得授权。

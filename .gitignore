@@ -48,6 +48,8 @@ htmlcov/
 .nuget-packages/
 buddyshell/bin/
 buddyshell/obj/
+buddyshell.Tests/bin/
+buddyshell.Tests/obj/
 .tmp/
 vpet-plugin/bin/
 vpet-plugin/obj/

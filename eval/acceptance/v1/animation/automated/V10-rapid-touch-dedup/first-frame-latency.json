@@ -1,0 +1,5 @@
+{
+  "first_frame_latency_ms": 0.8106,
+  "threshold_ms": 100,
+  "pass": true
+}

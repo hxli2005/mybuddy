@@ -14,6 +14,7 @@
 5. `VPET_V1_ASSET_DISPOSITION.md` —— phase-2 资产逐模块处置(动手前必读,防止重复造/误删)
 6. `VPET_ACCEPTANCE.md` —— 六拍验收与证据规格(你的完工定义)
 7. `VPET_V1_EXPERIMENT.md` —— 冻结后实验(影响遥测字段,编码期只需保证字段齐)
+8. `VPET_V1_ANIMATION_STATE_MACHINE.md` —— 动画状态机整改规格(显式 manifest、单一仲裁器、共享时间线与 Gate A 动画证据)
 
 ## 排期与你的任务块
 

@@ -1,0 +1,98 @@
+[
+  {
+    "capture": "01-sleep-entry-A.png",
+    "label": "sleep-entry-A",
+    "elapsed_ms": 0,
+    "Generation": 2,
+    "PlanId": "sleep.normal",
+    "phase": "Entry",
+    "execution": "Baseline",
+    "CorrelationId": null,
+    "BaselinePlanId": "sleep.normal",
+    "ThinkPending": false,
+    "QueuedCount": 0,
+    "layers": [
+      {
+        "Name": "main",
+        "ZIndex": 0,
+        "source": "Sleep/A_Nomal/\u8EBA\u4E0B_000_125.png",
+        "Placement": null,
+        "Rotation": 0,
+        "Opacity": 1,
+        "Visible": true
+      }
+    ]
+  },
+  {
+    "capture": "02-sleep-loop-B.png",
+    "label": "sleep-loop-B",
+    "elapsed_ms": 500,
+    "Generation": 3,
+    "PlanId": "sleep.normal",
+    "phase": "Body",
+    "execution": "Baseline",
+    "CorrelationId": null,
+    "BaselinePlanId": "sleep.normal",
+    "ThinkPending": false,
+    "QueuedCount": 0,
+    "layers": [
+      {
+        "Name": "main",
+        "ZIndex": 0,
+        "source": "Sleep/B_Nomal/\u7761\u89C9\u5FAA\u73AF_000_125.png",
+        "Placement": null,
+        "Rotation": 0,
+        "Opacity": 1,
+        "Visible": true
+      }
+    ]
+  },
+  {
+    "capture": "03-sleep-exit-C.png",
+    "label": "sleep-exit-C",
+    "elapsed_ms": 500,
+    "Generation": 4,
+    "PlanId": "sleep.normal",
+    "phase": "Exit",
+    "execution": "Baseline",
+    "CorrelationId": null,
+    "BaselinePlanId": "idle.default.normal",
+    "ThinkPending": false,
+    "QueuedCount": 0,
+    "layers": [
+      {
+        "Name": "main",
+        "ZIndex": 0,
+        "source": "Sleep/C_Nomal/\u8D77\u5E8A_000_125.png",
+        "Placement": null,
+        "Rotation": 0,
+        "Opacity": 1,
+        "Visible": true
+      }
+    ]
+  },
+  {
+    "capture": "04-idle-resumed.png",
+    "label": "idle-resumed",
+    "elapsed_ms": 1375,
+    "Generation": 5,
+    "PlanId": "idle.default.normal",
+    "phase": "Body",
+    "execution": "Baseline",
+    "CorrelationId": null,
+    "BaselinePlanId": "idle.default.normal",
+    "ThinkPending": false,
+    "QueuedCount": 0,
+    "layers": [
+      {
+        "Name": "main",
+        "ZIndex": 0,
+        "source": "Default/Nomal/1/_000_250.png",
+        "Placement": null,
+        "Rotation": 0,
+        "Opacity": 1,
+        "Visible": true
+      }
+    ]
+  }
+]

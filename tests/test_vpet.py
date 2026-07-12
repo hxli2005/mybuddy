@@ -622,7 +622,13 @@ async def test_vpet_event_records_latest_emotion_label(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_feed_updates_physio_once_and_aggregates_shared_moment(tmp_path) -> None:
+async def test_feed_updates_physio_once_and_aggregates_shared_moment(tmp_path, monkeypatch) -> None:
+    # This test asserts feed deltas, not the sleep-window wake penalty. Freeze it at
+    # 12:00 Asia/Shanghai so it stays deterministic when the suite runs overnight.
+    monkeypatch.setattr(
+        "mybuddy.body.physio.utcnow",
+        lambda: datetime(2026, 7, 12, 4, 0),
+    )
     engine = init_db(str(tmp_path / "feed.db"))
     cfg = Config()
     cfg.physio.enabled = True

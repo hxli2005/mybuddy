@@ -1,0 +1,172 @@
+[
+  {
+    "capture": "01-work-loop-before-feed.png",
+    "label": "work-loop-before-feed",
+    "elapsed_ms": 1250,
+    "Generation": 3,
+    "PlanId": "work.write.normal",
+    "phase": "Body",
+    "execution": "Baseline",
+    "CorrelationId": null,
+    "BaselinePlanId": "work.write.normal",
+    "ThinkPending": false,
+    "QueuedCount": 0,
+    "layers": [
+      {
+        "Name": "main",
+        "ZIndex": 0,
+        "source": "WORK/WorkONE/B_1_Nomal/writeB_000_125.png",
+        "Placement": null,
+        "Rotation": 0,
+        "Opacity": 1,
+        "Visible": true
+      }
+    ]
+  },
+  {
+    "capture": "02-feed-item-enters.png",
+    "label": "feed-item-enters",
+    "elapsed_ms": 1250,
+    "Generation": 4,
+    "PlanId": "feed.eat.normal:congee",
+    "phase": "Body",
+    "execution": "Transient",
+    "CorrelationId": "v5-feed",
+    "BaselinePlanId": "work.write.normal",
+    "ThinkPending": false,
+    "QueuedCount": 0,
+    "layers": [
+      {
+        "Name": "back",
+        "ZIndex": 0,
+        "source": "Eat/Nomal/back_lay/_000_125.png",
+        "Placement": null,
+        "Rotation": 0,
+        "Opacity": 1,
+        "Visible": true
+      },
+      {
+        "Name": "item",
+        "ZIndex": 1,
+        "source": "../../image/food/\u7F57\u5B8B\u6C64.png",
+        "Placement": {
+          "Width": 60,
+          "Height": 60,
+          "OffsetX": 205,
+          "OffsetY": 23,
+          "CoordinateSpace": 1,
+          "CanvasSize": 500
+        },
+        "Rotation": 0,
+        "Opacity": 0.375,
+        "Visible": true
+      },
+      {
+        "Name": "front",
+        "ZIndex": 2,
+        "source": "Eat/Nomal/front_lay/_000_500.png",
+        "Placement": null,
+        "Rotation": 0,
+        "Opacity": 1,
+        "Visible": true
+      }
+    ]
+  },
+  {
+    "capture": "03-feed-item-aligned-with-hands.png",
+    "label": "feed-item-aligned-with-hands",
+    "elapsed_ms": 1850,
+    "Generation": 4,
+    "PlanId": "feed.eat.normal:congee",
+    "phase": "Body",
+    "execution": "Transient",
+    "CorrelationId": "v5-feed",
+    "BaselinePlanId": "work.write.normal",
+    "ThinkPending": false,
+    "QueuedCount": 0,
+    "layers": [
+      {
+        "Name": "back",
+        "ZIndex": 0,
+        "source": "Eat/Nomal/back_lay/_004_125.png",
+        "Placement": null,
+        "Rotation": 0,
+        "Opacity": 1,
+        "Visible": true
+      },
+      {
+        "Name": "item",
+        "ZIndex": 1,
+        "source": "../../image/food/\u7F57\u5B8B\u6C64.png",
+        "Placement": {
+          "Width": 65,
+          "Height": 65,
+          "OffsetX": 212,
+          "OffsetY": 196,
+          "CoordinateSpace": 1,
+          "CanvasSize": 500
+        },
+        "Rotation": 0,
+        "Opacity": 1,
+        "Visible": true
+      },
+      {
+        "Name": "front",
+        "ZIndex": 2,
+        "source": "Eat/Nomal/front_lay/_001_125.png",
+        "Placement": null,
+        "Rotation": 0,
+        "Opacity": 1,
+        "Visible": true
+      }
+    ]
+  },
+  {
+    "capture": "04-work-entry-rebuild-after-feed.png",
+    "label": "work-entry-rebuild-after-feed",
+    "elapsed_ms": 4525,
+    "Generation": 5,
+    "PlanId": "work.write.normal",
+    "phase": "Entry",
+    "execution": "Baseline",
+    "CorrelationId": null,
+    "BaselinePlanId": "work.write.normal",
+    "ThinkPending": false,
+    "QueuedCount": 0,
+    "layers": [
+      {
+        "Name": "main",
+        "ZIndex": 0,
+        "source": "WORK/WorkONE/A_Nomal/write_000_125.png",
+        "Placement": null,
+        "Rotation": 0,
+        "Opacity": 1,
+        "Visible": true
+      }
+    ]
+  },
+  {
+    "capture": "05-work-loop-after-entry-rebuild.png",
+    "label": "work-loop-after-entry-rebuild",
+    "elapsed_ms": 5775,
+    "Generation": 6,
+    "PlanId": "work.write.normal",
+    "phase": "Body",
+    "execution": "Baseline",
+    "CorrelationId": null,
+    "BaselinePlanId": "work.write.normal",
+    "ThinkPending": false,
+    "QueuedCount": 0,
+    "layers": [
+      {
+        "Name": "main",
+        "ZIndex": 0,
+        "source": "WORK/WorkONE/B_1_Nomal/writeB_000_125.png",
+        "Placement": null,
+        "Rotation": 0,
+        "Opacity": 1,
+        "Visible": true
+      }
+    ]
+  }
+]

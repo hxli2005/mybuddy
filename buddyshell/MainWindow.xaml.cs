@@ -1,6 +1,7 @@
 using BuddyShell.Anim;
 using BuddyShell.Bridge;
 using System.Globalization;
+using System.IO;
 using System.Windows;
 using System.Windows.Input;
 using System.Windows.Media;
@@ -13,7 +14,7 @@ public partial class MainWindow : Window
 {
     private readonly ShellSettings _settings = SettingsStore.Load();
     private readonly Outbox _outbox = new();
-    private IAnimationHost? _animationHost;
+    private IAnimationController? _animationController;
     private BridgeClient? _client;
     private StateLoop? _stateLoop;
     private TouchLayer? _touchLayer;
@@ -23,7 +24,7 @@ public partial class MainWindow : Window
     private SpikeEvidence? _spikeEvidence;
     private VPetStateResponse? _state;
     private string? _lastTurnId;
-    private AnimationIntent? _lastBaseline;
+    private bool _feeding;
 
     public MainWindow()
     {
@@ -33,10 +34,14 @@ public partial class MainWindow : Window
         Closed += (_, _) => DisposeServices();
         DragBar.MouseLeftButtonDown += (_, args) =>
         {
-            if (args.OriginalSource is not System.Windows.Controls.Button) DragMove();
+            if (!IsInsideButton(args.OriginalSource as DependencyObject)) DragMove();
         };
         Chat.SendRequested += async (_, args) => await SendChatAsync(args.Text);
-        Foods.FoodSelected += async (_, args) => await FeedAsync(args.ItemId);
+        Foods.FoodSelected += async (_, args) =>
+        {
+            CloseDrawers();
+            await FeedAsync(args.ItemId);
+        };
     }
 
     public void SetConnectionState(string text, ConnectionState state)
@@ -53,6 +58,35 @@ public partial class MainWindow : Window
         });
     }
 
+    private void ToggleChat_Click(object sender, RoutedEventArgs e) =>
+        ToggleDrawer(ChatDrawer);
+
+    private void ToggleFood_Click(object sender, RoutedEventArgs e) =>
+        ToggleDrawer(FoodDrawer);
+
+    private void ToggleDrawer(FrameworkElement drawer)
+    {
+        var show = drawer.Visibility != Visibility.Visible;
+        CloseDrawers();
+        if (show) drawer.Visibility = Visibility.Visible;
+    }
+
+    private void CloseDrawers()
+    {
+        ChatDrawer.Visibility = Visibility.Collapsed;
+        FoodDrawer.Visibility = Visibility.Collapsed;
+    }
+
+    private static bool IsInsideButton(DependencyObject? element)
+    {
+        while (element is not null)
+        {
+            if (element is System.Windows.Controls.Button) return true;
+            element = VisualTreeHelper.GetParent(element);
+        }
+        return false;
+    }
+
     private void OnLoaded(object sender, RoutedEventArgs e)
     {
         try
@@ -61,13 +95,15 @@ public partial class MainWindow : Window
             var root = !string.IsNullOrWhiteSpace(_settings.PetAssetRoot)
                 ? _settings.PetAssetRoot
                 : AssetLocator.FindPetRoot();
-            var forceFrame = _settings.ForceFramePlayer || string.Equals(
-                Environment.GetEnvironmentVariable("BUDDYSHELL_FORCE_FRAME"), "1", StringComparison.Ordinal);
-            _animationHost = forceFrame ? new FramePlayerHost(root!) : new VPetCoreHost(root!);
-            AnimationHostSlot.Content = _animationHost.View;
-            _animationHost.SetBaseline(new PhysioLevels(false, false, false, false), 0.5);
-            _animationHost.Play(AnimationIntent.Idle, loop: true);
-            _spikeEvidence = new SpikeEvidence(_animationHost);
+            if (string.IsNullOrWhiteSpace(root)) throw new DirectoryNotFoundException("未找到 VPet 素材目录。");
+            var renderer = new FramePlayerHost(root);
+            _animationController = new AnimationController(AnimationManifest.CreateDefault(root), renderer);
+            _animationController.Faulted += (_, args) => SetConnectionState(
+                args.Recovered ? "动画渲染已恢复" : $"动画渲染失败：{args.Exception?.Message}",
+                args.Recovered ? ConnectionState.Connected : ConnectionState.Error);
+            AnimationHostSlot.Content = _animationController.View;
+            UpdateAnimationBaseline();
+            _spikeEvidence = new SpikeEvidence(_animationController);
 
             _client = new BridgeClient(_settings);
             _stateLoop = new StateLoop(_client);
@@ -77,8 +113,8 @@ public partial class MainWindow : Window
                 _state = null;
                 SetConnectionState(exception.Message, ConnectionState.Warning);
             });
-            _touchLayer = new TouchLayer(_animationHost, _client, _outbox, ServerDate);
-            _touchLayer.ResponseReceived += (_, response) => ShowResponse(response);
+            _touchLayer = new TouchLayer(_animationController, _client, _outbox, ServerDate);
+            _touchLayer.ResponseReceived += (_, response) => ShowSpeechOnly(response);
             _presence = new Presence(
                 _client,
                 _outbox,
@@ -104,7 +140,7 @@ public partial class MainWindow : Window
             _presence.Start();
             _notices.Start();
             _stateLoop.Start();
-            SetConnectionState(forceFrame ? "兼容帧播放器已运行" : "VPet.Core 已运行", ConnectionState.Connected);
+            SetConnectionState("动画状态机已运行", ConnectionState.Connected);
         }
         catch (Exception exception)
         {
@@ -149,17 +185,7 @@ public partial class MainWindow : Window
                 _settings.NormalizeTodayQuiet(serverTime.ToString("yyyy-MM-dd"));
             }
             settingsChanged |= quietBefore != (_settings.TodayQuiet, _settings.TodayQuietDate);
-            var levels = state.Physio?.Levels ?? new PhysioLevelFlags();
-            _animationHost?.SetBaseline(
-                new PhysioLevels(levels.Hungry, levels.Tired, levels.Low, levels.Bright), state.Warmth);
-            var intent = state.Physio?.Sleeping == true
-                ? AnimationIntent.Sleep
-                : ActionMapper.From(null, null, state.IdleHint);
-            if (_lastBaseline != intent)
-            {
-                _animationHost?.Play(intent, loop: true);
-                _lastBaseline = intent;
-            }
+            UpdateAnimationBaseline();
             SetConnectionState($"已连接 · {FormatServerTime(state.ServerTime)}", ConnectionState.Connected);
             App.LogMessage($"event=state server_time={state.ServerTime} idle_hint={state.IdleHint}");
             if (settingsChanged) SettingsStore.Save(_settings);
@@ -169,9 +195,14 @@ public partial class MainWindow : Window
 
     private async Task SendChatAsync(string text)
     {
-        if (_client is null || _animationHost is null) return;
+        if (_client is null || _animationController is null) return;
         Chat.AddUser(text);
-        _animationHost.Play(AnimationIntent.Think, loop: true);
+        var correlationId = $"chat:{Guid.NewGuid():N}";
+        _animationController.Submit(new AnimationRequest(
+            AnimationIntent.Think,
+            AnimationSource.Chat,
+            correlationId,
+            AnimationPriority.Think));
         try
         {
             var response = await _client.SendChatAsync(text);
@@ -179,7 +210,10 @@ public partial class MainWindow : Window
             App.LogMessage($"event=chat server_time={_state?.ServerTime} turn_id={response.TurnId}");
             var full = response.Text ?? response.Speech?.Text ?? "";
             if (!string.IsNullOrWhiteSpace(full)) Chat.AddAssistant(full);
-            ShowResponse(response);
+            ShowResponse(response, submitAnimation: false);
+            _animationController.Complete(
+                correlationId,
+                new AnimationOutcome(ActionMapper.TryFrom(response.Action?.Name, response.Expression?.Name)));
             if (response.Speech?.Truncated == true)
             {
                 SetConnectionState("气泡已缩短，全文在聊天窗", ConnectionState.Connected);
@@ -192,22 +226,45 @@ public partial class MainWindow : Window
             SetConnectionState(exception.StatusCode == 401 ? "令牌无效，请检查设置" : exception.Message,
                 exception.StatusCode == 401 ? ConnectionState.Error : ConnectionState.Warning);
             if (exception.StatusCode == 401) ShowSettings();
-            _animationHost.Play(_lastBaseline ?? AnimationIntent.Idle, loop: true);
+            _animationController.Complete(
+                correlationId,
+                new AnimationOutcome(IsError: true, Reason: exception.Message));
+        }
+        catch (Exception exception)
+        {
+            App.LogException(exception);
+            SpeechBubble.ShowSpeech("刚才卡了一下，我们再试一次。", interrupt: true);
+            SetConnectionState(exception.Message, ConnectionState.Error);
+            _animationController.Complete(
+                correlationId,
+                new AnimationOutcome(IsError: true, Reason: exception.GetType().Name));
         }
     }
 
     private async Task FeedAsync(string itemId)
     {
-        if (_client is null || _animationHost is null) return;
-        _animationHost.Play(AnimationIntent.Eat);
+        if (_client is null || _animationController is null || _feeding) return;
+        _feeding = true;
+        // Default VPet item trajectories are 2675ms (eat) and 2750ms (drink).
+        var animationFloor = Task.Delay(TimeSpan.FromMilliseconds(2800));
         var request = new VPetEventRequest
         {
             Event = "feed",
             Context = new() { ["item"] = itemId },
         };
+        _animationController.Submit(new AnimationRequest(
+            AnimationIntent.Eat,
+            AnimationSource.Feed,
+            request.ClientEventId,
+            AnimationPriority.Feed,
+            new Dictionary<string, string> { ["item"] = itemId }));
         try
         {
-            ShowResponse(await _client.SendEventAsync(request));
+            var response = await _client.SendEventAsync(request);
+            if (response.Speech is { Text.Length: > 0 } speech)
+            {
+                SpeechBubble.ShowSpeech(speech.Text, speech.Interrupt);
+            }
             App.LogMessage(
                 $"event=feed server_time={_state?.ServerTime} client_event_id={request.ClientEventId} " +
                 $"item={itemId}");
@@ -217,6 +274,11 @@ public partial class MainWindow : Window
         {
             await _outbox.EnqueueAsync(request);
             SetConnectionState("投喂已暂存，恢复连接后补报", ConnectionState.Warning);
+        }
+        finally
+        {
+            await animationFloor;
+            _feeding = false;
         }
     }
 
@@ -263,11 +325,14 @@ public partial class MainWindow : Window
             _settings.ActiveWorkSessionId = stopping ? null : sessionId;
             SettingsStore.Save(_settings);
             _tray?.SetWorking(!stopping);
-            ShowResponse(response);
+            UpdateAnimationBaseline();
+            if (response.Speech is { Text.Length: > 0 } speech)
+            {
+                SpeechBubble.ShowSpeech(speech.Text, speech.Interrupt);
+            }
             App.LogMessage(
                 $"event={request.Event} server_time={_state?.ServerTime} " +
                 $"client_event_id={request.ClientEventId} session_id={sessionId}");
-            if (!stopping) _animationHost?.Play(AnimationIntent.Work, loop: true);
             if (_stateLoop is not null) await _stateLoop.PollAsync();
         }
         catch (BridgeRequestException exception)
@@ -276,7 +341,7 @@ public partial class MainWindow : Window
             _settings.ActiveWorkSessionId = stopping ? null : sessionId;
             SettingsStore.Save(_settings);
             _tray?.SetWorking(!stopping);
-            if (!stopping) _animationHost?.Play(AnimationIntent.Work, loop: true);
+            UpdateAnimationBaseline();
             SetConnectionState(exception.Message, ConnectionState.Warning);
         }
     }
@@ -292,7 +357,7 @@ public partial class MainWindow : Window
         catch (Exception exception) { SetConnectionState(exception.Message, ConnectionState.Warning); }
     }
 
-    private void ShowResponse(VPetBridgeResponse response)
+    private void ShowResponse(VPetBridgeResponse response, bool submitAnimation = true)
     {
         Dispatcher.Invoke(() =>
         {
@@ -300,12 +365,27 @@ public partial class MainWindow : Window
             {
                 SpeechBubble.ShowSpeech(speech.Text, speech.Interrupt);
             }
-            _animationHost?.Play(
-                ActionMapper.From(response.Action?.Name, response.Expression?.Name), loop: false);
+            var reaction = ActionMapper.TryFrom(response.Action?.Name, response.Expression?.Name);
+            if (submitAnimation && reaction is { } intent && intent != AnimationIntent.Think)
+            {
+                _animationController?.Submit(new AnimationRequest(
+                    intent,
+                    AnimationSource.BridgeResponse,
+                    $"response:{Guid.NewGuid():N}",
+                    AnimationPriority.Response));
+            }
         });
         if (response.Pending.Count > 0 && _notices is not null)
         {
             _ = _notices.DisplayPendingAsync(response.Pending);
+        }
+    }
+
+    private void ShowSpeechOnly(VPetBridgeResponse response)
+    {
+        if (response.Speech is { Text.Length: > 0 } speech)
+        {
+            Dispatcher.Invoke(() => SpeechBubble.ShowSpeech(speech.Text, speech.Interrupt));
         }
     }
 
@@ -347,19 +427,32 @@ public partial class MainWindow : Window
     private static string FormatServerTime(string value) =>
         DateTimeOffset.TryParse(value, out var time) ? time.ToString("MM-dd HH:mm") : value;
 
+    private void UpdateAnimationBaseline()
+    {
+        var levels = _state?.Physio?.Levels ?? new PhysioLevelFlags();
+        _animationController?.UpdateBaseline(new BaselineSnapshot(
+            _state is not null,
+            _state?.Physio?.Sleeping == true,
+            !string.IsNullOrWhiteSpace(_settings.ActiveWorkSessionId),
+            _state?.IdleHint ?? "idle",
+            new PhysioLevels(levels.Hungry, levels.Tired, levels.Low, levels.Bright),
+            _state?.Warmth ?? 0.5));
+    }
+
     private void RestoreWindowPosition()
     {
         if (_settings.WindowLeft is not double left || _settings.WindowTop is not double top) return;
-        var area = System.Windows.Forms.Screen.AllScreens
-            .Select(screen => screen.WorkingArea)
-            .FirstOrDefault(rect => rect.Contains((int)left, (int)top));
-        if (area.Width == 0) area = System.Windows.Forms.Screen.PrimaryScreen?.WorkingArea ?? new(0, 0, 1920, 1080);
+        // Window.Left/Top/Width/Height use WPF device-independent pixels. WinForms Screen
+        // returns physical pixels in a per-monitor-DPI-aware process, so mixing both coordinate
+        // systems can restore most of the window below the visible desktop.
+        var area = SystemParameters.WorkArea;
         Left = Math.Clamp(left, area.Left, Math.Max(area.Left, area.Right - Width));
         Top = Math.Clamp(top, area.Top, Math.Max(area.Top, area.Bottom - Height));
     }
 
     private void SaveWindowPosition()
     {
+        if (!double.IsFinite(Left) || !double.IsFinite(Top)) return;
         _settings.WindowLeft = Left;
         _settings.WindowTop = Top;
         SettingsStore.Save(_settings);
@@ -374,6 +467,6 @@ public partial class MainWindow : Window
         _stateLoop?.Dispose();
         _tray?.Dispose();
         _client?.Dispose();
-        _animationHost?.Dispose();
+        _animationController?.Dispose();
     }
 }

@@ -1,0 +1,146 @@
+[
+  {
+    "capture": "01-work-loop-before-touch.png",
+    "label": "work-loop-before-touch",
+    "elapsed_ms": 1250,
+    "Generation": 3,
+    "PlanId": "work.write.normal",
+    "phase": "Body",
+    "execution": "Baseline",
+    "CorrelationId": null,
+    "BaselinePlanId": "work.write.normal",
+    "ThinkPending": false,
+    "QueuedCount": 0,
+    "layers": [
+      {
+        "Name": "main",
+        "ZIndex": 0,
+        "source": "WORK/WorkONE/B_1_Nomal/writeB_000_125.png",
+        "Placement": null,
+        "Rotation": 0,
+        "Opacity": 1,
+        "Visible": true
+      }
+    ]
+  },
+  {
+    "capture": "02-touch-entry-A.png",
+    "label": "touch-entry-A",
+    "elapsed_ms": 1250,
+    "Generation": 4,
+    "PlanId": "touch.head.normal",
+    "phase": "Entry",
+    "execution": "Transient",
+    "CorrelationId": "879e9c5631164030a142db49eeb54d69",
+    "BaselinePlanId": "work.write.normal",
+    "ThinkPending": false,
+    "QueuedCount": 0,
+    "layers": [
+      {
+        "Name": "main",
+        "ZIndex": 0,
+        "source": "Touch_Head/A_Nomal/\u6478\u5934_0_250.png",
+        "Placement": null,
+        "Rotation": 0,
+        "Opacity": 1,
+        "Visible": true
+      }
+    ]
+  },
+  {
+    "capture": "03-touch-body-B.png",
+    "label": "touch-body-B",
+    "elapsed_ms": 1625,
+    "Generation": 5,
+    "PlanId": "touch.head.normal",
+    "phase": "Body",
+    "execution": "Transient",
+    "CorrelationId": "879e9c5631164030a142db49eeb54d69",
+    "BaselinePlanId": "work.write.normal",
+    "ThinkPending": false,
+    "QueuedCount": 0,
+    "layers": [
+      {
+        "Name": "main",
+        "ZIndex": 0,
+        "source": "Touch_Head/B_Nomal/\u6478\u5934_000_125.png",
+        "Placement": null,
+        "Rotation": 0,
+        "Opacity": 1,
+        "Visible": true
+      }
+    ]
+  },
+  {
+    "capture": "04-touch-exit-C.png",
+    "label": "touch-exit-C",
+    "elapsed_ms": 3125,
+    "Generation": 6,
+    "PlanId": "touch.head.normal",
+    "phase": "Exit",
+    "execution": "Transient",
+    "CorrelationId": "879e9c5631164030a142db49eeb54d69",
+    "BaselinePlanId": "work.write.normal",
+    "ThinkPending": false,
+    "QueuedCount": 0,
+    "layers": [
+      {
+        "Name": "main",
+        "ZIndex": 0,
+        "source": "Touch_Head/C_Nomal/\u6478\u5934_0_125.png",
+        "Placement": null,
+        "Rotation": 0,
+        "Opacity": 1,
+        "Visible": true
+      }
+    ]
+  },
+  {
+    "capture": "05-work-entry-rebuild-after-touch.png",
+    "label": "work-entry-rebuild-after-touch",
+    "elapsed_ms": 3500,
+    "Generation": 7,
+    "PlanId": "work.write.normal",
+    "phase": "Entry",
+    "execution": "Baseline",
+    "CorrelationId": null,
+    "BaselinePlanId": "work.write.normal",
+    "ThinkPending": false,
+    "QueuedCount": 0,
+    "layers": [
+      {
+        "Name": "main",
+        "ZIndex": 0,
+        "source": "WORK/WorkONE/A_Nomal/write_000_125.png",
+        "Placement": null,
+        "Rotation": 0,
+        "Opacity": 1,
+        "Visible": true
+      }
+    ]
+  },
+  {
+    "capture": "06-work-loop-after-entry-rebuild.png",
+    "label": "work-loop-after-entry-rebuild",
+    "elapsed_ms": 4750,
+    "Generation": 8,
+    "PlanId": "work.write.normal",
+    "phase": "Body",
+    "execution": "Baseline",
+    "CorrelationId": null,
+    "BaselinePlanId": "work.write.normal",
+    "ThinkPending": false,
+    "QueuedCount": 0,
+    "layers": [
+      {
+        "Name": "main",
+        "ZIndex": 0,
+        "source": "WORK/WorkONE/B_1_Nomal/writeB_000_125.png",
+        "Placement": null,
+        "Rotation": 0,
+        "Opacity": 1,
+        "Visible": true
+      }
+    ]
+  }
+]

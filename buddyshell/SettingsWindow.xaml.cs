@@ -17,7 +17,6 @@ public partial class SettingsWindow : Window
         PhysioInjection.IsChecked = settings.PhysioInjection;
         TouchEscalation.IsChecked = settings.TouchEscalation;
         PhysicalProactive.IsChecked = settings.PhysicalProactive;
-        ForceFramePlayer.IsChecked = settings.ForceFramePlayer;
         if (state is not null)
         {
             ServerClock.Text = $"服务端时间：{state.ServerTime}";
@@ -32,7 +31,6 @@ public partial class SettingsWindow : Window
         _settings.PhysioInjection = PhysioInjection.IsChecked == true;
         _settings.TouchEscalation = TouchEscalation.IsChecked == true;
         _settings.PhysicalProactive = PhysicalProactive.IsChecked == true;
-        _settings.ForceFramePlayer = ForceFramePlayer.IsChecked == true;
         SettingsStore.Save(_settings);
         DialogResult = true;
     }
