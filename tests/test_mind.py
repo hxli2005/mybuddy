@@ -194,6 +194,27 @@ async def test_provider_failure_returns_honest_static_catch_without_committing(t
     assert failures == []
 
 
+@pytest.mark.asyncio
+async def test_invalid_structured_tool_arguments_are_saved_in_full(tmp_path) -> None:
+    invalid = {
+        "state_changes": '{"mood":"平静"}',
+        "life_events": [],
+        "memory_operations": [],
+        "expression": "我在",
+    }
+    files = MindFiles(tmp_path)
+
+    result = await mind_step(
+        "回来看看。", provider=StubProvider([invalid, _valid_bundle()]), files=files
+    )
+    _, _, _, failures = _read(files)
+
+    assert result.committed is True
+    assert result.attempts == 2
+    assert failures[0]["candidate_raw"] == json.dumps(invalid, ensure_ascii=False)
+    assert '"state_changes": "{\\"mood\\":\\"平静\\"}"' in failures[0]["candidate_raw"]
+
+
 def test_write_failure_before_replace_keeps_old_files_readable(tmp_path, monkeypatch) -> None:
     first = tmp_path / "state.json"
     second = tmp_path / "memories.json"
