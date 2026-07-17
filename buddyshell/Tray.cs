@@ -13,14 +13,10 @@ public sealed class Tray : IDisposable
         quiet.Click += (_, _) => QuietToggled?.Invoke(this, EventArgs.Empty);
         var settings = new System.Windows.Forms.ToolStripMenuItem("设置");
         settings.Click += (_, _) => SettingsRequested?.Invoke(this, EventArgs.Empty);
-        var good = new System.Windows.Forms.ToolStripMenuItem("这句好");
-        good.Click += (_, _) => FeedbackRequested?.Invoke(this, new FeedbackEventArgs("good"));
-        var bad = new System.Windows.Forms.ToolStripMenuItem("这句差");
-        bad.Click += (_, _) => FeedbackRequested?.Invoke(this, new FeedbackEventArgs("bad"));
         var exit = new System.Windows.Forms.ToolStripMenuItem("退出");
         exit.Click += (_, _) => ExitRequested?.Invoke(this, EventArgs.Empty);
         var menu = new System.Windows.Forms.ContextMenuStrip();
-        menu.Items.AddRange([_work, quiet, settings, good, bad, new System.Windows.Forms.ToolStripSeparator(), exit]);
+        menu.Items.AddRange([_work, quiet, settings, new System.Windows.Forms.ToolStripSeparator(), exit]);
         _icon = new System.Windows.Forms.NotifyIcon
         {
             Icon = System.Drawing.SystemIcons.Information,
@@ -34,7 +30,6 @@ public sealed class Tray : IDisposable
     public event EventHandler? WorkToggled;
     public event EventHandler? QuietToggled;
     public event EventHandler? SettingsRequested;
-    public event EventHandler<FeedbackEventArgs>? FeedbackRequested;
     public event EventHandler? ExitRequested;
     public event EventHandler? ShowRequested;
 
@@ -45,9 +40,4 @@ public sealed class Tray : IDisposable
         _icon.Visible = false;
         _icon.Dispose();
     }
-}
-
-public sealed class FeedbackEventArgs(string label) : EventArgs
-{
-    public string Label { get; } = label;
 }

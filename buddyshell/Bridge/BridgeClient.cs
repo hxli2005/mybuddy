@@ -54,17 +54,6 @@ public sealed class BridgeClient : IDisposable
             5,
             cancellationToken);
 
-    public async Task SendFeedbackAsync(
-        string label,
-        string? turnId,
-        CancellationToken cancellationToken = default) =>
-        _ = await SendRequiredAsync<JsonElement>(
-            HttpMethod.Post,
-            "/api/feedback",
-            new { label, turn_id = turnId },
-            5,
-            cancellationToken);
-
     public void Dispose() => _http.Dispose();
 
     private async Task<T> SendRequiredAsync<T>(

@@ -1,7 +1,7 @@
 """FastAPI 后端:小布引擎的桥接面。
 
-单用户后端:复用现有 Agent、Memory、FeedbackBus 装配,只暴露对话与
-vpet 桥端点(status / chat / vpet-* / feedback)。
+单用户后端:复用现有 Agent、Memory 装配,只暴露对话与
+vpet 桥端点(status / chat / vpet-*)。
 """
 
 from __future__ import annotations
@@ -52,13 +52,9 @@ from mybuddy.integrations.vpet import (
     pending_to_vpet_payload,
 )
 from mybuddy.learning import (
-    FeedbackBus,
-    FeedbackEvent,
     SkillCurator,
     SkillRegistry,
     TrajectoryLogger,
-    make_skill_subscriber,
-    make_trajectory_subscriber,
 )
 from mybuddy.llm import Message as LLMMessage
 from mybuddy.llm import Role, make_provider
@@ -118,11 +114,6 @@ class VPetDrainRequest(BaseModel):
     digest: bool = False
 
 
-class FeedbackRequest(BaseModel):
-    label: str
-    turn_id: str | None = None
-
-
 @dataclass
 class AppState:
     config_path: str
@@ -136,9 +127,6 @@ class AppState:
     scheduler: MyBuddyScheduler | None = None
     agent: Agent | None = None
     physio: PhysioEngine | None = None
-    feedback_bus: FeedbackBus | None = None
-    last_turn_id: str | None = None
-    last_triggered_skills: list[str] = field(default_factory=list)
     _body_state_warning_emitted: bool = False
     agent_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
@@ -166,15 +154,11 @@ class AppState:
             scheduler.schedule_dream_job(cfg.scheduler.dream_job, config_path=self.config_path)
 
         agent: Agent | None = None
-        feedback_bus: FeedbackBus | None = None
         if provider is not None:
             registry = ToolRegistry.default()
             memory = MemoryManager(engine=engine, config=cfg, ltm=ltm, provider=provider)
             setup_memory_tool(ltm)
             setup_skill_tool(skill_registry)
-            feedback_bus = FeedbackBus()
-            feedback_bus.subscribe(make_trajectory_subscriber(logger))
-            feedback_bus.subscribe(make_skill_subscriber(skill_registry))
             agent = Agent(
                 provider=provider,
                 config=cfg,
@@ -207,7 +191,6 @@ class AppState:
         self.scheduler = scheduler
         self.agent = agent
         self.physio = physio
-        self.feedback_bus = feedback_bus
         self._repair_pending_shared_moments()
         self._flush_touch_shared_moments()
 
@@ -295,8 +278,6 @@ class AppState:
                     if allow_pending
                     else []
                 )
-                self.last_turn_id = result.trajectory.turn_id
-                self.last_triggered_skills = list(result.triggered_skills)
                 return {
                     "text": result_text,
                     "turn_id": result.trajectory.turn_id,
@@ -1014,23 +995,6 @@ class AppState:
             ],
         }
 
-    def feedback_payload(self, label: str, turn_id: str | None = None) -> dict[str, Any]:
-        if self.feedback_bus is None:
-            raise RuntimeError("反馈总线未初始化")
-        tid = turn_id or self.last_turn_id
-        if not tid:
-            raise RuntimeError("没有可反馈的对话轮次")
-        clean_label = label.strip()
-        self.feedback_bus.publish(
-            FeedbackEvent(
-                turn_id=tid,
-                label=clean_label,
-                meta={"triggered_skills": list(self.last_triggered_skills)},
-            )
-        )
-        return {"ok": True, "turn_id": tid, "label": clean_label}
-
-
 def create_app(config_path: str = "config.yaml", max_steps: int = 6):
     try:
         from fastapi import FastAPI, HTTPException
@@ -1122,13 +1086,6 @@ def create_app(config_path: str = "config.yaml", max_steps: int = 6):
             digest=req.digest,
             client_flags=_parse_client_flags(request.headers.get("X-MyBuddy-Client-Flags")),
         )
-
-    @app.post("/api/feedback")
-    async def feedback(req: FeedbackRequest) -> dict[str, Any]:
-        try:
-            return state.feedback_payload(req.label, req.turn_id)
-        except RuntimeError as e:
-            raise HTTPException(status_code=400, detail=str(e)) from e
 
     return app
 

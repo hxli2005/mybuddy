@@ -47,7 +47,7 @@
 - 真实输出/她显示的话：“嗯，我在呢。你慢慢说，我好好听着。”；截图与四文件证据在 `data/mini-s3-evidence/`
 - shown证据：WPF保存`expr_de63ceb70cdd45589b7c13179ccf9e9a`并回报；history共3条，其中仅1条`shared_expression`
 - 断线证据：停服后“断线时留在输入框”仍在编辑框，history行数保持`3→3`，chat不进outbox、不后台补发
-- 删除的旧路径：WPF `SendChatAsync`/`VPetChatRequest`及两套`/api/vpet/chat`端点；无旧端点回退分支
+- 删除的旧路径：WPF旧chat与feedback链、两套`/api/vpet/chat`和`/api/feedback`端点；无旧端点回退分支
 - 剩余阻塞：无；S4可以领取
 - 她哪里更活了：现在是她真的出现在桌面身体上、把话说给人看见之后，这句话才算两人共同发生过
 

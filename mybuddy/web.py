@@ -170,14 +170,6 @@ class DemoHandler(BaseHTTPRequestHandler):
                 )
                 self._send_json(payload)
                 return
-            if path == "/api/feedback":
-                label = str(data.get("label", "")).strip()
-                if not label:
-                    self._send_error(HTTPStatus.BAD_REQUEST, "label is required")
-                    return
-                payload = self.server.state.feedback_payload(label, data.get("turn_id"))
-                self._send_json(payload)
-                return
             self._send_error(HTTPStatus.NOT_FOUND, "not found")
         except PhysioBusyError as e:
             self._send_json(

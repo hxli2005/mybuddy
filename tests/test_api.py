@@ -66,6 +66,7 @@ def test_dead_admin_endpoints_are_gone(tmp_path) -> None:
         ("get", "/api/skills"),
         ("get", "/api/notes"),
         ("post", "/api/vpet/chat"),
+        ("post", "/api/feedback"),
         ("post", "/v1/chat/completions"),
     ]:
         resp = getattr(client, method)(path)

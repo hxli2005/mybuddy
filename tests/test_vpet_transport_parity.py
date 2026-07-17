@@ -96,6 +96,15 @@ def test_fastapi_and_standard_web_share_vpet_v2_contract(tmp_path) -> None:
         )
         assert old_web_chat_status == old_fast_chat.status_code == 404
 
+        old_fast_feedback = fast_client.post("/api/feedback", json={"label": "good"})
+        old_web_feedback_status, _ = _request_json(
+            base_url,
+            "POST",
+            "/api/feedback",
+            {"label": "good"},
+        )
+        assert old_web_feedback_status == old_fast_feedback.status_code == 404
+
         fast_state.cfg.vpet.bridge_token = "secret"
         web_state.cfg.vpet.bridge_token = "secret"
         fast_denied = fast_client.get("/api/vpet/state")

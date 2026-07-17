@@ -158,7 +158,6 @@ public partial class MainWindow : Window
         tray.WorkToggled += async (_, _) => await ToggleWorkAsync();
         tray.QuietToggled += (_, _) => ToggleQuiet();
         tray.SettingsRequested += (_, _) => ShowSettings();
-        tray.FeedbackRequested += async (_, args) => await SendFeedbackAsync(args.Label);
         tray.ShowRequested += (_, _) => { Show(); Activate(); };
         tray.ExitRequested += (_, _) => Close();
         return tray;
@@ -410,17 +409,6 @@ public partial class MainWindow : Window
             UpdateAnimationBaseline();
             SetConnectionState(exception.Message, ConnectionState.Warning);
         }
-    }
-
-    private async Task SendFeedbackAsync(string label)
-    {
-        if (_client is null) return;
-        try
-        {
-            await _client.SendFeedbackAsync(label, null);
-            SetConnectionState("这条反馈记下了", ConnectionState.Connected);
-        }
-        catch (Exception exception) { SetConnectionState(exception.Message, ConnectionState.Warning); }
     }
 
     private void ShowResponse(VPetBridgeResponse response, bool submitAnimation = true)
