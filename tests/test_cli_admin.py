@@ -1,18 +1,16 @@
-"""CLI admin 子命令测试(profile / reminders / skills)。
+"""CLI admin 子命令测试(profile / skills)。
 
 不触发 LLM,只验证 typer 子命令走通 SQLite 和 skill 文件落盘/更新。
 """
 
 from __future__ import annotations
 
-from datetime import datetime
-
 import pytest
 from typer.testing import CliRunner
 
-from mybuddy.cli_admin import profile_app, reminders_app, skills_app, users_app
+from mybuddy.cli_admin import profile_app, skills_app
 from mybuddy.learning import SkillRegistry
-from mybuddy.storage import Reminder, init_db, session_scope
+from mybuddy.storage import init_db
 
 runner = CliRunner()
 
@@ -59,40 +57,6 @@ paths:
 
 
 # =============================================================================
-# users
-# =============================================================================
-
-
-def test_users_create_bind_list_disable_quota(admin_env) -> None:
-    cfg = admin_env["cfg_path"]
-
-    r_create = runner.invoke(users_app, ["create", "测试用户", "--daily", "12", "--config", cfg])
-    assert r_create.exit_code == 0, r_create.stdout
-    assert "已创建用户 #1" in r_create.stdout
-
-    r_bind = runner.invoke(users_app, ["bind-qq", "1", "qq-openid", "--name", "QQ名", "--config", cfg])
-    assert r_bind.exit_code == 0, r_bind.stdout
-    assert "qq:qq-openid" in r_bind.stdout
-
-    r_quota = runner.invoke(users_app, ["quota", "1", "--daily", "3", "--config", cfg])
-    assert r_quota.exit_code == 0, r_quota.stdout
-    assert "daily=3" in r_quota.stdout
-
-    r_disable = runner.invoke(users_app, ["disable", "1", "--config", cfg])
-    assert r_disable.exit_code == 0, r_disable.stdout
-    assert "已禁用" in r_disable.stdout
-
-    r_enable = runner.invoke(users_app, ["enable", "1", "--config", cfg])
-    assert r_enable.exit_code == 0, r_enable.stdout
-    assert "已启用" in r_enable.stdout
-
-    r_list = runner.invoke(users_app, ["list", "--config", cfg])
-    assert r_list.exit_code == 0, r_list.stdout
-    assert "测试用户" in r_list.stdout
-    assert "qq:qq-openid" in r_list.stdout
-
-
-# =============================================================================
 # profile
 # =============================================================================
 
@@ -115,45 +79,6 @@ def test_profile_set_show_unset(admin_env) -> None:
     r4 = runner.invoke(profile_app, ["unset", "不存在", "--config", cfg])
     assert r4.exit_code == 0
     assert "不存在" in r4.stdout
-
-
-# =============================================================================
-# reminders
-# =============================================================================
-
-
-def test_reminders_list_and_cancel(admin_env) -> None:
-    cfg = admin_env["cfg_path"]
-    engine = admin_env["engine"]
-
-    # 写两条提醒:一条 pending、一条 fired
-    with session_scope(engine) as s:
-        s.add(Reminder(content="开会", trigger_at=datetime(2030, 1, 1, 9, 0), status="pending"))
-        s.add(Reminder(content="吃药", trigger_at=datetime(2030, 1, 2, 8, 0), status="fired"))
-
-    r = runner.invoke(reminders_app, ["list", "--config", cfg])
-    assert r.exit_code == 0, r.stdout
-    assert "开会" in r.stdout
-    # 默认只显示 pending
-    assert "吃药" not in r.stdout
-
-    r_all = runner.invoke(reminders_app, ["list", "--all", "--config", cfg])
-    assert "吃药" in r_all.stdout
-
-    # 取消第一条
-    r_cancel = runner.invoke(reminders_app, ["cancel", "1", "--config", cfg])
-    assert r_cancel.exit_code == 0, r_cancel.stdout
-    assert "已取消" in r_cancel.stdout
-
-    with session_scope(engine) as s:
-        row = s.query(Reminder).filter(Reminder.id == 1).one()
-        assert row.status == "cancelled"
-
-
-def test_reminders_cancel_nonexistent(admin_env) -> None:
-    r = runner.invoke(reminders_app, ["cancel", "999", "--config", admin_env["cfg_path"]])
-    assert r.exit_code == 0
-    assert "不存在" in r.stdout
 
 
 # =============================================================================

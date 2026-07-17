@@ -4,11 +4,10 @@ Job store 持久化到 mybuddy.db 的 `apscheduler_jobs` 表(APScheduler 自建)
 CLI 重启后已调度任务自动继续;错过执行时间的任务由 APScheduler 的 misfire
 机制处理(默认宽限 1 小时内触发一次)。
 
-提供四类调度入口:
-  - schedule_reminder(reminder_id, trigger_at):用户提醒工具调用后注册
+提供的调度入口:
   - schedule_daily_greeting(hh_mm):每日早安
   - schedule_dream_job(hh_mm):夜间记忆整理
-  - cancel_reminder(reminder_id)
+  - schedule_silence_followup / schedule_cowork_break:一次性关怀检查
 
 所有 Job 函数都走 `mybuddy.scheduler.jobs.*`,必须是顶层函数才能 pickle。
 """
@@ -28,7 +27,6 @@ from mybuddy._time import time_offset_minutes
 from mybuddy.scheduler.jobs import (
     fire_cowork_break,
     fire_daily_greeting,
-    fire_reminder,
     fire_silence_followup,
     run_dream_job,
 )
@@ -39,7 +37,6 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-REMINDER_JOB_PREFIX = "reminder_"
 SILENCE_FOLLOWUP_JOB_PREFIX = "silence_followup_"
 DAILY_GREETING_JOB_ID = "daily_greeting"
 DREAM_JOB_ID = "dream_job"
@@ -75,28 +72,7 @@ class MyBuddyScheduler:
     def running(self) -> bool:
         return self._scheduler.running
 
-    # ---- 提醒 ----
-
-    def schedule_reminder(self, reminder_id: int, trigger_at: datetime) -> None:
-        """为一条 reminders 行注册到期 job,幂等(同 id 替换)。"""
-        job_id = f"{REMINDER_JOB_PREFIX}{reminder_id}"
-        self._scheduler.add_job(
-            fire_reminder,
-            trigger=DateTrigger(run_date=_scheduler_run_date(trigger_at)),
-            args=[reminder_id, self._db_file],
-            id=job_id,
-            replace_existing=True,
-            misfire_grace_time=3600,  # 1h 宽限
-        )
-        logger.info("scheduled reminder %s @ %s", reminder_id, trigger_at)
-
-    def cancel_reminder(self, reminder_id: int) -> bool:
-        job_id = f"{REMINDER_JOB_PREFIX}{reminder_id}"
-        try:
-            self._scheduler.remove_job(job_id)
-            return True
-        except Exception:
-            return False
+    # ---- 主动关怀 ----
 
     def schedule_silence_followup(
         self,

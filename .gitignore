@@ -34,6 +34,7 @@ eval/data/external/
 
 # Testing
 .pytest_cache/
+.pytest-tmp/
 .coverage
 htmlcov/
 

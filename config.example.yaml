@@ -124,23 +124,6 @@ logging:
   level: INFO
   file: "./data/mybuddy.log"
 
-# ============ 外部工具 ============
-tools:
-  weather_mock: false             # true 时跳过 open-meteo,返回占位数据(离线/测试用)
-  web_search_max_results: 5
-  http_timeout: 5.0
-
-# ============ 外部渠道 ============
-channels:
-  qq:
-    enabled: false
-    app_id: ${QQ_BOT_APP_ID}
-    app_secret: ${QQ_BOT_APP_SECRET}
-    sandbox: true
-    allow_auto_create_user: false
-    daily_message_limit: 30
-    reply_on_duplicate: false
-
 # ============ VPet 桌宠桥接 ============
 physio:
   enabled: true                        # v1 小布壳启用;旧部署可设 false 保持 phase-2 行为
@@ -157,6 +140,5 @@ vpet:
   physical_proactive: true             # 主动消息是否允许走到桌宠前台展示
   touch_escalation_daily_limit: 20     # 每天最多批准多少次触摸升格
   greeting_discard_after_minutes: 120  # greeting 超过多久未派送就丢弃
-  reminder_overdue_after_minutes: 30   # reminder 超过多久转为 overdue 持久展示
-  bridge_token: ""                     # 非空时保护 /api/* 和 /v1/*,Header: X-MyBuddy-Token
+  bridge_token: ""                     # 非空时保护 /api/*,Header: X-MyBuddy-Token
   acceptance_mode: false               # 仅验收时 true;生产禁止非零时间偏移

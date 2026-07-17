@@ -116,7 +116,7 @@ def test_web_chat_background_extraction_survives_reply(tmp_path: Path) -> None:
     """回复返回后,后台记忆抽取仍在常驻 loop 上跑完并写盘(不被随请求取消)。"""
     marker = tmp_path / "extracted.txt"
     state = _build_state(tmp_path, marker, extract_delay=0.05)
-    server = DemoServer(("127.0.0.1", 0), DemoHandler, state=state, frontend_dir=tmp_path)
+    server = DemoServer(("127.0.0.1", 0), DemoHandler, state=state)
     host, port = server.server_address[0], server.server_address[1]
     serve_thread = threading.Thread(target=server.serve_forever, daemon=True)
     serve_thread.start()
@@ -141,7 +141,7 @@ def test_web_server_close_drains_inflight_extraction(tmp_path: Path) -> None:
     marker = tmp_path / "drained.txt"
     # 抽取故意拉长:回复返回后它必然仍在途,只能靠 server_close 的 drain 等它收尾。
     state = _build_state(tmp_path, marker, extract_delay=0.4)
-    server = DemoServer(("127.0.0.1", 0), DemoHandler, state=state, frontend_dir=tmp_path)
+    server = DemoServer(("127.0.0.1", 0), DemoHandler, state=state)
     host, port = server.server_address[0], server.server_address[1]
     serve_thread = threading.Thread(target=server.serve_forever, daemon=True)
     serve_thread.start()

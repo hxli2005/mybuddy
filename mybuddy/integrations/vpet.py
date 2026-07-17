@@ -66,7 +66,6 @@ def chat_to_vpet_payload(
         "finish_reason": chat.get("finish_reason"),
         "tool_calls": chat.get("tool_calls") or [],
         "triggered_skills": chat.get("triggered_skills") or [],
-        "search_sources": chat.get("search_sources") or [],
         "pending": [
             pending_to_vpet_event(item)
             for item in chat.get("pending_messages") or []
@@ -89,7 +88,7 @@ def pending_to_vpet_event(item: dict[str, Any]) -> dict[str, Any]:
     source = str(item.get("source") or "unknown")
     content = str(item.get("content") or "")
     action = action_for_pending(source)
-    interrupt = bool(item.get("interrupt", source == "reminder"))
+    interrupt = bool(item.get("interrupt", False))
     speech = {
         "text": content,
         "interrupt": interrupt,
@@ -143,8 +142,6 @@ def action_for_chat(
 
 
 def action_for_pending(source: str) -> dict[str, Any]:
-    if source == "reminder":
-        return _action("remind", priority=90, reason="scheduled_reminder")
     if source == "greeting":
         return _action("greet", priority=50, reason="daily_greeting")
     if source in {"nudge", "dynamic", "cowork_break", "body_murmur"}:
@@ -161,7 +158,6 @@ def expression_for_action(action: str) -> dict[str, str]:
         "idle": "neutral",
         "notify": "neutral",
         "react": "curious",
-        "remind": "alert",
         "safety": "serious",
         "talk": "neutral",
         "thinking": "thinking",

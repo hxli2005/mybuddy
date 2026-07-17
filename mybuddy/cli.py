@@ -36,13 +36,13 @@ from mybuddy.learning import (
 from mybuddy.llm import make_provider
 from mybuddy.memory import LongTermMemory, MemoryManager, UserProfile
 from mybuddy.scheduler import MyBuddyScheduler
-from mybuddy.storage import Reminder, drain_pending, init_db, session_scope
+from mybuddy.storage import drain_pending, init_db
 from mybuddy.tools import ToolRegistry, set_context, setup_memory_tool, setup_skill_tool
 
 app = typer.Typer(help="MyBuddy — 生活陪伴型 AI 小伙伴", no_args_is_help=True)
 dream_app = typer.Typer(help="Dream Job 手动入口")
 app.add_typer(dream_app, name="dream")
-# profile / reminders / skills 子命令
+# profile / skills 子命令
 _register_admin(app)
 
 console = Console()
@@ -143,7 +143,6 @@ def chat(
         # AsyncIOScheduler.start() 需要正在运行的事件循环(apscheduler>=3.10 改用
         # get_running_loop),所以真正 start 放到 _chat_loop 协程内执行。add_job 在
         # 停止态会进入 _pending_jobs,start 时统一注册,先注册后启动顺序无碍。
-        _restore_reminders(scheduler, engine)
         scheduler.schedule_daily_greeting(cfg.scheduler.daily_greeting)
         scheduler.schedule_dream_job(cfg.scheduler.dream_job, config_path=config_path)
 
@@ -244,28 +243,6 @@ def dream_run(
 # 内部辅助
 # ---------------------------------------------------------------------
 
-def _restore_reminders(scheduler: MyBuddyScheduler, engine) -> None:
-    """CLI 启动时把 pending 状态的 reminders 全部重新注册到调度器。
-
-    SQLAlchemyJobStore 本身会恢复已有 job,这里是兜底 —— 即便 job 丢失
-    (例如 DB 被清空过),仍能从 reminders 表重建。幂等(replace_existing)。
-    """
-    from mybuddy._time import utcnow
-
-    now = utcnow()
-    with session_scope(engine) as s:
-        rows = (
-            s.query(Reminder)
-            .filter(Reminder.status == "pending")
-            .filter(Reminder.trigger_at > now)
-            .all()
-        )
-        pending = [(r.id, r.trigger_at) for r in rows]
-
-    for rid, trigger in pending:
-        scheduler.schedule_reminder(rid, trigger)
-
-
 async def _chat_loop(
     agent: Agent,
     engine,
@@ -360,14 +337,11 @@ def _drain_pending_to_console(engine) -> None:
     if not items:
         return
     for it in items:
-        if it["source"] in {"nudge", "dynamic", "greeting"}:
+        if it["source"] in {"nudge", "dynamic", "greeting", "body_murmur"}:
             console.print("[bold magenta]小伙伴[/bold magenta] >", end=" ")
             console.print(Markdown(it["content"]))
             continue
-        tag = {
-            "reminder": "⏰ 提醒",
-        }.get(it["source"], it["source"])
-        console.print(f"[bold yellow]{tag}[/bold yellow] {it['content']}")
+        console.print(f"[bold yellow]{it['source']}[/bold yellow] {it['content']}")
 
 
 def _render_response(

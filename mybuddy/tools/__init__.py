@@ -2,18 +2,11 @@
 
 导入本包即会触发内置工具通过 @tool 注册到全局 `ToolRegistry.default()`。
 
-各里程碑加入的工具:
-  - M2: weather / set_reminder
-  - M3: recall_memory
-  - M7: translate / web_search / write_note / search_notes / list_skills
+纯陪伴裁决后只剩她自己的能力:
+  - recall_memory:主动检索长期记忆
+  - list_skills:查看自己会什么
 """
 
-# 触发内置工具注册(import 副作用)
-from . import notes as _notes  # noqa: F401
-from . import reminder as _reminder  # noqa: F401
-from . import translate as _translate  # noqa: F401
-from . import weather as _weather  # noqa: F401
-from . import web_search as _web_search  # noqa: F401
 from .context import (
     get_config,
     get_engine,

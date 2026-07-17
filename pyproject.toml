@@ -21,10 +21,8 @@ dependencies = [
     "pydantic>=2.7.0",
     "pydantic-settings>=2.3.0",
     "pyyaml>=6.0.1",
-    # Date parsing (for "明天下午3点" 等自然语言时间)
+    # Date parsing(记忆治理里解析"明天下午3点"这类截止表述)
     "python-dateutil>=2.9.0",
-    # Web search:浏览器指纹 HTTP,绕过 DuckDuckGo 反爬(裸抓取会被 202 挑战页挡)
-    "ddgs>=9.0",
 ]
 
 [project.optional-dependencies]
@@ -36,9 +34,6 @@ dev = [
 api = [
     "fastapi>=0.110.0",
     "uvicorn>=0.29.0",
-]
-qq = [
-    "qq-botpy>=1.2.1",
 ]
 
 [project.scripts]

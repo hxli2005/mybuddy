@@ -22,7 +22,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import uuid
 from datetime import datetime, timedelta
@@ -39,14 +38,6 @@ from mybuddy.tools import ToolRegistry
 
 from .context import build_messages, build_system_prompt
 from .living_state import synthesize_living_state
-from .search import (
-    build_search_context,
-    build_unavailable_search_context,
-    classify_search_need,
-    extract_search_sources,
-    may_use_interest_topics,
-    search_result_count,
-)
 
 if TYPE_CHECKING:
     from sqlalchemy import Engine
@@ -71,7 +62,6 @@ class AgentResult:
     emotion: EmotionResult | None
     emotional_support: dict[str, Any] | None
     triggered_skills: list[str]
-    search_sources: list[dict[str, str]]
 
     def __init__(
         self,
@@ -83,7 +73,6 @@ class AgentResult:
         emotion: EmotionResult | None = None,
         emotional_support: dict[str, Any] | None = None,
         triggered_skills: list[str] | None = None,
-        search_sources: list[dict[str, str]] | None = None,
     ) -> None:
         self.text = text
         self.steps = steps
@@ -93,7 +82,6 @@ class AgentResult:
         self.emotion = emotion
         self.emotional_support = emotional_support
         self.triggered_skills = triggered_skills or []
-        self.search_sources = search_sources or []
 
 
 class Agent:
@@ -130,7 +118,6 @@ class Agent:
         # M6:skill 匹配 + 自动抽象(均可选)
         self._skill_registry = skill_registry
         self._skill_curator = skill_curator
-        self._warned_search_registry_fallback = False
         # 持有后台 task 强引用:create_task 只被事件循环弱引用,挂起(await 网络)期间
         # 无强引用会被 GC 提前回收,导致抽取/复盘静默中断(CPython 已知坑)。
         self._bg_tasks: set[asyncio.Task] = set()
@@ -182,20 +169,11 @@ class Agent:
             ("", []) if is_sensor_event else self._match_skills(user_input, emotion)
         )
 
-        # 4. 时效事实预检索:不要把新闻/最新信息完全交给模型自由决定是否调用工具
-        if enable_tools:
-            search_context, search_call, search_sources = await self._prefetch_web_search(user_input)
-        else:
-            search_context, search_call, search_sources = "", None, []
-        if search_call is not None:
-            all_tool_calls.append(search_call)
-
-        # 5. 合并 system prompt:人设 + 记忆 + 情绪 + skill + 外部资料
+        # 4. 合并 system prompt:人设 + 记忆 + 情绪 + skill
         extras = "\n\n".join(
             x
             for x in (
                 memory_context,
-                search_context,
                 scene_hint,
                 skill_hint,
             )
@@ -230,15 +208,8 @@ class Agent:
             traj.meta["input_meta"] = dict(meta)
         if triggered_skills:
             traj.meta["triggered_skills"] = list(triggered_skills)
-        if search_call is not None:
-            traj.meta["search"] = {
-                "level": search_call.get("decision_level"),
-                "reason": search_call.get("decision_reason"),
-                "topic": search_call.get("decision_topic"),
-                "result_count": search_call.get("result_count", 0),
-            }
 
-        # 6. 用户消息入记
+        # 5. 用户消息入记
         user_message_id = self._persist_chat_message(
             Role.USER,
             user_input,
@@ -285,11 +256,6 @@ class Agent:
                         "finish_reason": resp.finish_reason,
                         "tool_calls": [tc.model_dump() for tc in response_tool_calls],
                         "usage": resp.usage,
-                        **(
-                            {"search_sources": search_sources}
-                            if search_sources and not response_tool_calls
-                            else {}
-                        ),
                         **({"source": source} if source != "chat" else {}),
                         **(meta or {}),
                     },
@@ -378,7 +344,6 @@ class Agent:
             emotion=emotion,
             emotional_support=emotional_support.to_dict(),
             triggered_skills=triggered_skills,
-            search_sources=search_sources,
         )
 
     # -----------------------------------------------------------------
@@ -454,93 +419,6 @@ class Agent:
         except Exception:
             logger.exception("schedule silence followup failed")
 
-    async def _prefetch_web_search(
-        self,
-        user_input: str,
-    ) -> tuple[str, dict[str, Any] | None, list[dict[str, str]]]:
-        # 兴趣话题收集会读取全部长期记忆卡片,代价较高。只有当消息可能用到它时才收集,
-        # 避免每个普通寒暄轮次都做一次全量归档扫描(判定结果完全等价)。
-        interest_topics = (
-            self._interest_topics() if may_use_interest_topics(user_input) else []
-        )
-        decision = classify_search_need(user_input, interest_topics=interest_topics)
-        if decision.level == "none":
-            return "", None, []
-
-        registry = self._registry_for_web_search()
-        if registry is None:
-            if decision.level == "must":
-                return build_unavailable_search_context(decision, query=user_input), None, []
-            return "", None, []
-
-        args = {
-            "query": user_input,
-            "max_results": self._config.tools.web_search_max_results,
-        }
-        result_text = await registry.execute("web_search", args)
-        context = build_search_context(
-            decision,
-            query=user_input,
-            result_text=result_text,
-            max_items=self._config.tools.web_search_max_results,
-        )
-        sources = extract_search_sources(
-            result_text,
-            max_items=self._config.tools.web_search_max_results,
-        )
-        count = search_result_count(result_text)
-        # 检索可观测性:命中 must/should 却拿到 0 条时,把真实原因(超时/反爬/ddgs 缺失/
-        # 缓存空)打到日志。否则失败完全不可见——模型只会对用户说“没查到”,运维无从排查。
-        if count == 0:
-            error = ""
-            try:
-                error = str(json.loads(result_text).get("error") or "")
-            except (ValueError, TypeError):
-                error = "(结果非 JSON,无法解析)"
-            logger.warning(
-                "web_search 预检索 0 条结果 | level=%s query=%r error=%s",
-                decision.level,
-                user_input[:80],
-                error or "(无 error 字段,权威空结果)",
-            )
-        else:
-            logger.info("web_search 预检索命中 %d 条 | query=%r", count, user_input[:80])
-        return context, {
-            "id": "prefetch_web_search",
-            "name": "web_search",
-            "arguments": args,
-            "result": result_text,
-            "source": "backend_search_prefetch",
-            "decision_level": decision.level,
-            "decision_reason": decision.reason,
-            "decision_topic": decision.topic,
-            "result_count": count,
-        }, sources
-
-    def _registry_for_web_search(self) -> ToolRegistry | None:
-        if self._registry.get("web_search") is not None:
-            return self._registry
-
-        default_registry = ToolRegistry.default()
-        if default_registry is not self._registry and default_registry.get("web_search") is not None:
-            if not self._warned_search_registry_fallback:
-                logger.warning(
-                    "web_search missing from agent registry; falling back to default registry"
-                )
-                self._warned_search_registry_fallback = True
-            return default_registry
-        return None
-
-    def _interest_topics(self) -> list[str]:
-        getter = getattr(self._memory, "interest_topics", None)
-        if getter is None:
-            return []
-        try:
-            return list(getter())
-        except Exception:
-            logger.exception("collect interest topics failed")
-            return []
-
     # -----------------------------------------------------------------
     # M6 Skill 匹配 & curator 触发
     # -----------------------------------------------------------------
@@ -583,11 +461,7 @@ class Agent:
             return
         if finish_reason != "stop":
             return
-        eligible_tool_calls = [
-            call for call in all_tool_calls
-            if call.get("source") != "backend_search_prefetch"
-        ]
-        if len(eligible_tool_calls) < CURATOR_TOOL_CALL_THRESHOLD:
+        if len(all_tool_calls) < CURATOR_TOOL_CALL_THRESHOLD:
             return
         try:
             task = asyncio.create_task(self._skill_curator.maybe_curate(traj))

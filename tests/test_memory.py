@@ -576,40 +576,6 @@ def test_memory_manager_prioritizes_relationship_context(tmp_path) -> None:
     assert "## 关系线索" not in text
 
 
-def test_memory_manager_injects_user_notes(tmp_path) -> None:
-    """用户主动存的笔记必须能在聊天里被自然想起。
-
-    回归:build_context_section 之前不检索 mem_type="note",
-    导致"创建笔记 地点在上海 → 聊天立刻问地点"答不上来。
-    """
-    engine = init_db(str(tmp_path / "manager_notes.db"))
-    cfg = Config()
-    chroma_dir = tmp_path / "manager_notes_chroma"
-    chroma_dir.mkdir()
-    ltm = LongTermMemory(
-        persist_dir=str(chroma_dir),
-        collection_name="manager_notes",
-        embedding_fn=mock_embed,
-    )
-    # 模拟 write_note / create_note 落档(mem_type="note", importance=0.85)
-    ltm.add(
-        "地点在上海",
-        mem_type="note",
-        uid="note_1",
-        extra_meta={"sql_id": 1, "title": "地点", "source": "user_note", "importance": 0.85},
-    )
-    manager = MemoryManager(engine=engine, config=cfg, ltm=ltm, provider=DummyProvider())
-
-    # 相关提问:笔记进聊天上下文
-    text = manager.build_context_section("我的地点在哪来着")
-    assert "你帮我记下的笔记" in text
-    assert "地点在上海" in text
-
-    # 无关提问:不误注入
-    other = manager.build_context_section("今天晚饭想吃什么")
-    assert "地点在上海" not in other
-
-
 @pytest.mark.asyncio
 async def test_memory_manager_extract_uses_governance_to_merge(tmp_path) -> None:
     engine = init_db(str(tmp_path / "manager_governance.db"))
@@ -837,19 +803,13 @@ async def test_entity_same_name_different_relation_not_merged(tmp_path) -> None:
 
 
 def _golden_recall_store(tmp_path) -> MemoryManager:
-    """搭一个贴近真实的小记忆库,覆盖 note/偏好/避雷/entity/open_thread 各类型。"""
+    """搭一个贴近真实的小记忆库,覆盖偏好/避雷/entity/open_thread 各类型。"""
     engine = init_db(str(tmp_path / "golden.db"))
     cfg = Config()
     chroma_dir = tmp_path / "golden_chroma"
     chroma_dir.mkdir()
     ltm = LongTermMemory(
         persist_dir=str(chroma_dir), collection_name="golden", embedding_fn=mock_embed
-    )
-    ltm.add(
-        "地点在上海",
-        mem_type="note",
-        uid="g_note",
-        extra_meta={"title": "地点", "source": "user_note", "importance": 0.85},
     )
     ltm.add("用户喜欢喝美式咖啡", mem_type="preference", extra_meta={"title": "咖啡偏好"})
     ltm.add("用户不喜欢被打鸡血式鼓励", mem_type="preference", extra_meta={"title": "鼓励方式"})
@@ -869,19 +829,18 @@ def _golden_recall_store(tmp_path) -> MemoryManager:
 def test_recall_golden_set(tmp_path) -> None:
     """召回金标准回归集:锁死 T1/T2 的召回行为,后续调阈值/权重一旦破坏立刻报警。
 
-    每条 (query, 必须召回, 不该召回)。覆盖:note 按词召回、偏好正价、避雷负价标注、
+    每条 (query, 必须召回, 不该召回)。覆盖:偏好正价、避雷负价标注、
     entity 按名召回、open_thread 召回、无关 query 不乱注入话题卡。
     """
     mm = _golden_recall_store(tmp_path)
     cases = [
-        ("我的地点是哪", ["上海"], []),
         ("想喝美式咖啡", ["美式咖啡", "【偏好】"], []),
         ("给我加油鼓励一下", ["打鸡血", "【避开】"], []),
         ("煤球今天乖不乖", ["煤球"], []),
         ("项目汇报准备好了吗", ["汇报"], []),
-        # 无关 query:话题性卡(note/正向偏好/entity 无 recency 兜底)不该乱入;
+        # 无关 query:话题性卡(正向偏好/entity 无 recency 兜底)不该乱入;
         # open_thread 与"避雷"会按设计经 recency 兜底出现(主动回响 + 安全栏),不在此断言。
-        ("今天股市大涨", [], ["上海", "美式咖啡", "煤球"]),
+        ("今天股市大涨", [], ["美式咖啡", "煤球"]),
     ]
     for query, must, must_not in cases:
         text = mm.build_context_section(query)

@@ -32,7 +32,6 @@ def test_fastapi_and_standard_web_share_vpet_v2_contract(tmp_path) -> None:
         ("127.0.0.1", 0),
         DemoHandler,
         state=web_state,
-        frontend_dir=tmp_path,
     )
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()

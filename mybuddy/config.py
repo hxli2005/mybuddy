@@ -184,14 +184,6 @@ class LoggingConfig(BaseModel):
     file: str = "./data/mybuddy.log"
 
 
-class ToolsConfig(BaseModel):
-    # 天气强制走 mock(不发网络);便于离线开发和单测
-    weather_mock: bool = False
-    web_search_max_results: int = 5
-    # 外部 HTTP 请求超时(秒)
-    http_timeout: float = 5.0
-
-
 class PhysioConfig(BaseModel):
     """小布生理引擎配置。
 
@@ -215,7 +207,6 @@ class VPetConfig(BaseModel):
     physical_proactive: bool = False
     touch_escalation_daily_limit: int = 20
     greeting_discard_after_minutes: int = 120
-    reminder_overdue_after_minutes: int = 30
     bridge_token: str = ""
     acceptance_mode: bool = False
 
@@ -245,7 +236,6 @@ class Config(BaseModel):
     paths: PathsConfig = Field(default_factory=PathsConfig)
     scheduler: SchedulerConfig = Field(default_factory=SchedulerConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
-    tools: ToolsConfig = Field(default_factory=ToolsConfig)
     physio: PhysioConfig = Field(default_factory=PhysioConfig)
     vpet: VPetConfig = Field(default_factory=VPetConfig)
 

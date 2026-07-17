@@ -351,7 +351,6 @@ def test_vpet_pending_drain_digest_three_way(tmp_path) -> None:
     state.cfg = cfg
     old = utcnow().replace(microsecond=0) - timedelta(minutes=180)
 
-    enqueue(engine, source="reminder", content="提醒:喝水", scheduled_at=old)
     enqueue(engine, source="greeting", content="早上好呀", scheduled_at=old)
     enqueue(engine, source="nudge", content="起来走走?", scheduled_at=old)
     enqueue(engine, source="body_murmur", content="有点困", scheduled_at=old)
@@ -360,13 +359,10 @@ def test_vpet_pending_drain_digest_three_way(tmp_path) -> None:
     repeat = state.vpet_pending_payload(drain=True, digest=False)
 
     assert payload["drained"] is True
-    assert len(payload["events"]) == 1
-    assert payload["events"][0]["source"] == "reminder"
-    assert payload["events"][0]["speech"]["interrupt"] is False
-    assert payload["events"][0]["speech"]["persistent"] is True
+    assert payload["events"] == []
     assert payload["digest"] == {
-        "text": "你不在的时候我攒了两件事:一个提醒、还有一次想叫你歇会儿。",
-        "sources": ["reminder", "nudge"],
+        "text": "你不在的时候我攒了一件事:一次想叫你歇会儿。",
+        "sources": ["nudge"],
         "discarded_count": 2,
     }
     assert payload["server_flags"] == {
@@ -378,7 +374,6 @@ def test_vpet_pending_drain_digest_three_way(tmp_path) -> None:
     with session_scope(engine) as s:
         telemetry = [row.event for row in s.query(VPetEvent).order_by(VPetEvent.id.asc()).all()]
         assert telemetry == [
-            "pending_overdue",
             "pending_discarded",
             "pending_digested",
             "pending_discarded",
@@ -625,9 +620,19 @@ async def test_vpet_event_records_latest_emotion_label(tmp_path) -> None:
 async def test_feed_updates_physio_once_and_aggregates_shared_moment(tmp_path, monkeypatch) -> None:
     # This test asserts feed deltas, not the sleep-window wake penalty. Freeze it at
     # 12:00 Asia/Shanghai so it stays deterministic when the suite runs overnight.
+    # 三个时钟必须冻在同一天:physio 写 PhysioDaily 用 utcnow,事件账本与共同记忆
+    # 聚合用 localnow —— 只冻一个会让 feed_items 与 local_date 跨天错开,聚合永远为空。
     monkeypatch.setattr(
         "mybuddy.body.physio.utcnow",
         lambda: datetime(2026, 7, 12, 4, 0),
+    )
+    monkeypatch.setattr(
+        "mybuddy.storage.vpet_events.localnow",
+        lambda: datetime(2026, 7, 12, 12, 0),
+    )
+    monkeypatch.setattr(
+        "mybuddy.api._localnow",
+        lambda: datetime(2026, 7, 12, 12, 0),
     )
     engine = init_db(str(tmp_path / "feed.db"))
     cfg = Config()
@@ -953,7 +958,6 @@ class _FakeEventAgent:
             emotion=None,
             emotional_support={"mode": "neutral"},
             triggered_skills=[],
-            search_sources=[],
         )
 
 
@@ -1010,7 +1014,6 @@ class _FakeChatAgent:
             emotion=None,
             emotional_support={"mode": "neutral"},
             triggered_skills=[],
-            search_sources=[],
         )
 
 

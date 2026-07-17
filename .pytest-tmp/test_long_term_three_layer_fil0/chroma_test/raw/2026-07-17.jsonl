@@ -1,1 +1,0 @@
-{"id": "evt_2e1e27daba3b484986ee37678ec1689f", "turn_id": "turn_1", "type": "conversation_turn", "payload": {"turn_id": "turn_1", "session_id": "s1", "user_text": "我在准备项目汇报", "assistant_text": "可以先整理架构和成果。", "summary": "USER: 我在准备项目汇报 / AI: 可以先整理架构和成果。", "meta": {}, "created_at": "2026-07-17T09:08:00"}, "created_at": "2026-07-17T09:08:00"}

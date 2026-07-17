@@ -5,8 +5,8 @@ SQLAlchemyJobStore 用 pickle 序列化 job,因此这些函数必须是模块顶
 config / provider,避免持有跨进程不可序列化的对象。
 
 三类 job:
-  - fire_reminder(reminder_id, db_file):到期提醒 → 写 pending_messages + 更新 Reminder.status
   - fire_daily_greeting(db_file, persona_name):每日早安 → 写 pending_messages
+  - fire_silence_followup / fire_cowork_break:主动关怀类一次性 job
   - run_dream_job(db_file, config_path):夜间 Dream Job(五件事)
 """
 
@@ -23,7 +23,6 @@ from mybuddy._time import localnow, utcnow
 from mybuddy.storage import (
     Message,
     PendingMessage,
-    Reminder,
     VPetEvent,
     enqueue,
     init_db,
@@ -34,30 +33,6 @@ if TYPE_CHECKING:
     pass
 
 logger = logging.getLogger(__name__)
-
-
-def fire_reminder(reminder_id: int, db_file: str) -> None:
-    """到期提醒触发:写主动消息队列,更新 reminders.status=fired。"""
-    engine = init_db(db_file)
-    with session_scope(engine) as s:
-        r = s.get(Reminder, reminder_id)
-        if r is None:
-            logger.warning("reminder %s 不存在,跳过", reminder_id)
-            return
-        if r.status != "pending":
-            logger.info("reminder %s 状态为 %s,跳过", reminder_id, r.status)
-            return
-        content = r.content
-        r.status = "fired"
-        r.fired_at = utcnow()
-
-    enqueue(
-        engine,
-        source="reminder",
-        content=f"⏰ 提醒:{content}",
-        meta={"reminder_id": reminder_id},
-    )
-    logger.info("reminder %s 已入队播放", reminder_id)
 
 
 def fire_daily_greeting(db_file: str, persona_name: str = "小布") -> None:
