@@ -20,6 +20,7 @@ from mybuddy.llm import BaseLLMProvider, Message, Role, ToolSpec, make_provider
 
 HISTORY_CONTEXT_LIMIT = 12
 MEMORY_CONTEXT_LIMIT = 8
+RECENT_EVENT_LIMIT = 128
 STATIC_CATCH = "我在。刚才脑子里那句话没理清，但你的话我确实听见了。"
 
 
@@ -404,6 +405,7 @@ def _accepted_documents(
     bundle: CandidateBundle,
     experience: dict[str, Any],
     now: datetime,
+    event_id: str | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, Any], PendingExpression]:
     expression = bundle.expression.strip() if bundle.expression else STATIC_CATCH
     pending = PendingExpression(
@@ -415,6 +417,9 @@ def _accepted_documents(
     new_state["condition"] = condition
     new_state["last_step_at"] = now.isoformat()
     new_state["pending_expression"] = pending.model_dump()
+    if event_id is not None:
+        recent = [item for item in new_state.get("recent_event_ids", []) if isinstance(item, str)]
+        new_state["recent_event_ids"] = [*recent, event_id][-RECENT_EVENT_LIMIT:]
 
     new_history = [*history, experience]
     for index, event in enumerate(bundle.life_events):
@@ -437,6 +442,7 @@ async def mind_step(
     provider: BaseLLMProvider,
     files: MindFiles,
     now: datetime | None = None,
+    event_id: str | None = None,
 ) -> StepResult:
     """运行一个直接经历；候选通过才把经历、生活、状态和记忆一起提交。"""
     current_time = (now or datetime.now(UTC)).astimezone()
@@ -511,7 +517,7 @@ async def mind_step(
             continue
 
         new_state, new_history, new_memories, pending = _accepted_documents(
-            state, history, memories, bundle, experience, current_time
+            state, history, memories, bundle, experience, current_time, event_id
         )
         files.commit(new_state, new_history, new_memories)
         return StepResult(committed=True, pending_expression=pending, attempts=attempt)
