@@ -8,10 +8,20 @@ public static class SettingsStore
 {
     private static readonly JsonSerializerOptions Json = new() { WriteIndented = true };
 
-    public static string SettingsPath => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-        "BuddyShell",
-        "settings.json");
+    public static string DataDirectory
+    {
+        get
+        {
+            var overridden = Environment.GetEnvironmentVariable("BUDDYSHELL_DATA_DIR");
+            return string.IsNullOrWhiteSpace(overridden)
+                ? Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                    "BuddyShell")
+                : Path.GetFullPath(overridden);
+        }
+    }
+
+    public static string SettingsPath => Path.Combine(DataDirectory, "settings.json");
 
     public static ShellSettings Load()
     {

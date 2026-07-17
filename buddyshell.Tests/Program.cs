@@ -1,5 +1,7 @@
 using BuddyShell.Anim;
+using BuddyShell.Bridge;
 using System.IO;
+using System.Text.Json;
 using System.Windows;
 using System.Windows.Controls;
 
@@ -39,6 +41,7 @@ internal static class Program
             ("feed is three layers and duplicate is dropped", FeedIsLayeredAndDeduplicated),
             ("same baseline updates do not restart", SameBaselineDoesNotRestart),
             ("empty bridge action adds no animation", EmptyActionAddsNoAnimation),
+            ("body step carries chat and shown receipt", BodyStepCarriesChatAndShownReceipt),
             ("renderer fault keeps previous frame and retries", RendererFaultRetries),
             ("chat error exits think and resumes", ChatErrorResumesBaseline),
             ("feed lock ignores touch visuals", FeedLockIgnoresTouch),
@@ -106,6 +109,27 @@ internal static class Program
                 throw new InvalidOperationException($"{item} 存在非 500 逻辑画布轨迹。");
             }
         }
+    }
+
+    private static void BodyStepCarriesChatAndShownReceipt()
+    {
+        var request = new BodyStepRequest
+        {
+            ShownId = "expr-previous",
+            Event = new BodyEvent
+            {
+                EventId = "chat-001",
+                Content = "今天终于忙完了。",
+            },
+        };
+        using var document = JsonDocument.Parse(JsonSerializer.Serialize(request));
+        var root = document.RootElement;
+        Equal("expr-previous", root.GetProperty("shown_id").GetString());
+        var bodyEvent = root.GetProperty("event");
+        Equal("chat-001", bodyEvent.GetProperty("event_id").GetString());
+        Equal("chat", bodyEvent.GetProperty("type").GetString());
+        Equal("今天终于忙完了。", bodyEvent.GetProperty("content").GetString());
+        Equal(false, root.TryGetProperty("message", out _));
     }
 
     private static void InstalledFrameCacheIsBounded()

@@ -24,6 +24,7 @@ public sealed class ShellSettings
     public double? WindowLeft { get; set; }
     public double? WindowTop { get; set; }
     public string? ActiveWorkSessionId { get; set; }
+    public string? LastShownId { get; set; }
 
     public ClientFlags ToClientFlags() => new()
     {
@@ -63,13 +64,52 @@ public sealed class ClientFlags
     public bool PhysicalProactive { get; set; }
 }
 
-public sealed class VPetChatRequest
+public sealed class BodyStepRequest
 {
-    [JsonPropertyName("message")]
-    public string Message { get; set; } = "";
+    [JsonPropertyName("shown_id")]
+    public string? ShownId { get; set; }
 
     [JsonPropertyName("event")]
-    public string Event { get; set; } = "user_chat";
+    public BodyEvent? Event { get; set; }
+}
+
+public sealed class BodyEvent
+{
+    [JsonPropertyName("event_id")]
+    public string EventId { get; set; } = "";
+
+    [JsonPropertyName("type")]
+    public string Type { get; set; } = "chat";
+
+    [JsonPropertyName("content")]
+    public string Content { get; set; } = "";
+}
+
+public sealed class BodyStepResponse
+{
+    [JsonPropertyName("baseline")]
+    public Dictionary<string, string> Baseline { get; set; } = [];
+
+    [JsonPropertyName("expression")]
+    public PendingBodyExpression? Expression { get; set; }
+
+    [JsonPropertyName("shown_confirmed")]
+    public bool ShownConfirmed { get; set; }
+
+    [JsonPropertyName("event_status")]
+    public string EventStatus { get; set; } = "none";
+}
+
+public sealed class PendingBodyExpression
+{
+    [JsonPropertyName("id")]
+    public string Id { get; set; } = "";
+
+    [JsonPropertyName("text")]
+    public string Text { get; set; } = "";
+
+    [JsonPropertyName("created_at")]
+    public string CreatedAt { get; set; } = "";
 }
 
 public sealed class VPetEventRequest

@@ -29,16 +29,12 @@ def test_vpet_business_errors_use_protocol_v2_shape(tmp_path) -> None:
     client = TestClient(app)
 
     invalid = client.post("/api/vpet/event", json={"event": "not-an-event"})
-    chat = client.post("/api/vpet/chat", json={"message": "在吗"})
 
     assert invalid.status_code == 400
     assert invalid.json() == {
         "ok": False,
         "error": {"code": "invalid_request", "message": "unsupported vpet event"},
     }
-    assert chat.status_code == 400
-    assert chat.json()["error"]["code"] == "llm_not_configured"
-
     state.cfg.vpet.bridge_token = "secret"
     assert client.get("/api/vpet/state").status_code == 401
     authorized = client.get(
@@ -69,6 +65,7 @@ def test_dead_admin_endpoints_are_gone(tmp_path) -> None:
         ("get", "/api/reminders"),
         ("get", "/api/skills"),
         ("get", "/api/notes"),
+        ("post", "/api/vpet/chat"),
         ("post", "/v1/chat/completions"),
     ]:
         resp = getattr(client, method)(path)

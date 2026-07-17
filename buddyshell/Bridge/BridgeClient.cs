@@ -8,7 +8,7 @@ namespace BuddyShell.Bridge;
 
 public sealed class BridgeClient : IDisposable
 {
-    private readonly HttpClient _http = new();
+    private readonly HttpClient _http = new(new HttpClientHandler { UseProxy = false });
     private readonly JsonSerializerOptions _json = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
@@ -24,13 +24,13 @@ public sealed class BridgeClient : IDisposable
     public Task<VPetStateResponse> GetStateAsync(CancellationToken cancellationToken = default) =>
         SendRequiredAsync<VPetStateResponse>(HttpMethod.Get, "/api/vpet/state", null, 5, cancellationToken);
 
-    public Task<VPetBridgeResponse> SendChatAsync(
-        string message,
+    public Task<BodyStepResponse> StepBodyAsync(
+        BodyStepRequest request,
         CancellationToken cancellationToken = default) =>
-        SendRequiredAsync<VPetBridgeResponse>(
+        SendRequiredAsync<BodyStepResponse>(
             HttpMethod.Post,
-            "/api/vpet/chat",
-            new VPetChatRequest { Message = message },
+            "/api/body/step",
+            request,
             15,
             cancellationToken);
 

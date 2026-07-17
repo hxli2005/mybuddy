@@ -54,10 +54,7 @@ public partial class App : Application
     {
         try
         {
-            var directory = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                "BuddyShell",
-                "logs");
+            var directory = Path.Combine(SettingsStore.DataDirectory, "logs");
             Directory.CreateDirectory(directory);
             File.AppendAllText(
                 Path.Combine(directory, $"{DateTime.Now:yyyy-MM-dd}.log"),

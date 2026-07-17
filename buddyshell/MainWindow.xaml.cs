@@ -23,7 +23,9 @@ public partial class MainWindow : Window
     private Tray? _tray;
     private SpikeEvidence? _spikeEvidence;
     private VPetStateResponse? _state;
-    private string? _lastTurnId;
+    private string? _pendingChatEventId;
+    private string? _pendingChatText;
+    private bool _chatSending;
     private bool _feeding;
 
     public MainWindow()
@@ -36,7 +38,7 @@ public partial class MainWindow : Window
         {
             if (!IsInsideButton(args.OriginalSource as DependencyObject)) DragMove();
         };
-        Chat.SendRequested += async (_, args) => await SendChatAsync(args.Text);
+        Chat.SendRequested += async (_, args) => await SendBodyChatAsync(args.Text);
         Foods.FoodSelected += async (_, args) =>
         {
             CloseDrawers();
@@ -193,10 +195,20 @@ public partial class MainWindow : Window
         _ = _outbox.FlushAsync(_client!);
     }
 
-    private async Task SendChatAsync(string text)
+    private async Task SendBodyChatAsync(string text)
     {
-        if (_client is null || _animationController is null) return;
-        Chat.AddUser(text);
+        if (_client is null || _animationController is null || _chatSending) return;
+        _chatSending = true;
+        if (!string.Equals(_pendingChatText, text, StringComparison.Ordinal))
+        {
+            _pendingChatText = text;
+            _pendingChatEventId = $"chat-{Guid.NewGuid():N}";
+        }
+        var bodyEvent = new BodyEvent
+        {
+            EventId = _pendingChatEventId!,
+            Content = text,
+        };
         var correlationId = $"chat:{Guid.NewGuid():N}";
         _animationController.Submit(new AnimationRequest(
             AnimationIntent.Think,
@@ -205,25 +217,44 @@ public partial class MainWindow : Window
             AnimationPriority.Think));
         try
         {
-            var response = await _client.SendChatAsync(text);
-            _lastTurnId = response.TurnId;
-            App.LogMessage($"event=chat server_time={_state?.ServerTime} turn_id={response.TurnId}");
-            var full = response.Text ?? response.Speech?.Text ?? "";
-            if (!string.IsNullOrWhiteSpace(full)) Chat.AddAssistant(full);
-            ShowResponse(response, submitAnimation: false);
+            var response = await _client.StepBodyAsync(new BodyStepRequest
+            {
+                ShownId = _settings.LastShownId,
+                Event = bodyEvent,
+            });
+            if (response.EventStatus == "waiting_for_shown" && response.Expression is not null)
+            {
+                ShowBodyExpression(response.Expression);
+                response = await _client.StepBodyAsync(new BodyStepRequest
+                {
+                    ShownId = _settings.LastShownId,
+                    Event = bodyEvent,
+                });
+            }
+            if (response.EventStatus is not ("processed" or "duplicate"))
+            {
+                throw new BridgeRequestException($"身体桥未接收聊天事件：{response.EventStatus}");
+            }
+            Chat.AcceptSent(text);
+            _pendingChatText = null;
+            _pendingChatEventId = null;
+            var shownConfirmed = true;
+            if (response.Expression is not null)
+            {
+                ShowBodyExpression(response.Expression);
+                shownConfirmed = await ConfirmShownAsync();
+            }
+            App.LogMessage($"event=body_chat event_id={bodyEvent.EventId} status={response.EventStatus}");
             _animationController.Complete(
                 correlationId,
-                new AnimationOutcome(ActionMapper.TryFrom(response.Action?.Name, response.Expression?.Name)));
-            if (response.Speech?.Truncated == true)
-            {
-                SetConnectionState("气泡已缩短，全文在聊天窗", ConnectionState.Connected);
-            }
-            if (_stateLoop is not null) await _stateLoop.PollAsync();
+                new AnimationOutcome(response.Expression is null ? null : AnimationIntent.Happy));
+            if (shownConfirmed) SetConnectionState("已连接", ConnectionState.Connected);
         }
         catch (BridgeRequestException exception)
         {
-            SpeechBubble.ShowSpeech("这会儿没连上，我先在这儿陪你。", interrupt: true);
-            SetConnectionState(exception.StatusCode == 401 ? "令牌无效，请检查设置" : exception.Message,
+            SetConnectionState(exception.StatusCode == 401
+                    ? "令牌无效，请检查设置"
+                    : "未连接，输入已保留",
                 exception.StatusCode == 401 ? ConnectionState.Error : ConnectionState.Warning);
             if (exception.StatusCode == 401) ShowSettings();
             _animationController.Complete(
@@ -233,11 +264,46 @@ public partial class MainWindow : Window
         catch (Exception exception)
         {
             App.LogException(exception);
-            SpeechBubble.ShowSpeech("刚才卡了一下，我们再试一次。", interrupt: true);
-            SetConnectionState(exception.Message, ConnectionState.Error);
+            SetConnectionState("发送失败，输入已保留", ConnectionState.Error);
             _animationController.Complete(
                 correlationId,
                 new AnimationOutcome(IsError: true, Reason: exception.GetType().Name));
+        }
+        finally
+        {
+            _chatSending = false;
+        }
+    }
+
+    private void ShowBodyExpression(PendingBodyExpression expression)
+    {
+        if (string.IsNullOrWhiteSpace(expression.Id) || string.IsNullOrWhiteSpace(expression.Text)) return;
+        SpeechBubble.ShowSpeech(expression.Text, interrupt: true);
+        Chat.AddAssistant(expression.Text);
+        _settings.LastShownId = expression.Id;
+        SettingsStore.Save(_settings);
+        App.LogMessage($"event=bubble_shown expression_id={expression.Id} text={expression.Text}");
+    }
+
+    private async Task<bool> ConfirmShownAsync()
+    {
+        try
+        {
+            var confirmation = await _client!.StepBodyAsync(new BodyStepRequest
+            {
+                ShownId = _settings.LastShownId,
+            });
+            App.LogMessage(
+                $"event=shown expression_id={_settings.LastShownId} " +
+                $"confirmed={confirmation.ShownConfirmed}");
+            return confirmation.ShownConfirmed;
+        }
+        catch (BridgeRequestException exception)
+        {
+            SetConnectionState("回复已显示，shown确认待重报", ConnectionState.Warning);
+            App.LogMessage(
+                $"event=shown_pending expression_id={_settings.LastShownId} reason={exception.Message}");
+            return false;
         }
     }
 
@@ -351,7 +417,7 @@ public partial class MainWindow : Window
         if (_client is null) return;
         try
         {
-            await _client.SendFeedbackAsync(label, _lastTurnId);
+            await _client.SendFeedbackAsync(label, null);
             SetConnectionState("这条反馈记下了", ConnectionState.Connected);
         }
         catch (Exception exception) { SetConnectionState(exception.Message, ConnectionState.Warning); }

@@ -25,6 +25,12 @@ public partial class ChatPanel : UserControl
     public void AddUser(string text) => Add($"你:{text}");
     public void AddAssistant(string text) => Add($"小布:{text}");
 
+    public void AcceptSent(string text)
+    {
+        AddUser(text);
+        if (string.Equals(Input.Text.Trim(), text, StringComparison.Ordinal)) Input.Clear();
+    }
+
     private void Add(string text)
     {
         _history.Add(text);
@@ -47,7 +53,6 @@ public partial class ChatPanel : UserControl
     {
         var text = Input.Text.Trim();
         if (text.Length == 0) return;
-        Input.Clear();
         SendRequested?.Invoke(this, new SendRequestedEventArgs(text));
     }
 }

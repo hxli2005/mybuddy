@@ -150,30 +150,6 @@ class DemoHandler(BaseHTTPRequestHandler):
                 payload = self.server.bg.run(self.server.state.chat_payload(message))
                 self._send_json(payload)
                 return
-            if path == "/api/vpet/chat":
-                message = str(data.get("message", "")).strip()
-                if not message:
-                    self._send_vpet_error("invalid_chat", "message is required")
-                    return
-                if self.server.state.agent is None:
-                    self._send_vpet_error(
-                        "llm_not_configured",
-                        "LLM api_key 未配置,无法对话",
-                    )
-                    return
-                event = str(data.get("event", "chat")).strip() or "chat"
-                payload = self.server.bg.run(
-                    self.server.state.vpet_chat_payload(
-                        message,
-                        event=event,
-                        body_state=data.get("body_state") if isinstance(data, dict) else None,
-                        client_flags=_parse_client_flags(
-                            self.headers.get("X-MyBuddy-Client-Flags")
-                        ),
-                    )
-                )
-                self._send_json(payload)
-                return
             if path == "/api/vpet/event":
                 req = VPetEventRequest.model_validate(data)
                 payload = self.server.bg.run(

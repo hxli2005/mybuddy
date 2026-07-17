@@ -105,12 +105,6 @@ class ChatRequest(BaseModel):
     message: str = Field(min_length=1)
 
 
-class VPetChatRequest(BaseModel):
-    message: str = Field(min_length=1)
-    event: str = "chat"
-    body_state: dict[str, Any] | None = None
-
-
 class VPetEventRequest(BaseModel):
     event: str
     count: int = 1
@@ -1102,17 +1096,6 @@ def create_app(config_path: str = "config.yaml", max_steps: int = 6):
     @app.get("/api/vpet/state")
     async def vpet_state() -> dict[str, Any]:
         return state.vpet_state_payload()
-
-    @app.post("/api/vpet/chat")
-    async def vpet_chat(req: VPetChatRequest, request: Request):  # noqa: ANN202
-        if state.agent is None:
-            return _vpet_error("llm_not_configured", "LLM api_key 未配置,无法对话")
-        return await state.vpet_chat_payload(
-            req.message,
-            event=req.event,
-            body_state=req.body_state,
-            client_flags=_parse_client_flags(request.headers.get("X-MyBuddy-Client-Flags")),
-        )
 
     @app.post("/api/vpet/event")
     async def vpet_event(req: VPetEventRequest, request: Request):  # noqa: ANN202

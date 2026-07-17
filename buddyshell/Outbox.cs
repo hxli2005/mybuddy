@@ -20,10 +20,7 @@ public sealed class Outbox
     };
     private readonly SemaphoreSlim _gate = new(1, 1);
 
-    public static string PathName => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-        "BuddyShell",
-        "outbox.jsonl");
+    public static string PathName => Path.Combine(SettingsStore.DataDirectory, "outbox.jsonl");
 
     public async Task EnqueueAsync(VPetEventRequest payload)
     {

@@ -87,15 +87,14 @@ def test_fastapi_and_standard_web_share_vpet_v2_contract(tmp_path) -> None:
         assert web_invalid_status == fast_invalid.status_code == 400
         assert web_invalid == fast_invalid.json()
 
-        fast_chat = fast_client.post("/api/vpet/chat", json={"message": "在吗"})
-        web_chat_status, web_chat = _request_json(
+        old_fast_chat = fast_client.post("/api/vpet/chat", json={"message": "在吗"})
+        old_web_chat_status, _ = _request_json(
             base_url,
             "POST",
             "/api/vpet/chat",
             {"message": "在吗"},
         )
-        assert web_chat_status == fast_chat.status_code == 400
-        assert web_chat == fast_chat.json()
+        assert old_web_chat_status == old_fast_chat.status_code == 404
 
         fast_state.cfg.vpet.bridge_token = "secret"
         web_state.cfg.vpet.bridge_token = "secret"
@@ -122,8 +121,9 @@ def _request_json(
         method=method,
         headers={"Content-Type": "application/json"},
     )
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     try:
-        with urllib.request.urlopen(request, timeout=5) as response:  # noqa: S310
+        with opener.open(request, timeout=5) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exception:
         return exception.code, json.loads(exception.read().decode("utf-8"))
