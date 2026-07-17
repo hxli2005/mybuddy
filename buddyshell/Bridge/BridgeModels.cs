@@ -98,6 +98,9 @@ public sealed class BodyStepResponse
 
     [JsonPropertyName("event_status")]
     public string EventStatus { get; set; } = "none";
+
+    [JsonPropertyName("time_status")]
+    public string TimeStatus { get; set; } = "not_due";
 }
 
 public sealed class PendingBodyExpression

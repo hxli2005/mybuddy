@@ -21,9 +21,6 @@ public sealed class BridgeClient : IDisposable
 
     public void UpdateSettings(ShellSettings settings) => _settings = settings;
 
-    public Task<VPetStateResponse> GetStateAsync(CancellationToken cancellationToken = default) =>
-        SendRequiredAsync<VPetStateResponse>(HttpMethod.Get, "/api/vpet/state", null, 5, cancellationToken);
-
     public Task<BodyStepResponse> StepBodyAsync(
         BodyStepRequest request,
         CancellationToken cancellationToken = default) =>

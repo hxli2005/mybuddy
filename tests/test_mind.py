@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
 from mybuddy.llm import BaseLLMProvider, LLMResponse, Message, ToolCall, ToolSpec
-from mybuddy.mind import STATIC_CATCH, MindFiles, _replace_texts, mind_step
+from mybuddy.mind import STATIC_CATCH, MindFiles, _replace_texts, advance_time, mind_step
 
 
 def _valid_bundle(expression: str = "我在这儿，先陪你坐一会儿。") -> dict:
@@ -16,6 +16,7 @@ def _valid_bundle(expression: str = "我在这儿，先陪你坐一会儿。") -
             "energy": "平稳",
             "attention": "在听",
             "current_activity": "把手边的杯子放下了",
+            "baseline": "idle",
         },
         "life_events": [{"content": "刚把摊开的书合上，给桌面腾出一点空地方"}],
         "memory_operations": [
@@ -48,7 +49,8 @@ class StubProvider(BaseLLMProvider):
     ) -> LLMResponse:
         self.calls.append(messages)
         bundle = json.loads(json.dumps(self.bundles.pop(0), ensure_ascii=False))
-        incoming_id = json.loads(messages[0].content.split("\n", 1)[0])["incoming_experience"]["id"]
+        incoming = json.loads(messages[0].content.split("\n", 1)[0])["incoming_experience"]
+        incoming_id = incoming["id"] if incoming is not None else None
         for operation in bundle.get("memory_operations", []):
             operation["evidence_ids"] = [
                 incoming_id if item == "INCOMING" else item for item in operation["evidence_ids"]
@@ -56,6 +58,29 @@ class StubProvider(BaseLLMProvider):
         return LLMResponse(
             tool_calls=[ToolCall(id="call_1", name="submit_mind_bundle", arguments=bundle)]
         )
+
+
+def _time_bundle(expression=None) -> dict:  # noqa: ANN001
+    return {
+        "state_changes": {
+            "mood": "安静",
+            "energy": "平稳",
+            "attention": "看着书页",
+            "current_activity": "在窗边读刚翻到的一页",
+            "baseline": "read",
+        },
+        "life_events": [{"content": "坐到窗边，读完了刚翻到的一页。"}],
+        "memory_operations": [
+            {
+                "action": "record",
+                "kind": "self_experience",
+                "content": "今天在窗边读了一页书",
+                "evidence_ids": ["life:0"],
+                "target_id": None,
+            }
+        ],
+        "expression": expression,
+    }
 
 
 class FailingProvider(BaseLLMProvider):
@@ -74,7 +99,9 @@ class FailingProvider(BaseLLMProvider):
 
 def _read(files: MindFiles) -> tuple[dict, list[dict], dict, list[dict]]:
     state = json.loads(files.state_path.read_text(encoding="utf-8"))
-    history = [json.loads(line) for line in files.history_path.read_text(encoding="utf-8").splitlines()]
+    history = [
+        json.loads(line) for line in files.history_path.read_text(encoding="utf-8").splitlines()
+    ]
     memories = json.loads(files.memories_path.read_text(encoding="utf-8"))
     failures = [
         json.loads(line) for line in files.failures_path.read_text(encoding="utf-8").splitlines()
@@ -106,7 +133,9 @@ async def test_valid_bundle_commits_whole_bundle_but_not_unshown_expression(tmp_
 
 
 @pytest.mark.asyncio
-async def test_solicitation_in_state_or_memory_rejects_even_when_expression_is_legal(tmp_path) -> None:
+async def test_solicitation_in_state_or_memory_rejects_even_when_expression_is_legal(
+    tmp_path,
+) -> None:
     bad = _valid_bundle("我在。")
     bad["state_changes"]["mood"] = "因为你没回而低落"
     retry = _valid_bundle("我还在。")
@@ -126,7 +155,9 @@ async def test_solicitation_in_state_or_memory_rejects_even_when_expression_is_l
 
 
 @pytest.mark.asyncio
-async def test_fabricated_shared_experience_rejects_whole_bundle_and_retries_with_reason(tmp_path) -> None:
+async def test_fabricated_shared_experience_rejects_whole_bundle_and_retries_with_reason(
+    tmp_path,
+) -> None:
     bad = _valid_bundle("还记得我们上次一起淋雨吗？")
     bad["memory_operations"] = [
         {
@@ -192,6 +223,58 @@ async def test_provider_failure_returns_honest_static_catch_without_committing(t
     assert history == []
     assert memories == {"items": []}
     assert failures == []
+
+
+@pytest.mark.asyncio
+async def test_due_time_step_commits_own_life_and_baseline_without_expression(tmp_path) -> None:
+    files = MindFiles(tmp_path)
+    start = datetime(2026, 7, 17, 19, 0, tzinfo=UTC)
+    files.load(start)
+    provider = StubProvider([_time_bundle()])
+
+    result = await advance_time(
+        provider=provider,
+        files=files,
+        now=start + timedelta(minutes=31),
+    )
+
+    state, history, memories, failures = _read(files)
+    assert result.status == "advanced"
+    assert state["condition"]["baseline"] == "read"
+    assert state["pending_expression"] is None
+    assert [item["type"] for item in history] == ["self_life"]
+    assert memories["items"][0]["evidence_ids"] == ["life:0"]
+    assert failures == []
+
+    second = await advance_time(
+        provider=provider,
+        files=files,
+        now=start + timedelta(minutes=32),
+    )
+    assert second.status == "not_due"
+    assert len(provider.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_time_step_rejects_expression_before_committing_whole_retry(tmp_path) -> None:
+    files = MindFiles(tmp_path)
+    start = datetime(2026, 7, 17, 19, 0, tzinfo=UTC)
+    files.load(start)
+    provider = StubProvider([_time_bundle("你在吗？"), _time_bundle()])
+
+    result = await advance_time(
+        provider=provider,
+        files=files,
+        now=start + timedelta(minutes=31),
+    )
+
+    state, history, _, failures = _read(files)
+    assert result.status == "advanced"
+    assert result.attempts == 2
+    assert state["pending_expression"] is None
+    assert len(history) == 1
+    assert failures[0]["candidate_raw"]
+    assert "时间推进不能夹带" in failures[0]["reasons"][0]
 
 
 @pytest.mark.asyncio

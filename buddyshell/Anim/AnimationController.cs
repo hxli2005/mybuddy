@@ -86,13 +86,19 @@ public sealed class AnimationController : IAnimationController, IAnimationDiagno
     public void UpdateBaseline(BaselineSnapshot snapshot) => OnDispatcher(() =>
     {
         if (_disposed) return;
-        _baselineSnapshot = snapshot;
-        _renderer.SetWarmth(snapshot.Warmth);
         if (!snapshot.StateAvailable)
         {
-            Log("baseline_held", "reason=state_unavailable");
-            return;
+            snapshot = new BaselineSnapshot(
+                true,
+                false,
+                false,
+                "idle",
+                new PhysioLevels(false, false, false, false),
+                0.5);
+            Log("baseline_safe", "reason=state_unavailable target=idle.default.normal");
         }
+        _baselineSnapshot = snapshot;
+        _renderer.SetWarmth(snapshot.Warmth);
         var idleHint = snapshot.IdleHint.Trim().ToLowerInvariant();
         if (!snapshot.Sleeping && !snapshot.WorkSessionActive && idleHint == "stretch" && _lastIdleHint != "stretch")
         {

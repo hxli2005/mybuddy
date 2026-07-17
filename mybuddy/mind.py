@@ -9,7 +9,7 @@ import os
 import tempfile
 import uuid
 from collections.abc import Iterable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal
 
@@ -21,6 +21,7 @@ from mybuddy.llm import BaseLLMProvider, Message, Role, ToolSpec, make_provider
 HISTORY_CONTEXT_LIMIT = 12
 MEMORY_CONTEXT_LIMIT = 8
 RECENT_EVENT_LIMIT = 128
+LIFE_STEP_INTERVAL = timedelta(minutes=30)
 STATIC_CATCH = "我在。刚才脑子里那句话没理清，但你的话我确实听见了。"
 
 
@@ -33,6 +34,7 @@ class StateChanges(BaseModel):
     energy: str | None = None
     attention: str | None = None
     current_activity: str | None = None
+    baseline: Literal["idle", "read", "write", "gaze", "sleep"] | None = None
 
 
 class LifeEvent(BaseModel):
@@ -81,6 +83,12 @@ class StepResult(BaseModel):
     rejection_reasons: list[str] = Field(default_factory=list)
 
 
+class TimeStepResult(BaseModel):
+    status: Literal["not_due", "advanced", "failed"]
+    attempts: int = 0
+    rejection_reasons: list[str] = Field(default_factory=list)
+
+
 def _all_text(value: object) -> Iterable[str]:
     if isinstance(value, str):
         yield value
@@ -115,9 +123,7 @@ def validate_no_solicitation(bundle: CandidateBundle) -> list[str]:
     return [f"不索取：候选包含索取或惩罚沉默的内容 `{hit}`" for hit in hits]
 
 
-def validate_no_fabrication(
-    bundle: CandidateBundle, evidence_types: dict[str, str]
-) -> list[str]:
+def validate_no_fabrication(bundle: CandidateBundle, evidence_types: dict[str, str]) -> list[str]:
     """不编造：共同事实、用户事实和模式只能从本次选中的证据长出来。"""
     reasons: list[str] = []
     unsupported_claims = ("我们上次", "你之前说过", "你答应过", "还记得我们", "那天我们")
@@ -219,6 +225,7 @@ class MindFiles:
                         "energy": "平稳",
                         "attention": "在这里",
                         "current_activity": "刚刚安静下来",
+                        "baseline": "idle",
                     },
                     "pending_expression": None,
                 }
@@ -253,7 +260,9 @@ class MindFiles:
 
     def record_failure(self, record: dict[str, Any]) -> None:
         existing = self.failures_path.read_text(encoding="utf-8")
-        _replace_texts({self.failures_path: existing + json.dumps(record, ensure_ascii=False) + "\n"})
+        _replace_texts(
+            {self.failures_path: existing + json.dumps(record, ensure_ascii=False) + "\n"}
+        )
 
 
 def _write_temp(path: Path, content: str) -> Path:
@@ -286,7 +295,9 @@ def _replace_texts(documents: dict[Path, str]) -> None:
         for path, content in documents.items():
             path.parent.mkdir(parents=True, exist_ok=True)
             staged[path] = _write_temp(path, content)
-            backups[path] = _write_temp(path, path.read_text(encoding="utf-8")) if path.exists() else None
+            backups[path] = (
+                _write_temp(path, path.read_text(encoding="utf-8")) if path.exists() else None
+            )
         try:
             for path, temp_path in staged.items():
                 os.replace(temp_path, path)
@@ -336,12 +347,14 @@ def _prompt_payload(
     state: dict[str, Any],
     history: list[dict[str, Any]],
     memories: dict[str, Any],
-    experience: dict[str, Any],
+    experience: dict[str, Any] | None,
     now: datetime,
 ) -> str:
     selected_history = history[-HISTORY_CONTEXT_LIMIT:]
     memory_items = memories.get("items", [])
-    selected_memories = memory_items[-MEMORY_CONTEXT_LIMIT:] if isinstance(memory_items, list) else []
+    selected_memories = (
+        memory_items[-MEMORY_CONTEXT_LIMIT:] if isinstance(memory_items, list) else []
+    )
     last_step = state.get("last_step_at", now.isoformat())
     payload = {
         "now": now.isoformat(),
@@ -351,7 +364,7 @@ def _prompt_payload(
         "selected_memories": selected_memories,
         "incoming_experience": experience,
         "evidence_rule": (
-            "本次输入可引用 incoming_experience.id；新生活事件按顺序引用 life:0、life:1。"
+            "有本次输入时可引用 incoming_experience.id；新生活事件按顺序引用 life:0、life:1。"
             "用户事实、共同经历、模式必须带 evidence_ids；模式至少两条用户或共同经历。"
             "correct/forget 必须把现有记忆 ID 写入 target_id，并用 evidence_ids 绑定纠错依据。"
         ),
@@ -364,6 +377,12 @@ SYSTEM_PROMPT = """你是小布的唯一一次心智推进，不是任务助手�
 只处理给定事实与从 last_step 到 now 的朴素时间推进。不要补写共同过去，不催回复，
 不因沉默受伤，不制造关系计分，不撤回已发生内容。生活事件必须是她自己的、微小且具体；
 表达自然、简短、诚实。所有字段都受同一组红线校验，整包不能部分保留。"""
+
+TIME_SYSTEM_PROMPT = """你是小布的一次安静时间推进，不是任务助手。请调用 submit_mind_bundle，
+根据 last_step 到 now 真正经过的时间，一次给出状态改动、她自己刚发生的一至三个微小具体生活事件，
+以及有直接生活事件证据的记忆操作。state_changes.baseline 必须是 idle/read/write/gaze/sleep 之一，
+与她此刻正在做的事一致。这不是主动搭话，expression 必须为 null。不要逐分钟补写，不补写共同过去，
+不因用户沉默受伤，不催回复，不制造关系计分，不撤回已发生内容。整包不能部分保留。"""
 
 
 def _apply_memories(
@@ -403,25 +422,31 @@ def _accepted_documents(
     history: list[dict[str, Any]],
     memories: dict[str, Any],
     bundle: CandidateBundle,
-    experience: dict[str, Any],
+    experience: dict[str, Any] | None,
     now: datetime,
     event_id: str | None = None,
-) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, Any], PendingExpression]:
-    expression = bundle.expression.strip() if bundle.expression else STATIC_CATCH
-    pending = PendingExpression(
-        id=f"expr_{uuid.uuid4().hex}", text=expression, created_at=now.isoformat()
-    )
+    direct_expression: bool = True,
+) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, Any], PendingExpression | None]:
+    pending = None
+    if direct_expression:
+        expression = bundle.expression.strip() if bundle.expression else STATIC_CATCH
+        pending = PendingExpression(
+            id=f"expr_{uuid.uuid4().hex}", text=expression, created_at=now.isoformat()
+        )
     new_state = json.loads(json.dumps(state, ensure_ascii=False))
     condition = dict(new_state.get("condition", {}))
     condition.update(bundle.state_changes.model_dump(exclude_none=True))
     new_state["condition"] = condition
     new_state["last_step_at"] = now.isoformat()
-    new_state["pending_expression"] = pending.model_dump()
+    if pending is not None:
+        new_state["pending_expression"] = pending.model_dump()
     if event_id is not None:
         recent = [item for item in new_state.get("recent_event_ids", []) if isinstance(item, str)]
         new_state["recent_event_ids"] = [*recent, event_id][-RECENT_EVENT_LIMIT:]
 
-    new_history = [*history, experience]
+    new_history = [*history]
+    if experience is not None:
+        new_history.append(experience)
     for index, event in enumerate(bundle.life_events):
         new_history.append(
             {
@@ -434,6 +459,70 @@ def _accepted_documents(
         )
     new_memories = _apply_memories(memories, bundle.memory_operations, now)
     return new_state, new_history, new_memories, pending
+
+
+async def _generate_candidate(
+    *,
+    provider: BaseLLMProvider,
+    files: MindFiles,
+    prompt: str,
+    system: str,
+    now: datetime,
+    evidence_types: dict[str, str],
+    memory_ids: set[str],
+    quiet_time: bool = False,
+) -> tuple[CandidateBundle | None, int, list[str]]:
+    last_reasons: list[str] = []
+    for attempt in (1, 2):
+        retry_note = ""
+        if last_reasons:
+            retry_note = "\n上一个整包被拒绝。逐条修正后重新提交完整整包：\n- " + "\n- ".join(
+                last_reasons
+            )
+        try:
+            response = await provider.generate(
+                [Message(role=Role.USER, content=prompt + retry_note)],
+                tools=[_candidate_tool()],
+                system=system,
+                temperature=0.4,
+            )
+        except Exception as error:
+            return None, attempt, [f"模型调用失败：{type(error).__name__}"]
+        tool_arguments = next(
+            (call.arguments for call in response.tool_calls if call.name == "submit_mind_bundle"),
+            None,
+        )
+        raw = (
+            json.dumps(tool_arguments, ensure_ascii=False)
+            if tool_arguments is not None
+            else response.text
+        )
+        try:
+            if tool_arguments is None:
+                raise ValueError("模型没有调用 submit_mind_bundle")
+            bundle = CandidateBundle.model_validate(tool_arguments)
+            reasons = validate_bundle(bundle, evidence_types=evidence_types, memory_ids=memory_ids)
+            if quiet_time:
+                if bundle.expression is not None:
+                    reasons.append("时间推进不能夹带尚未进入 ambient 阶段的表达")
+                if not bundle.life_events:
+                    reasons.append("时间推进必须包含至少一件当场发生的自身生活事件")
+                if bundle.state_changes.baseline is None:
+                    reasons.append("时间推进必须明确身体持续呈现的 baseline")
+        except (ValidationError, ValueError) as error:
+            reasons = [f"结构化候选无效：{error}"]
+        if not reasons:
+            return bundle, attempt, []
+        files.record_failure(
+            {
+                "failed_at": now.isoformat(),
+                "attempt": attempt,
+                "candidate_raw": raw,
+                "reasons": reasons,
+            }
+        )
+        last_reasons = reasons
+    return None, 2, last_reasons
 
 
 async def mind_step(
@@ -462,65 +551,22 @@ async def mind_step(
     memory_ids = {
         str(item.get("id")) for item in memory_items if isinstance(item, dict) and item.get("id")
     }
-    last_reasons: list[str] = []
-
-    for attempt in (1, 2):
-        retry_note = ""
-        if last_reasons:
-            retry_note = "\n上一个整包被拒绝。逐条修正后重新提交完整整包：\n- " + "\n- ".join(last_reasons)
-        try:
-            response = await provider.generate(
-                [Message(role=Role.USER, content=prompt + retry_note)],
-                tools=[_candidate_tool()],
-                system=SYSTEM_PROMPT,
-                temperature=0.4,
-            )
-        except Exception as error:
-            fallback = PendingExpression(
-                id=f"expr_{uuid.uuid4().hex}",
-                text=STATIC_CATCH,
-                created_at=current_time.isoformat(),
-            )
-            return StepResult(
-                committed=False,
-                pending_expression=fallback,
-                attempts=attempt,
-                rejection_reasons=[f"模型调用失败：{type(error).__name__}"],
-            )
-        tool_arguments = None
-        for call in response.tool_calls:
-            if call.name == "submit_mind_bundle":
-                tool_arguments = call.arguments
-                break
-        raw = (
-            json.dumps(tool_arguments, ensure_ascii=False)
-            if tool_arguments is not None
-            else response.text
-        )
-        try:
-            if tool_arguments is None:
-                raise ValueError("模型没有调用 submit_mind_bundle")
-            bundle = CandidateBundle.model_validate(tool_arguments)
-            reasons = validate_bundle(bundle, evidence_types=evidence_types, memory_ids=memory_ids)
-        except (ValidationError, ValueError) as error:
-            reasons = [f"结构化候选无效：{error}"]
-        if reasons:
-            files.record_failure(
-                {
-                    "failed_at": current_time.isoformat(),
-                    "attempt": attempt,
-                    "candidate_raw": raw,
-                    "reasons": reasons,
-                }
-            )
-            last_reasons = reasons
-            continue
-
+    bundle, attempts, reasons = await _generate_candidate(
+        provider=provider,
+        files=files,
+        prompt=prompt,
+        system=SYSTEM_PROMPT,
+        now=current_time,
+        evidence_types=evidence_types,
+        memory_ids=memory_ids,
+    )
+    if bundle is not None:
         new_state, new_history, new_memories, pending = _accepted_documents(
             state, history, memories, bundle, experience, current_time, event_id
         )
         files.commit(new_state, new_history, new_memories)
-        return StepResult(committed=True, pending_expression=pending, attempts=attempt)
+        assert pending is not None
+        return StepResult(committed=True, pending_expression=pending, attempts=attempts)
 
     fallback = PendingExpression(
         id=f"expr_{uuid.uuid4().hex}", text=STATIC_CATCH, created_at=current_time.isoformat()
@@ -528,9 +574,61 @@ async def mind_step(
     return StepResult(
         committed=False,
         pending_expression=fallback,
-        attempts=2,
-        rejection_reasons=last_reasons,
+        attempts=attempts,
+        rejection_reasons=reasons,
     )
+
+
+async def advance_time(
+    *,
+    provider: BaseLLMProvider,
+    files: MindFiles,
+    now: datetime | None = None,
+) -> TimeStepResult:
+    """只在真实时间跨过间隔后推进一次生活；不生成或排队表达。"""
+    current_time = (now or datetime.now(UTC)).astimezone()
+    state, history, memories = files.load(current_time)
+    try:
+        last_step = datetime.fromisoformat(str(state["last_step_at"]))
+        if last_step.tzinfo is None:
+            last_step = last_step.replace(tzinfo=current_time.tzinfo)
+        elapsed = current_time - last_step.astimezone(current_time.tzinfo)
+    except (KeyError, TypeError, ValueError):
+        elapsed = LIFE_STEP_INTERVAL
+    if elapsed < LIFE_STEP_INTERVAL:
+        return TimeStepResult(status="not_due")
+
+    evidence_types = {
+        str(item.get("id")): str(item.get("type")) for item in history[-HISTORY_CONTEXT_LIMIT:]
+    }
+    memory_items = memories.get("items", [])
+    memory_ids = {
+        str(item.get("id")) for item in memory_items if isinstance(item, dict) and item.get("id")
+    }
+    bundle, attempts, reasons = await _generate_candidate(
+        provider=provider,
+        files=files,
+        prompt=_prompt_payload(state, history, memories, None, current_time),
+        system=TIME_SYSTEM_PROMPT,
+        now=current_time,
+        evidence_types=evidence_types,
+        memory_ids=memory_ids,
+        quiet_time=True,
+    )
+    if bundle is None:
+        return TimeStepResult(status="failed", attempts=attempts, rejection_reasons=reasons)
+    new_state, new_history, new_memories, pending = _accepted_documents(
+        state,
+        history,
+        memories,
+        bundle,
+        None,
+        current_time,
+        direct_expression=False,
+    )
+    assert pending is None
+    files.commit(new_state, new_history, new_memories)
+    return TimeStepResult(status="advanced", attempts=attempts)
 
 
 async def _run_cli(args: argparse.Namespace) -> None:

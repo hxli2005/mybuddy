@@ -22,7 +22,8 @@ public partial class MainWindow : Window
     private Notices? _notices;
     private Tray? _tray;
     private SpikeEvidence? _spikeEvidence;
-    private VPetStateResponse? _state;
+    private VPetStateResponse? _state = null;
+    private Dictionary<string, string>? _bodyBaseline;
     private string? _pendingChatEventId;
     private string? _pendingChatText;
     private bool _chatSending;
@@ -108,11 +109,12 @@ public partial class MainWindow : Window
             _spikeEvidence = new SpikeEvidence(_animationController);
 
             _client = new BridgeClient(_settings);
-            _stateLoop = new StateLoop(_client);
-            _stateLoop.Updated += OnStateUpdated;
+            _stateLoop = new StateLoop(_client, () => _settings.LastShownId);
+            _stateLoop.Updated += OnBodyUpdated;
             _stateLoop.Failed += (_, exception) => Dispatcher.Invoke(() =>
             {
-                _state = null;
+                _bodyBaseline = null;
+                UpdateAnimationBaseline();
                 SetConnectionState(exception.Message, ConnectionState.Warning);
             });
             _touchLayer = new TouchLayer(_animationController, _client, _outbox, ServerDate);
@@ -163,35 +165,28 @@ public partial class MainWindow : Window
         return tray;
     }
 
-    private void OnStateUpdated(object? sender, VPetStateResponse state)
+    private void OnBodyUpdated(object? sender, BodyStepResponse response)
     {
         Dispatcher.Invoke(() =>
         {
-            _state = state;
-            if (!string.Equals(state.Bridge, "vpet-bridge/2", StringComparison.Ordinal))
+            UpdateBodyBaseline(response);
+            if (response.Expression is not null &&
+                !string.Equals(response.Expression.Id, _settings.LastShownId, StringComparison.Ordinal))
             {
-                SetConnectionState($"协议不兼容：{state.Bridge}", ConnectionState.Error);
-                return;
+                ShowBodyExpression(response.Expression);
             }
-            var settingsChanged =
-                _settings.PhysioInjection != state.ServerFlags.PhysioInjection ||
-                _settings.TouchEscalation != state.ServerFlags.TouchEscalation ||
-                _settings.PhysicalProactive != state.ServerFlags.PhysicalProactive;
-            _settings.PhysioInjection = state.ServerFlags.PhysioInjection;
-            _settings.TouchEscalation = state.ServerFlags.TouchEscalation;
-            _settings.PhysicalProactive = state.ServerFlags.PhysicalProactive;
-            var quietBefore = (_settings.TodayQuiet, _settings.TodayQuietDate);
-            if (DateTimeOffset.TryParse(state.ServerTime, out var serverTime))
-            {
-                _settings.NormalizeTodayQuiet(serverTime.ToString("yyyy-MM-dd"));
-            }
-            settingsChanged |= quietBefore != (_settings.TodayQuiet, _settings.TodayQuietDate);
-            UpdateAnimationBaseline();
-            SetConnectionState($"已连接 · {FormatServerTime(state.ServerTime)}", ConnectionState.Connected);
-            App.LogMessage($"event=state server_time={state.ServerTime} idle_hint={state.IdleHint}");
-            if (settingsChanged) SettingsStore.Save(_settings);
+            SetConnectionState("已连接", ConnectionState.Connected);
+            App.LogMessage(
+                $"event=body_state baseline={response.Baseline.GetValueOrDefault("baseline", "idle")} " +
+                $"activity={response.Baseline.GetValueOrDefault("current_activity", "")} " +
+                $"time_status={response.TimeStatus}");
         });
-        _ = _outbox.FlushAsync(_client!);
+    }
+
+    private void UpdateBodyBaseline(BodyStepResponse response)
+    {
+        _bodyBaseline = response.Baseline;
+        UpdateAnimationBaseline();
     }
 
     private async Task SendBodyChatAsync(string text)
@@ -234,6 +229,7 @@ public partial class MainWindow : Window
             {
                 throw new BridgeRequestException($"身体桥未接收聊天事件：{response.EventStatus}");
             }
+            UpdateBodyBaseline(response);
             Chat.AcceptSent(text);
             _pendingChatText = null;
             _pendingChatEventId = null;
@@ -292,6 +288,7 @@ public partial class MainWindow : Window
             {
                 ShownId = _settings.LastShownId,
             });
+            UpdateBodyBaseline(confirmation);
             App.LogMessage(
                 $"event=shown expression_id={_settings.LastShownId} " +
                 $"confirmed={confirmation.ShownConfirmed}");
@@ -478,19 +475,16 @@ public partial class MainWindow : Window
         return time.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
     }
 
-    private static string FormatServerTime(string value) =>
-        DateTimeOffset.TryParse(value, out var time) ? time.ToString("MM-dd HH:mm") : value;
-
     private void UpdateAnimationBaseline()
     {
-        var levels = _state?.Physio?.Levels ?? new PhysioLevelFlags();
+        var baseline = _bodyBaseline?.GetValueOrDefault("baseline", "idle") ?? "idle";
         _animationController?.UpdateBaseline(new BaselineSnapshot(
-            _state is not null,
-            _state?.Physio?.Sleeping == true,
-            !string.IsNullOrWhiteSpace(_settings.ActiveWorkSessionId),
-            _state?.IdleHint ?? "idle",
-            new PhysioLevels(levels.Hungry, levels.Tired, levels.Low, levels.Bright),
-            _state?.Warmth ?? 0.5));
+            _bodyBaseline is not null,
+            string.Equals(baseline, "sleep", StringComparison.Ordinal),
+            false,
+            baseline,
+            new PhysioLevels(false, false, false, false),
+            0.5));
     }
 
     private void RestoreWindowPosition()

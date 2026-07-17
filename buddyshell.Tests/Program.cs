@@ -46,7 +46,7 @@ internal static class Program
             ("chat error exits think and resumes", ChatErrorResumesBaseline),
             ("feed lock ignores touch visuals", FeedLockIgnoresTouch),
             ("baseline transitions queue network reactions", BaselineTransitionQueuesReaction),
-            ("unavailable state holds last baseline", UnavailableStateHoldsBaseline),
+            ("disconnect uses safe baseline and reconnect restores mind baseline", DisconnectUsesSafeBaseline),
             ("stretch hint fires once as flourish", StretchHintFiresOnce),
             ("30 minute virtual randomized soak", VirtualRandomizedSoak),
             ("non chat think cannot create permanent pending", NonChatThinkIsDropped),
@@ -372,14 +372,23 @@ internal static class Program
         Equal(("work.write.normal", AnimationPhaseKind.Body), fixture.Current);
     }
 
-    private static void UnavailableStateHoldsBaseline()
+    private static void DisconnectUsesSafeBaseline()
     {
         using var fixture = new Fixture();
-        var before = fixture.Controller.Snapshot;
+        fixture.Controller.UpdateBaseline(Baseline(work: true));
+        fixture.Advance(10);
+        Equal(("work.write.normal", AnimationPhaseKind.Body), fixture.Current);
+
         fixture.Controller.UpdateBaseline(new BaselineSnapshot(
-            false, true, true, "write", new(false, false, false, false), 0.5));
-        Equal(before.PlanId, fixture.Controller.Snapshot.PlanId);
-        Equal(before.Generation, fixture.Controller.Snapshot.Generation);
+            false, true, true, "write", new(true, true, true, true), 1.0));
+        Equal(("work.write.normal", AnimationPhaseKind.Exit), fixture.Current);
+        fixture.Advance(10);
+        Equal(("idle.default.normal", AnimationPhaseKind.Body), fixture.Current);
+
+        fixture.Controller.UpdateBaseline(Baseline() with { IdleHint = "read" });
+        Equal(("idle.read.normal", AnimationPhaseKind.Entry), fixture.Current);
+        fixture.Advance(10);
+        Equal(("idle.read.normal", AnimationPhaseKind.Body), fixture.Current);
     }
 
     private static void StretchHintFiresOnce()

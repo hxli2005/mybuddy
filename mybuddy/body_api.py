@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Literal
 
@@ -11,7 +11,15 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from mybuddy.config import load_config
 from mybuddy.llm import BaseLLMProvider, make_provider
-from mybuddy.mind import RECENT_EVENT_LIMIT, MindFiles, PendingExpression, mind_step
+from mybuddy.mind import (
+    RECENT_EVENT_LIMIT,
+    MindFiles,
+    PendingExpression,
+    advance_time,
+    mind_step,
+)
+
+TIME_RETRY_INTERVAL = timedelta(minutes=5)
 
 
 class BodyEvent(BaseModel):
@@ -48,6 +56,7 @@ class BodyStepResponse(BaseModel):
     expression: PendingExpression | None
     shown_confirmed: bool
     event_status: Literal["none", "processed", "duplicate", "waiting_for_shown"]
+    time_status: Literal["not_due", "advanced", "failed", "waiting_for_shown"]
 
 
 class BodyBridge:
@@ -57,12 +66,14 @@ class BodyBridge:
         self.provider = provider
         self.files = files
         self._write_lock = asyncio.Lock()
+        self._next_time_attempt_at: datetime | None = None
 
     async def step(self, request: BodyStepRequest) -> BodyStepResponse:
         async with self._write_lock:
             now = datetime.now(UTC).astimezone()
             shown_confirmed = self._confirm_shown(request.shown_id, now)
             event_status = await self._process_event(request.event, now)
+            time_status = await self._advance_time(now) if request.event is None else "not_due"
             state, _, _ = self.files.load(now)
             pending = state.get("pending_expression")
             return BodyStepResponse(
@@ -72,6 +83,7 @@ class BodyBridge:
                 expression=PendingExpression.model_validate(pending) if pending else None,
                 shown_confirmed=shown_confirmed,
                 event_status=event_status,
+                time_status=time_status,
             )
 
     def _confirm_shown(self, shown_id: str | None, now: datetime) -> bool:
@@ -121,6 +133,21 @@ class BodyBridge:
             self.files.commit(state, history, memories)
         return "processed"
 
+    async def _advance_time(
+        self, now: datetime
+    ) -> Literal["not_due", "advanced", "failed", "waiting_for_shown"]:
+        state, _, _ = self.files.load(now)
+        if state.get("pending_expression") is not None:
+            return "waiting_for_shown"
+        if self._next_time_attempt_at is not None and now < self._next_time_attempt_at:
+            return "not_due"
+        result = await advance_time(provider=self.provider, files=self.files, now=now)
+        if result.status == "failed":
+            self._next_time_attempt_at = now + TIME_RETRY_INTERVAL
+        else:
+            self._next_time_attempt_at = None
+        return result.status
+
 
 def create_body_app(
     config_path: str = "config.yaml",
@@ -141,9 +168,7 @@ def create_body_app(
         provider = make_provider(cfg.llm)
 
     bridge = BodyBridge(provider=provider, files=MindFiles(data_dir))
-    app = FastAPI(
-        title="MyBuddy body bridge", docs_url=None, redoc_url=None, openapi_url=None
-    )
+    app = FastAPI(title="MyBuddy body bridge", docs_url=None, redoc_url=None, openapi_url=None)
     app.state.body_bridge = bridge
 
     @app.post("/api/body/step", response_model=BodyStepResponse)
