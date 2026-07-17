@@ -373,7 +373,8 @@ def test_messages_payload_returns_raw_chat_log(tmp_path) -> None:
     assert payload["messages"][0]["meta"]["turn_id"] == "t1"
 
 
-def test_users_payload_create_bind_update_and_usage(tmp_path) -> None:
+def test_users_payload_create_update_and_usage(tmp_path) -> None:
+    # QQ 渠道与绑定端点已随纯陪伴裁决删除(mini 分支第一刀)。
     engine = init_db(str(tmp_path / "users.db"))
     state = AppState(config_path="config.yaml")
     state.engine = engine
@@ -386,28 +387,15 @@ def test_users_payload_create_bind_update_and_usage(tmp_path) -> None:
     assert created["user"]["status"] == "active"
     assert created["user"]["daily_message_limit"] == 12
 
-    bound = state.bind_user_qq_payload(
-        user_id,
-        external_id="qq-openid",
-        display_name="QQ名",
-    )
-    assert bound["user"]["external_accounts"] == [
-        {
-            "provider": "qq",
-            "external_id": "qq-openid",
-            "display_name": "QQ名",
-        }
-    ]
-
     updated = state.update_user_payload(user_id, status="disabled", daily_message_limit=3)
     assert updated["user"]["status"] == "disabled"
     assert updated["user"]["daily_message_limit"] == 3
 
-    increment_usage(engine, user_id=user_id, source="qq", amount=2)
+    increment_usage(engine, user_id=user_id, source="desktop", amount=2)
     listed = state.users_payload()["users"]
 
     assert listed[0]["id"] == user_id
-    assert listed[0]["usage_today"] == {"qq": 2}
+    assert listed[0]["usage_today"] == {"desktop": 2}
     assert listed[0]["usage_total_today"] == 2
 
 

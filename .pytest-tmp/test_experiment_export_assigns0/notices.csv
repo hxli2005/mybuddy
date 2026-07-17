@@ -1,0 +1,3 @@
+﻿notice_id,local_date,source,pending_id,shown_at,any_interaction_5m,first_interaction_kind,user_response_10m,user_message_id,touch_escalation,physical_proactive,day_index
+1,2026-07-17,nudge,1,2026-08-04T09:00:00,True,user_message,False,,True,True,3
+2,2026-07-17,dynamic,2,2026-08-04T09:02:00,True,user_message,True,1,True,True,3

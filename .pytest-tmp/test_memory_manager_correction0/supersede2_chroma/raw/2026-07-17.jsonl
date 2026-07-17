@@ -1,0 +1,1 @@
+{"id": "evt_a7d71afdd25749de97b172b98ccd3a1a", "turn_id": "t1", "type": "conversation_turn", "payload": {"turn_id": "t1", "session_id": "", "user_text": "随便聊聊", "assistant_text": "嗯", "summary": "USER: 随便聊聊 / AI: 嗯", "meta": {}, "created_at": "2026-07-17T09:08:00"}, "created_at": "2026-07-17T09:08:00"}

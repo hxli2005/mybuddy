@@ -202,10 +202,6 @@ class UserUpdateRequest(BaseModel):
     daily_message_limit: int | None = Field(default=None, ge=0)
 
 
-class UserQQBindRequest(BaseModel):
-    external_id: str = Field(min_length=1)
-    display_name: str | None = None
-
 
 class UserPersonaUpdateRequest(PersonaUpdateRequest):
     pass
@@ -1287,28 +1283,6 @@ class AppState:
             raise RuntimeError(f"测试用户不存在:id={user_id}")
         return {"user": _find_user_summary_payload(engine, user_id)}
 
-    def bind_user_qq_payload(
-        self,
-        user_id: int,
-        *,
-        external_id: str,
-        display_name: str | None = None,
-    ) -> dict[str, Any]:
-        clean_external_id = external_id.strip()
-        if not clean_external_id:
-            raise RuntimeError("QQ external_id 为空")
-        engine = _require(self.engine)
-        try:
-            bind_external_account(
-                engine,
-                user_id=user_id,
-                provider="qq",
-                external_id=clean_external_id,
-                display_name=(display_name or "").strip(),
-            )
-        except ValueError as e:
-            raise RuntimeError(str(e)) from e
-        return {"user": _find_user_summary_payload(engine, user_id)}
 
     def user_persona_payload(self, user_id: int) -> dict[str, Any]:
         engine = _require(self.engine)
@@ -1774,16 +1748,6 @@ def create_app(config_path: str = "config.yaml", max_steps: int = 6):
         except RuntimeError as e:
             raise HTTPException(status_code=400, detail=str(e)) from e
 
-    @app.post("/api/users/{user_id}/qq")
-    async def bind_test_user_qq(user_id: int, req: UserQQBindRequest) -> dict[str, Any]:
-        try:
-            return state.bind_user_qq_payload(
-                user_id,
-                external_id=req.external_id,
-                display_name=req.display_name,
-            )
-        except RuntimeError as e:
-            raise HTTPException(status_code=400, detail=str(e)) from e
 
     @app.get("/api/users/{user_id}/persona")
     async def user_persona(user_id: int) -> dict[str, Any]:

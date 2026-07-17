@@ -1,0 +1,26 @@
+database=D:\file\mybuddy\mybuddy-mini\.pytest-tmp\test_capture_creates_honest_fi0\capture.db
+captured_at=2026-07-17T17:08:06.710858+08:00
+
+-- touches
+SELECT * FROM vpet_events WHERE event IN ('touch_head','touch_body') ORDER BY id DESC LIMIT 50;
+[
+  {
+    "id": 1,
+    "client_event_id": "capture-touch",
+    "event": "touch_head",
+    "count": 1,
+    "body_state_json": null,
+    "context_json": "{\"local_date\": \"2026-07-17\", \"server_time\": \"2026-07-17T17:08:06+08:00\", \"client_event_id\": \"capture-touch\"}",
+    "want_reply": 0,
+    "escalated": 0,
+    "replied": 0,
+    "gate_reason": null,
+    "turn_id": null,
+    "message_id": null,
+    "client_flags_json": null,
+    "server_flags_json": "{}",
+    "last_emotion_label": null,
+    "day_index": null,
+    "created_at": "2026-07-17 09:08:06.638356"
+  }
+]

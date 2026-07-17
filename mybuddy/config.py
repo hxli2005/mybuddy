@@ -192,20 +192,6 @@ class ToolsConfig(BaseModel):
     http_timeout: float = 5.0
 
 
-class QQChannelConfig(BaseModel):
-    enabled: bool = False
-    app_id: str = ""
-    app_secret: str = ""
-    sandbox: bool = True
-    allow_auto_create_user: bool = False
-    daily_message_limit: int = 30
-    reply_on_duplicate: bool = False
-
-
-class ChannelsConfig(BaseModel):
-    qq: QQChannelConfig = Field(default_factory=QQChannelConfig)
-
-
 class PhysioConfig(BaseModel):
     """小布生理引擎配置。
 
@@ -260,7 +246,6 @@ class Config(BaseModel):
     scheduler: SchedulerConfig = Field(default_factory=SchedulerConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
-    channels: ChannelsConfig = Field(default_factory=ChannelsConfig)
     physio: PhysioConfig = Field(default_factory=PhysioConfig)
     vpet: VPetConfig = Field(default_factory=VPetConfig)
 

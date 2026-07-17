@@ -61,6 +61,5 @@ botpy.log*
 dist-share/
 
 # 本地学习材料(不提交)
-CLAUDE.md
 study-guide/
 .DS_Store
