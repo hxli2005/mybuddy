@@ -1,89 +1,126 @@
-# MyBuddy
+# MyBuddy mini
 
-生活陪伴型 AI 小伙伴「小布」。借鉴 [NousResearch Hermes Agent](https://github.com/nousresearch/hermes-agent) 的自学习机制,自研 ReAct 主循环、三层文本长期记忆、角色关系编排与动态角色生活状态,配本地 Web 前端。
+MyBuddy mini 是一个面向单用户、本地运行的最小人格引擎，小布是它唯一需要证明
+的具体人格。
 
-- 开发日志:[`docs/DEVLOG.md`](docs/DEVLOG.md) · 项目报告:[`docs/项目报告.md`](docs/项目报告.md) · 评测:[`eval/README.md`](eval/README.md) · 小布桌宠 v1:[`docs/VPET_V1_KICKOFF.md`](docs/VPET_V1_KICKOFF.md) · O1 历史接入:[`docs/VPET.md`](docs/VPET.md)
+目标不是让她在单轮对话里“像人”，而是让她沿真实时间继续生活，因自己的经历
+和双方真正发生的经历而改变，同时长期保持为同一个人。对话只是她的一种表达，
+桌面身体是她感知和出现的载体。
 
-## 部署方式一:Docker(推荐,无需 Python/Node 环境)
+> 让一个人格因经历而变化，又不因生成而失去自己。
 
-```bash
-# 1) 配置 LLM key(OpenRouter / Anthropic / DeepSeek 任一)
-cp config.example.yaml config.yaml
-# 编辑 config.yaml,填入 llm.api_key
+## 它要解决什么
 
-# 2) 构建并启动
-docker compose up -d --build
+- **身份连续性**：稳定身份不会随一次输入漂移，变化必须能追溯到具体经历。
+- **自己的生活**：用户不说话时她的时间仍然流逝；生活在当时发生，不为当前
+  台词补写一个虚假的过去。
+- **记忆治理**：区分用户事实、她的经历、共同经历和有证据的模式；记忆可以
+  记录、整合、想起、纠正和遗忘，而不是无限堆积聊天记录。
+- **内部一致性**：状态、生活、记忆和表达由一次心智步形成完整候选，整包通过
+  红线后才提交，避免“台词被拦住、坏状态却已经写入”。
+- **用户所有权**：核心存在最终落为本地、可读、可备份的状态、历史、记忆和
+  失败诊断，而不是只寄存在平台账户里。
+- **无关系债务**：她可以关心和主动表达，但用户可以忽略；沉默不会被解释成
+  拒绝，也不会降低关系或留下负面记忆。
 
-# 3) 打开 http://127.0.0.1:8000
+## 它明确不是什么
+
+- 不是天气、搜索、提醒、笔记或工作流助手；
+- 不是靠长人设 prompt 维持的聊天角色；
+- 不是依靠亲密度、签到和催回驱动的留存产品；
+- 不是完整虚拟世界或逐分钟生命模拟；
+- 不是多角色平台、通用 Agent 框架或插件市场。
+
+项目只先做好小布一个人。没有第二个具体实现前，不为“所有人格”建设抽象层。
+
+## 核心形状
+
+```text
+经历进入
+  → 按真实流逝时间推进状态与生活
+  → 选择有限上下文
+  → 一次模型调用产生 {状态改动, 生活事件, 记忆操作, 表达?}
+  → 不索取 / 不编造 / 无总分 / 不撤回校验整包
+  → 原子提交或整包丢弃
+  → 身体实际显示后，表达才成为共同历史
 ```
 
-数据(记忆/画像/技能/轨迹)持久化在宿主机 `./data/`;时区默认 Asia/Shanghai(角色的时段问候依赖它,可在 compose 里改)。
+目标权威数据只有四份：
 
-```bash
-# 可选:灌入一套演示数据(画像/记忆/对话/提醒/笔记/技能,覆盖全部面板)
-docker compose exec mybuddy uv run --no-sync python scripts/seed_demo.py
-docker compose restart mybuddy
+```text
+state.json       她现在怎样
+history.jsonl    已经真实发生过什么
+memories.json    哪些理解长期留了下来
+failures.jsonl   哪些候选因为什么没有成为她的一部分
 ```
 
-## 部署方式二:本机运行(开发)
+完整设计以 [`DESIGN.md`](DESIGN.md) 为唯一来源。
 
-```bash
-uv sync --extra api                    # 需 Python 3.12+ 与 uv
-cp config.example.yaml config.yaml     # 填入 api_key
+## 身体与心智
 
-uv run --extra api mybuddy web         # Web:http://127.0.0.1:8000
-uv run mybuddy chat                    # 或命令行对话
+`buddyshell/` 是 Windows WPF 桌宠身体，负责窗口、动画、触碰、在场信号和表达
+是否真正显示；人格引擎负责状态、生活、记忆、意义和表达意图。身体报告感知，
+心智决定意义；引擎离线时身体回到安全姿态，不继续假装她处于活跃状态。
+
+连接层只是一根本机窄桥：身体提交原始观察与上一条 `shown` 收据，引擎返回持续
+基线和至多一个待展示表达。目标协议收成一个 `/api/body/step` HTTP+JSON 端点；
+表达只有真正显示并回执后才进入共同历史。断线时不后台排队聊天、不回补触碰和
+presence，不建设 WebSocket、消息总线、通用 outbox 或第二份人格状态。
+
+现有桌宠素材来自[虚拟主播模拟器制作组](https://github.com/LorisYounger/VPet)，
+仅按非商用条件使用，商业化前必须另行取得授权或替换素材。
+
+## 当前仓库状态
+
+这个分支从 v3 之前的可用身体快照分出，正在从旧 MyBuddy 收缩重建。仓库中的
+ReAct、数据库、scheduler、Dream Job、技能、情绪子系统、工具和旧测试是历史
+遗留代码，不代表 mini 新核心已经完成，也不再定义产品方向。
+
+旧代码和 `docs/` 保留作只读证据与身体回归素材；新的实现只接受运行结果评审：
+改动后必须实际跑起来，保存她真正显示的话，并回答“她哪里更活了”。
+
+### 新 session 的施工边界
+
+下一步不是给旧 VPet 桥继续加兼容层，而是保留可用身体资产并纵向打通唯一闭环：
+
+```text
+身体观察 event
+  → /api/body/step
+  → 引擎整包生成、校验、提交
+  → baseline + expression
+  → 身体实际显示
+  → 下次 step 携带 shown_id
+  → 共同历史确认
 ```
 
-## 小布桌宠（Windows）
+优先保留窗口、动画、气泡、触碰、presence 和离线基线；优先删除身体侧人格政策、
+主动次数/冷却、旧生理与关系字段、feed记忆旁路、pending drain/digest、feedback、
+通用 outbox 和协议兼容分支。旧测试可以提供行为证据，但不能迫使新核心保留双轨。
 
-`buddyshell/` 是 v1 的 WPF 桌宠壳。先启动 MyBuddy Web 后端，再运行：
+防止再次膨胀的检查只有四问：这是谁的职责？谁是唯一写者？现有顺序闭环为什么
+做不了？替换后能删掉什么？其中任何一问答不清，就先不增加模块、字段或开关。
+
+多个编码 session 之间以 [`WORK.md`](WORK.md) 协调当前任务和最近一次交接，以
+Git提交传递已经完成的事实。`WORK.md`不是第二份设计文档，不记录产品裁决和长期
+开发日志；设计冲突一律以 [`DESIGN.md`](DESIGN.md) 为准。
+
+## 当前开发入口
+
+Python 需要 3.12+ 和 `uv`：
+
+```powershell
+uv sync --extra api
+Copy-Item config.example.yaml config.yaml
+# 在 config.yaml 中填写模型配置
+uv run --extra api mybuddy web
+```
+
+Windows 桌宠身体：
 
 ```powershell
 .\scripts\start_mybuddy_web.ps1
-# 另开一个 PowerShell；仓库本地 SDK 可避免系统未安装 dotnet SDK
 .\.dotnet-sdk\dotnet.exe run --project .\buddyshell\BuddyShell.csproj
 ```
 
-开发机若已安装 VPet，会自动查找默认宠物素材；也可设置
-`BUDDYSHELL_PET_ROOT` 指向 `0000_core/pet/vup`。发布包由
-`scripts/package_buddyshell.ps1` 生成。
-
-动画状态机回归、安装素材校验和 V1–V10 截图证据可用以下命令重跑：
-
-```powershell
-$env:BUDDYSHELL_PET_ROOT="D:\steam\steamapps\common\VPet\mod\0000_core\pet\vup"
-.\.dotnet-sdk\dotnet.exe run --project .\buddyshell.Tests\BuddyShell.Tests.csproj -c Release -- --assets
-```
-
-桌宠动画素材版权归[虚拟主播模拟器制作组](https://github.com/LorisYounger/VPet)，
-本项目仅按非商用条件使用；商业化前须另行取得授权。
-
-六拍验收时按拍采集只读证据（初始结果固定为 `FAIL`，不会自动冒充通过）：
-
-```powershell
-uv run python scripts/vpet_acceptance_capture.py --beat 3
-uv run python scripts/vpet_weekly_check.py
-uv run python scripts/vpet_acceptance_finalize.py
-uv run python scripts/vpet_acceptance_verify.py --root eval/acceptance/v1
-```
-
-前端产物不入库:要本机由 `mybuddy web` 托管页面,先 `cd frontend && npm ci && npm run build`(仅改前端时需要;Docker 构建自动完成这步)。
-
-## 项目状态
-
-单用户本地版本,毕业设计研究载体(研究方向:陪伴 AI 的"人味"——构成、实现与测量):
-
-- 分层长期记忆:`raw/ conversations/ archive/` 三层文本档案 + 可选语义召回(词法+向量 RRF 融合);
-- 角色生活状态按真实信号动态合成(距上次对话间隔 / 时段 / 最近话题),非写死文案;
-- 情绪识别与主动关怀(定时问候 / 沉默回访 / 夜间记忆整理 Dream Job);
-- 自生长技能(Markdown 存储,置信度随反馈升降,连败自动归档);
-- 评测:自建中文召回集 + LoCoMo 公开基准,结果与方法见 [`eval/RESULTS.md`](eval/RESULTS.md)。
-
-桌宠 v1 当前按 2026-08-01 硬交付施工:Windows 独立 WPF 壳负责渲染与传感,
-MyBuddy 引擎统一负责生理、人格、记忆、时机和遥测。产品形态、桥协议、验收与实验口径
-已在 [`docs/VPET_V1_KICKOFF.md`](docs/VPET_V1_KICKOFF.md) 所列规格包中冻结。
-
-## QQ 机器人(冻结)
-
-QQ 渠道代码保留但当前不维护、不推荐部署(项目聚焦毕设研究)。历史文档见 [`docs/QQBOT.md`](docs/QQBOT.md)。
+这些入口目前运行的是过渡期仓库；它们用于保留可用身体和观察基线，不代表上述
+最小人格闭环已经全部落地。
