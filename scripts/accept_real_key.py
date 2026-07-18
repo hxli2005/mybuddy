@@ -32,15 +32,32 @@ def main() -> None:
     parser.add_argument("--url", default="http://127.0.0.1:8000/api/body/step")
     parser.add_argument("--event-id", default="real-key-chat-001")
     parser.add_argument("--text", default=DEFAULT_TEXT)
+    parser.add_argument(
+        "--scenario",
+        choices=("chat", "touch-head", "quiet", "ambient"),
+        default="chat",
+    )
     args = parser.parse_args()
 
-    payload = {"event": {"event_id": args.event_id, "type": "chat", "content": args.text}}
+    if args.scenario == "chat":
+        payload = {"event": {"event_id": args.event_id, "type": "chat", "content": args.text}}
+    elif args.scenario == "touch-head":
+        payload = {"event": {"event_id": args.event_id, "type": "touch_head"}}
+    elif args.scenario == "ambient":
+        payload = {"presence": {"present": True, "fullscreen": False}}
+    else:
+        payload = {}
     first = _post(args.url, payload)
     expression = first.get("expression")
     shown = None
     if isinstance(expression, dict) and expression.get("id"):
         shown = _post(args.url, {"shown_id": expression["id"]})
-    print(json.dumps({"sent": args.text, "step": first, "shown": shown}, ensure_ascii=False))
+    print(
+        json.dumps(
+            {"scenario": args.scenario, "sent": payload, "step": first, "shown": shown},
+            ensure_ascii=False,
+        )
+    )
 
 
 if __name__ == "__main__":

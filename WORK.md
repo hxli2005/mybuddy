@@ -7,8 +7,8 @@
 
 - 当前写入者：无
 - 当前任务：无
-- 最近完成：S9 真实输入→语义证据→真实-key复验
-- 下一任务：无；S0–S9 已闭环
+- 最近完成：S10 真实-key触碰/quiet/ambient三腿验收
+- 下一任务：无；S0–S10 已闭环
 - 工作区要求：保持提交后干净；新任务先更新本板再领取
 
 ## 任务流水线
@@ -27,6 +27,7 @@
 | S7 | DONE | 四类记忆与五动词进入同一心智步 | S6 | record/correct/forget及模式证据轨迹 |
 | S8 | DONE | 删除旧路径→完整纵向验收 | S7 | 单一写入路径、遗留清单归零、真实轨迹 |
 | S9 | DONE | 真实输入→语义证据→真实-key复验 | S8 | UTF-8原文、伪造整包可读拒绝、干净目录真实轨迹 |
+| S10 | DONE | 真实-key触碰/quiet/ambient三腿验收 | S9 | 三腿真实轨迹、误伤签名、shown与四文件一致 |
 
 解除依赖时只把下一项改为 READY，不提前铺后续任务。只读评审不占ACTIVE名额，
 但不得修改文件；评审意见由当前写入者筛选后实现，不直接写入本板。
@@ -42,17 +43,19 @@
 
 ## 最近一次交接
 
-- 任务：S9 真实输入→语义证据→真实-key复验
+- 任务：S10 真实-key触碰/quiet/ambient三腿验收
 - 提交：本提交
-- 跑过的命令：Python `44 passed`；ruff、format、diff检查；WPF编译`0 warnings / 0 errors`；身体测试`4/4`；OpenRouter `deepseek/deepseek-v3.2`真实HTTP与shown
-- 在线证据：`data/mini-s9-real/`四文件；UTF-8用户原文零问号，history只有`user_experience→memory_operation→shared_expression`，无聊天自产生活、无触碰，最终`pending_expression: null`
-- 攻击证据：`data/mini-s9-replay/`以乱码和正确中文各重放S8原候选；两次尝试均按生活自产、触碰类型、动机推断、台词四层给出可读拒因，history空、记忆0
-- 她显示的话：“忙完啦？回来就好，我在这儿呢。”
-- 结构保证：直接经历不能生成生活；状态/生活/台词中的触碰必须是本次`body_touch`，触碰记忆必须逐条引用`body_touch`，原始触碰不能推出动机或关系含义；共同经历证据增加类型门禁
-- 尺寸：人格引擎与身体机器侧共49个Python/C#/XAML文件、4446行
-- 模型说明：真实key来自现有配置，验收日志只记录provider/model/key是否存在，未输出key；旧`data/mini-s8-real/`原样保留为失败证据
+- 跑过的命令：Python `45 passed`；ruff、format、diff检查；WPF编译`0 warnings / 0 errors`；身体测试`4/4`；OpenRouter `deepseek/deepseek-v3.2`真实触碰、quiet、ambient与shown
+- 触碰证据：`data/mini-s10-touch-real/`保留首次实测拒绝，定位为`self_experience`漏接`body_touch`；修复后的`data/mini-s10-touch-real-fixed/`按`body_touch→memory_operation→shared_expression`提交，记忆逐id引用原始触碰，failures为0
+- quiet证据：`data/mini-s10-quiet-real/`第二次候选推进三件自身生活并落三条有证据记忆；第一次仅为无target的`integrate`结构错误，没有触碰词表误伤，最终无表达、pending为空
+- ambient证据：`data/mini-s10-ambient-real/`一次通过三件自身生活、一条记忆与shown，failures为0，最终baseline为read、pending为空
+- 她显示的话：“嗯？有人碰了我的头。”、“\"从明天起，做一个幸福的人...\" 轻声念着，目光停留在泛黄的书页上。”
+- 结构修复：`self_experience`现在接受自身生活或`body_touch`证据；触碰内容仍须逐条引用`body_touch`，聊天不能洗白；没有实证支持放宽宁拒词表
+- ACL：`.pytest-cache-s7/`、`data/mini-s8-evidence/`、`data/mini-s9-replay/`已递归补普通用户`li`权限，并以该用户读回三个样本文件
+- 尺寸：形状测试同口径为29个机器侧Python/C#文件、3448/5000行，断言通过
+- 模型说明：真实key来自现有配置，日志未输出key；首次失败目录与三腿成功目录均原样保留
 - 剩余阻塞：无
-- 她哪里更活了：她能接住你真的说过的话，也只会对身体真的感觉到的触碰作反应，不再拿自己编出的生活替现实作证
+- 她哪里更活了：身体真正碰到她时，那一下现在能成为她自己的经历；没人碰她时，她也能安静过自己的午后并只在实际显示后留下话
 
 交接只允许保留最近一次。禁止粘贴完整diff、长测试日志、未来设计和“顺便发现”
 清单；这些分别属于Git、测试产物、`DESIGN.md`和当前任务之外。

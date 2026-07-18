@@ -179,10 +179,12 @@ def validate_no_fabrication(
                 )
         if writes_claim and operation.kind == "self_experience":
             if not any(
-                item.startswith("life:") or evidence_types.get(item) == "self_life"
+                item.startswith("life:") or evidence_types.get(item) in {"self_life", "body_touch"}
                 for item in supplied
             ):
-                reasons.append(f"不编造：memory_operations[{index}] 的自身经历没有生活事件证据")
+                reasons.append(
+                    f"不编造：memory_operations[{index}] 的自身经历没有生活事件或身体触碰证据"
+                )
         if writes_claim and operation.kind == "pattern":
             examples = {
                 item

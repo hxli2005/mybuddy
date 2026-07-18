@@ -272,6 +272,44 @@ async def test_touch_claim_in_expression_alone_requires_current_body_touch(tmp_p
 
 
 @pytest.mark.asyncio
+async def test_body_touch_can_be_evidence_for_her_own_touch_experience(tmp_path) -> None:
+    bundle = {
+        "state_changes": {
+            "mood": "平静",
+            "energy": "平稳",
+            "attention": "注意到触碰",
+            "current_activity": "感受触碰",
+            "baseline": "idle",
+        },
+        "life_events": [],
+        "memory_operations": [
+            {
+                "action": "record",
+                "kind": "self_experience",
+                "content": "头部被触碰了",
+                "evidence_ids": ["INCOMING"],
+            }
+        ],
+        "expression": "嗯？头被碰了一下。",
+    }
+    files = MindFiles(tmp_path)
+
+    result = await mind_step(
+        None,
+        experience_type="body_touch",
+        experience_details={"zone": "head"},
+        provider=StubProvider([bundle]),
+        files=files,
+    )
+
+    _, history, memories, failures = _read(files)
+    assert result.committed is True
+    assert [item["type"] for item in history] == ["body_touch", "memory_operation"]
+    assert memories["items"][0]["evidence_ids"] == [history[0]["id"]]
+    assert failures == []
+
+
+@pytest.mark.asyncio
 async def test_own_life_event_cannot_be_second_example_for_user_pattern(tmp_path) -> None:
     bad = _valid_bundle("我听见了。")
     bad["life_events"] = [{"content": "刚把摊开的书合上。"}]
