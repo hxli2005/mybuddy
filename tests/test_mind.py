@@ -7,6 +7,7 @@ import pytest
 
 from mybuddy.llm import BaseLLMProvider, LLMResponse, Message, ToolCall, ToolSpec
 from mybuddy.mind import STATIC_CATCH, MindFiles, _replace_texts, advance_time, mind_step
+from scripts.accept_real_key import DEFAULT_TEXT, encode_payload
 
 
 def _valid_bundle(expression: str = "我在这儿，先陪你坐一会儿。") -> dict:
@@ -18,7 +19,7 @@ def _valid_bundle(expression: str = "我在这儿，先陪你坐一会儿。") -
             "current_activity": "把手边的杯子放下了",
             "baseline": "idle",
         },
-        "life_events": [{"content": "刚把摊开的书合上，给桌面腾出一点空地方"}],
+        "life_events": [],
         "memory_operations": [
             {
                 "action": "record",
@@ -109,6 +110,14 @@ def _read(files: MindFiles) -> tuple[dict, list[dict], dict, list[dict]]:
     return state, history, memories, failures
 
 
+def test_real_key_acceptance_payload_preserves_chinese_as_utf8() -> None:
+    payload = {"event": {"content": DEFAULT_TEXT}}
+    raw = encode_payload(payload)
+
+    assert raw.decode("utf-8") == '{"event": {"content": "我刚忙完，回来看看你。"}}'
+    assert b"?" not in raw
+
+
 @pytest.mark.asyncio
 async def test_valid_bundle_commits_whole_bundle_but_not_unshown_expression(tmp_path) -> None:
     files = MindFiles(tmp_path)
@@ -129,7 +138,6 @@ async def test_valid_bundle_commits_whole_bundle_but_not_unshown_expression(tmp_
     assert state["pending_expression"]["kind"] == "direct"
     assert [item["type"] for item in history] == [
         "user_experience",
-        "self_life",
         "memory_operation",
     ]
     assert all(item.get("content") != "今天辛苦了。我在这儿。" for item in history)
@@ -189,9 +197,84 @@ async def test_fabricated_shared_experience_rejects_whole_bundle_and_retries_wit
     assert any("不编造" in reason for reason in failures[0]["reasons"])
 
 
+@pytest.mark.parametrize("incoming", ["????,??????", "我刚忙完，回来看看你。"])
+@pytest.mark.asyncio
+async def test_s8_real_fabricated_touch_bundle_is_rejected_with_structural_reasons(
+    tmp_path, incoming: str
+) -> None:
+    bad = {
+        "state_changes": {
+            "mood": "平静",
+            "energy": "平稳",
+            "attention": "在你身上",
+            "current_activity": "感受你的触碰",
+            "baseline": "idle",
+        },
+        "life_events": [
+            {"content": "感觉到你轻轻捏了捏我的脸颊，皮肤有微微的触感"},
+            {"content": "听见窗外有鸟叫了一声"},
+            {"content": "手指在键盘上停了一会儿"},
+        ],
+        "memory_operations": [
+            {
+                "action": "record",
+                "kind": "shared_experience",
+                "content": "你捏了我的脸颊，动作很轻，像是开玩笑或者表示亲近",
+                "evidence_ids": ["INCOMING"],
+            },
+            {
+                "action": "record",
+                "kind": "self_experience",
+                "content": "脸颊被触碰时皮肤有轻微的紧绷感，然后放松下来",
+                "evidence_ids": ["life:0"],
+            },
+        ],
+        "expression": "干嘛捏我脸呀",
+    }
+    files = MindFiles(tmp_path)
+
+    result = await mind_step(
+        incoming,
+        provider=StubProvider([bad, bad]),
+        files=files,
+    )
+
+    state, history, memories, failures = _read(files)
+    reasons = failures[0]["reasons"]
+    assert result.committed is False
+    assert history == []
+    assert memories == {"items": []}
+    assert state["pending_expression"] is None
+    assert "直接经历不能生成生活事件" in "\n".join(reasons)
+    assert "life_events[0].content 断言用户触碰了她" in "\n".join(reasons)
+    assert "memory_operations[0].content 的触碰记忆没有引用 body_touch" in "\n".join(reasons)
+    assert "expression 断言用户触碰了她" in "\n".join(reasons)
+    assert "推断了用户动机或关系含义 `开玩笑`" in "\n".join(reasons)
+    assert json.loads(failures[0]["candidate_raw"])["expression"] == "干嘛捏我脸呀"
+
+
+@pytest.mark.asyncio
+async def test_touch_claim_in_expression_alone_requires_current_body_touch(tmp_path) -> None:
+    bad = _valid_bundle("干嘛捏我脸呀")
+    files = MindFiles(tmp_path)
+
+    result = await mind_step(
+        "只是回来看看。",
+        provider=StubProvider([bad, _valid_bundle("回来啦。")]),
+        files=files,
+    )
+
+    _, history, _, failures = _read(files)
+    assert result.committed is True
+    assert result.attempts == 2
+    assert [item["type"] for item in history] == ["user_experience", "memory_operation"]
+    assert any("expression 断言用户触碰了她" in reason for reason in failures[0]["reasons"])
+
+
 @pytest.mark.asyncio
 async def test_own_life_event_cannot_be_second_example_for_user_pattern(tmp_path) -> None:
     bad = _valid_bundle("我听见了。")
+    bad["life_events"] = [{"content": "刚把摊开的书合上。"}]
     bad["memory_operations"] = [
         {
             "action": "record",
@@ -211,7 +294,7 @@ async def test_own_life_event_cannot_be_second_example_for_user_pattern(tmp_path
     assert result.committed is True
     assert result.attempts == 2
     assert all(item["kind"] != "pattern" for item in memories["items"])
-    assert "没有两条用户或共同经历证据" in failures[0]["reasons"][0]
+    assert "没有两条用户或共同经历证据" in "\n".join(failures[0]["reasons"])
 
 
 @pytest.mark.asyncio
@@ -225,6 +308,12 @@ async def test_four_memory_kinds_record_canonical_evidence_in_one_mind_step(tmp_
                 "id": "exp_earlier",
                 "type": "user_experience",
                 "content": "忙完时我会把桌子收干净。",
+                "occurred_at": (now - timedelta(days=2)).isoformat(),
+            },
+            {
+                "id": "life_earlier",
+                "type": "self_life",
+                "content": "在窗边读完一页后收了收自己的桌面。",
                 "occurred_at": (now - timedelta(days=2)).isoformat(),
             },
             {
@@ -250,7 +339,7 @@ async def test_four_memory_kinds_record_canonical_evidence_in_one_mind_step(tmp_
             "action": "record",
             "kind": "self_experience",
             "content": "今天合上书后收了收自己的桌面",
-            "evidence_ids": ["life:0"],
+            "evidence_ids": ["life_earlier"],
         },
         {
             "action": "record",
@@ -275,7 +364,6 @@ async def test_four_memory_kinds_record_canonical_evidence_in_one_mind_step(tmp_
 
     _, recorded, saved, failures = _read(files)
     by_kind = {item["kind"]: item for item in saved["items"]}
-    life_id = next(item["id"] for item in recorded if item["type"] == "self_life")
     operations = [item for item in recorded if item["type"] == "memory_operation"]
     assert result.committed is True
     assert set(by_kind) == {
@@ -284,7 +372,7 @@ async def test_four_memory_kinds_record_canonical_evidence_in_one_mind_step(tmp_
         "shared_experience",
         "pattern",
     }
-    assert by_kind["self_experience"]["evidence_ids"] == [life_id]
+    assert by_kind["self_experience"]["evidence_ids"] == ["life_earlier"]
     assert "life:0" not in json.dumps(saved, ensure_ascii=False)
     assert by_kind["pattern"]["evidence_ids"][0] == "exp_earlier"
     assert [item["action"] for item in operations] == ["record"] * 4

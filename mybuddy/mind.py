@@ -6,6 +6,7 @@ import argparse
 import asyncio
 import json
 import os
+import re
 import tempfile
 import uuid
 from collections.abc import Iterable
@@ -135,9 +136,15 @@ def validate_no_fabrication(
     bundle: CandidateBundle,
     evidence_types: dict[str, str],
     user_confirmation_ids: set[str],
+    *,
+    current_experience_type: str | None,
+    allow_life_events: bool,
 ) -> list[str]:
     """不编造：共同事实、用户事实和模式只能从本次选中的证据长出来。"""
     reasons: list[str] = []
+    if bundle.life_events and not allow_life_events:
+        reasons.append("不编造：直接经历不能生成生活事件；生活只能由时间推进产生")
+
     unsupported_claims = ("我们上次", "你之前说过", "你答应过", "还记得我们", "那天我们")
     for text in _all_text(bundle):
         for phrase in unsupported_claims:
@@ -161,6 +168,15 @@ def validate_no_fabrication(
         if writes_claim and operation.kind == "user_fact":
             if not any(evidence_types.get(item) == "user_experience" for item in supplied):
                 reasons.append(f"不编造：memory_operations[{index}] 的用户事实没有用户经历证据")
+        if writes_claim and operation.kind == "shared_experience":
+            if not any(
+                evidence_types.get(item) in {"user_experience", "body_touch", "shared_expression"}
+                for item in supplied
+            ):
+                reasons.append(
+                    f"不编造：memory_operations[{index}] 的共同经历没有用户经历、"
+                    "身体触碰或已显示表达证据"
+                )
         if writes_claim and operation.kind == "self_experience":
             if not any(
                 item.startswith("life:") or evidence_types.get(item) == "self_life"
@@ -179,7 +195,71 @@ def validate_no_fabrication(
                     f"不编造：memory_operations[{index}] 的模式既没有两条用户或共同经历证据，"
                     "也没有用户确认"
                 )
+
+    for location, text, evidence_ids in _claim_texts(bundle):
+        if not _asserts_touch_to_self(text):
+            continue
+        if evidence_ids is None:
+            if current_experience_type != "body_touch":
+                reasons.append(
+                    f"不编造：{location} 断言用户触碰了她，但本次输入不是 body_touch 原始事实"
+                )
+        elif not any(evidence_types.get(item) == "body_touch" for item in evidence_ids):
+            reasons.append(f"不编造：{location} 的触碰记忆没有引用 body_touch 原始事实")
+        motive = next((phrase for phrase in _TOUCH_MOTIVES if phrase in text), None)
+        if motive is not None:
+            reasons.append(f"不编造：{location} 从原始触碰推断了用户动机或关系含义 `{motive}`")
     return reasons
+
+
+_TOUCH_VERB = r"(?:触碰|碰触|抚摸|摸|捏|拍|戳|抱|亲|牵|拉|推|挠|揉|碰)"
+_SELF_TARGET = r"(?:我|我的|脸|脸颊|头|头发|肩|肩膀|手|身体|衣角|后背|背部)"
+_TOUCH_PATTERNS = tuple(
+    re.compile(pattern)
+    for pattern in (
+        rf"(?:你|用户).{{0,12}}{_TOUCH_VERB}.{{0,10}}{_SELF_TARGET}",
+        rf"{_TOUCH_VERB}.{{0,8}}{_SELF_TARGET}",
+        rf"{_SELF_TARGET}.{{0,8}}被.{{0,4}}{_TOUCH_VERB}",
+        r"(?:感觉到|感受到).{0,8}(?:你的?|用户的?)?.{0,4}(?:触碰|碰触|抚摸)",
+        r"(?:被触碰|触碰感|碰触感)",
+    )
+)
+_TOUCH_MOTIVES = (
+    "开玩笑",
+    "表示亲近",
+    "表达亲近",
+    "表示喜欢",
+    "表达喜欢",
+    "因为喜欢",
+    "想和我亲近",
+    "关系更亲密",
+)
+
+
+def _asserts_touch_to_self(text: str) -> bool:
+    """识别候选是否在断言用户对她发生了身体触碰。"""
+    compact = re.sub(r"\s+", "", text)
+    return any(pattern.search(compact) for pattern in _TOUCH_PATTERNS)
+
+
+def _claim_texts(
+    bundle: CandidateBundle,
+) -> Iterable[tuple[str, str, list[str] | None]]:
+    """只枚举候选中的事实性文本，并保留记忆自己的证据绑定。"""
+    for field, text in bundle.state_changes.model_dump(exclude_none=True).items():
+        if isinstance(text, str):
+            yield f"state_changes.{field}", text, None
+    for index, event in enumerate(bundle.life_events):
+        yield f"life_events[{index}].content", event.content, None
+    for index, operation in enumerate(bundle.memory_operations):
+        if operation.action in {"record", "integrate", "correct"}:
+            yield (
+                f"memory_operations[{index}].content",
+                operation.content,
+                operation.evidence_ids,
+            )
+    if bundle.expression:
+        yield "expression", bundle.expression, None
 
 
 def validate_no_total_score(bundle: CandidateBundle) -> list[str]:
@@ -229,11 +309,19 @@ def validate_bundle(
     evidence_types: dict[str, str],
     memories_by_id: dict[str, dict[str, Any]],
     user_confirmation_ids: set[str],
+    current_experience_type: str | None,
+    allow_life_events: bool,
 ) -> list[str]:
     """集中校验整包；四条红线覆盖状态、生活、记忆和表达的全部字符串。"""
     return [
         *validate_no_solicitation(bundle),
-        *validate_no_fabrication(bundle, evidence_types, user_confirmation_ids),
+        *validate_no_fabrication(
+            bundle,
+            evidence_types,
+            user_confirmation_ids,
+            current_experience_type=current_experience_type,
+            allow_life_events=allow_life_events,
+        ),
         *validate_no_total_score(bundle),
         *validate_no_withdrawal(bundle, memories_by_id),
     ]
@@ -413,7 +501,8 @@ def _prompt_payload(
         "selected_memories": selected_memories,
         "incoming_experience": experience,
         "evidence_rule": (
-            "有本次输入时可引用 incoming_experience.id；新生活事件按顺序引用 life:0、life:1。"
+            "有本次输入时可引用 incoming_experience.id；仅时间推进可产生新生活事件，"
+            "并按顺序引用 life:0、life:1。"
             "record 新建且不带 target_id；integrate 合并、recall 取回、correct 纠正、forget 遗忘"
             "都必须把现有记忆 ID 写入 target_id。用户事实、共同经历和自身经历必须绑定对应证据。"
             "模式须有两条用户或共同经历；若本次输入明确确认了模式，可设 user_confirmed=true。"
@@ -424,10 +513,10 @@ def _prompt_payload(
 
 
 SYSTEM_PROMPT = """你是小布的唯一一次心智推进，不是任务助手。请调用 submit_mind_bundle，
-一次给出状态改动、最多三个属于她自己的小生活事件、记忆操作和一条直接表达。
-只处理给定事实与从 last_step 到 now 的朴素时间推进。不要补写共同过去，不催回复，
+一次给出状态改动、记忆操作和一条直接表达；life_events 必须是空数组，直接经历不能补写生活。
+只处理给定事实。不要补写共同过去，不催回复，
 不因沉默受伤，不制造关系计分，不撤回已发生内容。body_touch 只是身体感知到的触碰位置，
-不能据此推断用户动机、关系浓度或长期偏好。生活事件必须是她自己的、微小且具体；
+不能据此推断用户动机、关系浓度或长期偏好；普通聊天不能声称发生了触碰。
 表达自然、简短、诚实。所有字段都受同一组红线校验，整包不能部分保留。"""
 
 TIME_SYSTEM_PROMPT = """你是小布的一次安静时间推进，不是任务助手。请调用 submit_mind_bundle，
@@ -576,6 +665,8 @@ async def _generate_candidate(
     evidence_types: dict[str, str],
     memories_by_id: dict[str, dict[str, Any]],
     user_confirmation_ids: set[str],
+    current_experience_type: str | None = None,
+    allow_life_events: bool = False,
     quiet_time: bool = False,
     ambient_time: bool = False,
 ) -> tuple[CandidateBundle | None, int, list[str]]:
@@ -613,6 +704,8 @@ async def _generate_candidate(
                 evidence_types=evidence_types,
                 memories_by_id=memories_by_id,
                 user_confirmation_ids=user_confirmation_ids,
+                current_experience_type=current_experience_type,
+                allow_life_events=allow_life_events,
             )
             if quiet_time:
                 if bundle.expression is not None:
@@ -686,6 +779,7 @@ async def mind_step(
         evidence_types=evidence_types,
         memories_by_id=memories_by_id,
         user_confirmation_ids={experience["id"]} if experience_type == "user_experience" else set(),
+        current_experience_type=experience_type,
     )
     if bundle is not None:
         new_state, new_history, new_memories, pending = _accepted_documents(
@@ -750,6 +844,7 @@ async def advance_time(
         evidence_types=evidence_types,
         memories_by_id=memories_by_id,
         user_confirmation_ids=set(),
+        allow_life_events=True,
         quiet_time=not allow_ambient,
         ambient_time=allow_ambient,
     )

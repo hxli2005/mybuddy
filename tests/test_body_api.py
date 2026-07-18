@@ -36,7 +36,9 @@ class StubProvider(BaseLLMProvider):
                             else "把刚翻开的书合上了",
                             "baseline": "read" if is_time_step else "idle",
                         },
-                        "life_events": [{"content": "刚才读完了窗边那一页。"}],
+                        "life_events": (
+                            [{"content": "刚才读完了窗边那一页。"}] if is_time_step else []
+                        ),
                         "memory_operations": []
                         if is_touch
                         else [
@@ -156,15 +158,13 @@ def test_same_step_confirms_shown_before_processing_next_event(api) -> None:
     history = _history(data_dir)
     assert [item["type"] for item in history] == [
         "user_experience",
-        "self_life",
         "memory_operation",
         "shared_expression",
         "user_experience",
-        "self_life",
         "memory_operation",
     ]
-    assert history[3]["expression_id"] == first["expression"]["id"]
-    assert history[4]["content"] == "第二句"
+    assert history[2]["expression_id"] == first["expression"]["id"]
+    assert history[3]["content"] == "第二句"
 
 
 def test_wrong_shown_id_does_not_destroy_pending_expression(api) -> None:
