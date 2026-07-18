@@ -377,3 +377,77 @@ def test_presence_rejects_extra_body_authored_meaning(api) -> None:
     )
 
     assert response.status_code == 422
+
+
+def test_s8_full_vertical_trace(api) -> None:
+    client, _, data_dir = api
+    files = MindFiles(data_dir)
+    now = datetime.now(UTC).astimezone()
+    state, history, memories = files.load(now)
+    state["last_step_at"] = (now - timedelta(minutes=31)).isoformat()
+    files.commit(state, history, memories)
+    presence = {"present": True, "fullscreen": False}
+
+    ambient = client.post("/api/body/step", json={"presence": presence}).json()
+    ambient_shown = client.post(
+        "/api/body/step",
+        json={"shown_id": ambient["expression"]["id"], "presence": presence},
+    ).json()
+    chat = client.post(
+        "/api/body/step",
+        json={
+            "presence": presence,
+            "event": {
+                "event_id": "s8-chat",
+                "type": "chat",
+                "content": "今天终于忙完了。",
+            },
+        },
+    ).json()
+    chat_shown = client.post(
+        "/api/body/step",
+        json={"shown_id": chat["expression"]["id"], "presence": presence},
+    ).json()
+    touch = client.post(
+        "/api/body/step",
+        json={
+            "presence": presence,
+            "event": {"event_id": "s8-touch", "type": "touch_head"},
+        },
+    ).json()
+    touch_shown = client.post(
+        "/api/body/step",
+        json={"shown_id": touch["expression"]["id"], "presence": presence},
+    ).json()
+
+    recorded = _history(data_dir)
+    shown_words = [item["content"] for item in recorded if item["type"] == "shared_expression"]
+    final_state = json.loads((data_dir / "state.json").read_text(encoding="utf-8"))
+    trace = {
+        "statuses": [
+            ambient["time_status"],
+            ambient_shown["shown_confirmed"],
+            chat["event_status"],
+            chat_shown["shown_confirmed"],
+            touch["event_status"],
+            touch_shown["shown_confirmed"],
+        ],
+        "shown_words": shown_words,
+        "history_types": [item["type"] for item in recorded],
+        "files": sorted(path.name for path in data_dir.iterdir()),
+    }
+    print("S8_TRACE=" + json.dumps(trace, ensure_ascii=False))
+
+    assert trace["statuses"] == ["advanced", True, "processed", True, "processed", True]
+    assert shown_words == [
+        "我刚读完窗边这一页，纸上还留着一点晒过的暖意。",
+        "忙完就好。先在我这儿松口气。",
+        "呀，碰到我头发了。",
+    ]
+    assert trace["files"] == [
+        "failures.jsonl",
+        "history.jsonl",
+        "memories.json",
+        "state.json",
+    ]
+    assert final_state["pending_expression"] is None

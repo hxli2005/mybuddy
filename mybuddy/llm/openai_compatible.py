@@ -86,7 +86,9 @@ def _base_url_for(cfg: LLMConfig) -> str | None:
     return None
 
 
-def _to_openai_messages(messages: list[Message], *, system: str | None = None) -> list[dict[str, Any]]:
+def _to_openai_messages(
+    messages: list[Message], *, system: str | None = None
+) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     if system:
         out.append({"role": "system", "content": system})

@@ -22,12 +22,8 @@ dist/
 *.swp
 .claude/
 
-# Runtime data (含隐私)。锚定根目录,避免误伤 eval/data 等评测数据集
+# Runtime data (含隐私)
 /data/
-!/data/.gitkeep
-
-# 外部公开基准数据集(体积大/有各自许可,不入库;用 eval/README 里的命令自行下载)
-eval/data/external/
 
 # Logs (botpy 等运行时日志)
 *.log
@@ -35,6 +31,7 @@ eval/data/external/
 # Testing
 .pytest_cache/
 .pytest-tmp/
+.test-tmp*/
 .coverage
 htmlcov/
 
@@ -52,13 +49,9 @@ buddyshell/obj/
 buddyshell.Tests/bin/
 buddyshell.Tests/obj/
 .tmp/
-vpet-plugin/bin/
-vpet-plugin/obj/
 
 config.yaml
 
-# QQ bot 运行日志(含轮转的 botpy.log.2026-06-06 等)
-botpy.log*
 dist-share/
 
 # 本地学习材料(不提交)

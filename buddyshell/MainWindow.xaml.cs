@@ -12,20 +12,16 @@ public enum ConnectionState { Connected, Warning, Error }
 public partial class MainWindow : Window
 {
     private readonly ShellSettings _settings = SettingsStore.Load();
-    private readonly Outbox _outbox = new();
     private IAnimationController? _animationController;
     private BridgeClient? _client;
     private StateLoop? _stateLoop;
     private Presence? _presence;
     private Tray? _tray;
-    private SpikeEvidence? _spikeEvidence;
-    private VPetStateResponse? _state = null;
     private Dictionary<string, string>? _bodyBaseline;
     private string? _pendingChatEventId;
     private string? _pendingChatText;
     private bool _chatSending;
     private bool _touchReporting;
-    private bool _feeding;
 
     public MainWindow()
     {
@@ -38,45 +34,23 @@ public partial class MainWindow : Window
             if (!IsInsideButton(args.OriginalSource as DependencyObject)) DragMove();
         };
         Chat.SendRequested += async (_, args) => await SendBodyChatAsync(args.Text);
-        Foods.FoodSelected += async (_, args) =>
-        {
-            CloseDrawers();
-            await FeedAsync(args.ItemId);
-        };
     }
 
-    public void SetConnectionState(string text, ConnectionState state)
+    public void SetConnectionState(string text, ConnectionState state) => Dispatcher.Invoke(() =>
     {
-        Dispatcher.Invoke(() =>
+        StatusText.Text = text;
+        StatusDot.Fill = state switch
         {
-            StatusText.Text = text;
-            StatusDot.Fill = state switch
-            {
-                ConnectionState.Connected => Brushes.LightGreen,
-                ConnectionState.Warning => Brushes.Gold,
-                _ => Brushes.IndianRed,
-            };
-        });
-    }
+            ConnectionState.Connected => Brushes.LightGreen,
+            ConnectionState.Warning => Brushes.Gold,
+            _ => Brushes.IndianRed,
+        };
+    });
 
     private void ToggleChat_Click(object sender, RoutedEventArgs e) =>
-        ToggleDrawer(ChatDrawer);
-
-    private void ToggleFood_Click(object sender, RoutedEventArgs e) =>
-        ToggleDrawer(FoodDrawer);
-
-    private void ToggleDrawer(FrameworkElement drawer)
-    {
-        var show = drawer.Visibility != Visibility.Visible;
-        CloseDrawers();
-        if (show) drawer.Visibility = Visibility.Visible;
-    }
-
-    private void CloseDrawers()
-    {
-        ChatDrawer.Visibility = Visibility.Collapsed;
-        FoodDrawer.Visibility = Visibility.Collapsed;
-    }
+        ChatDrawer.Visibility = ChatDrawer.Visibility == Visibility.Visible
+            ? Visibility.Collapsed
+            : Visibility.Visible;
 
     private static bool IsInsideButton(DependencyObject? element)
     {
@@ -96,16 +70,17 @@ public partial class MainWindow : Window
             var root = !string.IsNullOrWhiteSpace(_settings.PetAssetRoot)
                 ? _settings.PetAssetRoot
                 : AssetLocator.FindPetRoot();
-            if (string.IsNullOrWhiteSpace(root)) throw new DirectoryNotFoundException("未找到 VPet 素材目录。");
-            var renderer = new FramePlayerHost(root);
-            _animationController = new AnimationController(AnimationManifest.CreateDefault(root), renderer);
+            if (string.IsNullOrWhiteSpace(root))
+                throw new DirectoryNotFoundException("未找到 VPet 素材目录。");
+            _animationController = new AnimationController(
+                AnimationManifest.CreateDefault(root),
+                new FramePlayerHost(root));
             _animationController.TouchDetected += OnTouchDetected;
             _animationController.Faulted += (_, args) => SetConnectionState(
                 args.Recovered ? "动画渲染已恢复" : $"动画渲染失败：{args.Exception?.Message}",
                 args.Recovered ? ConnectionState.Connected : ConnectionState.Error);
             AnimationHostSlot.Content = _animationController.View;
             UpdateAnimationBaseline();
-            _spikeEvidence = new SpikeEvidence(_animationController);
 
             _client = new BridgeClient(_settings);
             _presence = new Presence(_settings);
@@ -120,27 +95,17 @@ public partial class MainWindow : Window
                 UpdateAnimationBaseline();
                 SetConnectionState(exception.Message, ConnectionState.Warning);
             });
-            _tray = CreateTray();
-
+            _tray = new Tray();
+            _tray.SettingsRequested += (_, _) => ShowSettings();
+            _tray.ShowRequested += (_, _) => { Show(); Activate(); };
+            _tray.ExitRequested += (_, _) => Close();
             _stateLoop.Start();
-            SetConnectionState("动画状态机已运行", ConnectionState.Connected);
         }
         catch (Exception exception)
         {
             App.LogException(exception);
             SetConnectionState(exception.Message, ConnectionState.Error);
         }
-    }
-
-    private Tray CreateTray()
-    {
-        var tray = new Tray();
-        tray.SetWorking(!string.IsNullOrWhiteSpace(_settings.ActiveWorkSessionId));
-        tray.WorkToggled += async (_, _) => await ToggleWorkAsync();
-        tray.SettingsRequested += (_, _) => ShowSettings();
-        tray.ShowRequested += (_, _) => { Show(); Activate(); };
-        tray.ExitRequested += (_, _) => Close();
-        return tray;
     }
 
     private async void OnBodyUpdated(object? sender, BodyStepResponse response)
@@ -156,30 +121,13 @@ public partial class MainWindow : Window
                 displayed = true;
             }
             SetConnectionState("已连接", ConnectionState.Connected);
-            App.LogMessage(
-                $"event=body_state baseline={response.Baseline.GetValueOrDefault("baseline", "idle")} " +
-                $"activity={response.Baseline.GetValueOrDefault("current_activity", "")} " +
-                $"time_status={response.TimeStatus}");
         });
         if (displayed) await ConfirmShownAsync();
     }
 
-    private void UpdateBodyBaseline(BodyStepResponse response)
-    {
-        _bodyBaseline = response.Baseline;
-        UpdateAnimationBaseline();
-    }
-
     private async void OnTouchDetected(object? sender, TouchDetectedEventArgs args)
     {
-        if (_client is null) return;
-        if (_touchReporting)
-        {
-            App.LogMessage(
-                $"event=body_touch_unreported event_id={args.CorrelationId} " +
-                $"zone={args.Zone.ToString().ToLowerInvariant()} reason=step_busy");
-            return;
-        }
+        if (_client is null || _touchReporting) return;
         _touchReporting = true;
         var bodyEvent = new BodyEvent
         {
@@ -188,58 +136,20 @@ public partial class MainWindow : Window
         };
         try
         {
-            var response = await _client.StepBodyAsync(new BodyStepRequest
-            {
-                ShownId = _settings.LastShownId,
-                Presence = _presence?.Snapshot(),
-                Event = bodyEvent,
-            });
-            if (response.EventStatus == "waiting_for_shown" && response.Expression is not null)
-            {
-                if (!string.Equals(
-                        response.Expression.Id,
-                        _settings.LastShownId,
-                        StringComparison.Ordinal))
-                {
-                    ShowBodyExpression(response.Expression);
-                }
-                response = await _client.StepBodyAsync(new BodyStepRequest
-                {
-                    ShownId = _settings.LastShownId,
-                    Presence = _presence?.Snapshot(),
-                    Event = bodyEvent,
-                });
-            }
-            if (response.EventStatus is not ("processed" or "duplicate"))
-            {
-                App.LogMessage(
-                    $"event=body_touch_dropped event_id={bodyEvent.EventId} " +
-                    $"zone={args.Zone.ToString().ToLowerInvariant()} status={response.EventStatus}");
-                return;
-            }
+            var response = await StepAsync(bodyEvent);
+            if (response.EventStatus is not ("processed" or "duplicate")) return;
             UpdateBodyBaseline(response);
-            var shownConfirmed = true;
             if (response.Expression is not null)
             {
                 ShowBodyExpression(response.Expression);
-                shownConfirmed = await ConfirmShownAsync();
+                await ConfirmShownAsync();
             }
-            if (shownConfirmed) SetConnectionState("已连接", ConnectionState.Connected);
-            App.LogMessage(
-                $"event=body_touch event_id={bodyEvent.EventId} " +
-                $"zone={args.Zone.ToString().ToLowerInvariant()} status={response.EventStatus}");
+            SetConnectionState("已连接", ConnectionState.Connected);
         }
         catch (BridgeRequestException exception)
         {
             SetConnectionState("未连接；这次触碰只做了本地反射", ConnectionState.Warning);
-            App.LogMessage(
-                $"event=body_touch_unreported event_id={bodyEvent.EventId} " +
-                $"zone={args.Zone.ToString().ToLowerInvariant()} reason={exception.Message}");
-        }
-        catch (Exception exception)
-        {
-            App.LogException(exception);
-            SetConnectionState("触碰没有报给心智；本地反射不受影响", ConnectionState.Warning);
+            App.LogMessage($"event=body_touch_unreported event_id={bodyEvent.EventId} reason={exception.Message}");
         }
         finally
         {
@@ -259,75 +169,62 @@ public partial class MainWindow : Window
         var bodyEvent = new BodyEvent
         {
             EventId = _pendingChatEventId!,
+            Type = "chat",
             Content = text,
         };
-        var correlationId = $"chat:{Guid.NewGuid():N}";
+        var animationId = $"chat:{Guid.NewGuid():N}";
         _animationController.Submit(new AnimationRequest(
             AnimationIntent.Think,
             AnimationSource.Chat,
-            correlationId,
+            animationId,
             AnimationPriority.Think));
         try
         {
-            var response = await _client.StepBodyAsync(new BodyStepRequest
-            {
-                ShownId = _settings.LastShownId,
-                Presence = _presence?.Snapshot(),
-                Event = bodyEvent,
-            });
-            if (response.EventStatus == "waiting_for_shown" && response.Expression is not null)
-            {
-                ShowBodyExpression(response.Expression);
-                response = await _client.StepBodyAsync(new BodyStepRequest
-                {
-                    ShownId = _settings.LastShownId,
-                    Presence = _presence?.Snapshot(),
-                    Event = bodyEvent,
-                });
-            }
+            var response = await StepAsync(bodyEvent);
             if (response.EventStatus is not ("processed" or "duplicate"))
-            {
                 throw new BridgeRequestException($"身体桥未接收聊天事件：{response.EventStatus}");
-            }
             UpdateBodyBaseline(response);
             Chat.AcceptSent(text);
             _pendingChatText = null;
             _pendingChatEventId = null;
-            var shownConfirmed = true;
             if (response.Expression is not null)
             {
                 ShowBodyExpression(response.Expression);
-                shownConfirmed = await ConfirmShownAsync();
+                await ConfirmShownAsync();
             }
-            App.LogMessage($"event=body_chat event_id={bodyEvent.EventId} status={response.EventStatus}");
-            _animationController.Complete(
-                correlationId,
-                new AnimationOutcome(response.Expression is null ? null : AnimationIntent.Happy));
-            if (shownConfirmed) SetConnectionState("已连接", ConnectionState.Connected);
+            _animationController.Complete(animationId, new AnimationOutcome(AnimationIntent.Happy));
+            SetConnectionState("已连接", ConnectionState.Connected);
         }
         catch (BridgeRequestException exception)
         {
-            SetConnectionState(exception.StatusCode == 401
-                    ? "令牌无效，请检查设置"
-                    : "未连接，输入已保留",
-                exception.StatusCode == 401 ? ConnectionState.Error : ConnectionState.Warning);
-            if (exception.StatusCode == 401) ShowSettings();
-            _animationController.Complete(
-                correlationId,
-                new AnimationOutcome(IsError: true, Reason: exception.Message));
-        }
-        catch (Exception exception)
-        {
-            App.LogException(exception);
-            SetConnectionState("发送失败，输入已保留", ConnectionState.Error);
-            _animationController.Complete(
-                correlationId,
-                new AnimationOutcome(IsError: true, Reason: exception.GetType().Name));
+            SetConnectionState("未连接，输入已保留", ConnectionState.Warning);
+            _animationController.Complete(animationId, new AnimationOutcome(IsError: true, Reason: exception.Message));
         }
         finally
         {
             _chatSending = false;
         }
+    }
+
+    private async Task<BodyStepResponse> StepAsync(BodyEvent bodyEvent)
+    {
+        var response = await _client!.StepBodyAsync(new BodyStepRequest
+        {
+            ShownId = _settings.LastShownId,
+            Presence = _presence?.Snapshot(),
+            Event = bodyEvent,
+        });
+        if (response.EventStatus == "waiting_for_shown" && response.Expression is not null)
+        {
+            ShowBodyExpression(response.Expression);
+            response = await _client.StepBodyAsync(new BodyStepRequest
+            {
+                ShownId = _settings.LastShownId,
+                Presence = _presence?.Snapshot(),
+                Event = bodyEvent,
+            });
+        }
+        return response;
     }
 
     private void ShowBodyExpression(PendingBodyExpression expression)
@@ -346,136 +243,46 @@ public partial class MainWindow : Window
     {
         try
         {
-            var confirmation = await _client!.StepBodyAsync(new BodyStepRequest
+            var response = await _client!.StepBodyAsync(new BodyStepRequest
             {
                 ShownId = _settings.LastShownId,
                 Presence = _presence?.Snapshot(),
             });
-            UpdateBodyBaseline(confirmation);
-            App.LogMessage(
-                $"event=shown expression_id={_settings.LastShownId} " +
-                $"confirmed={confirmation.ShownConfirmed}");
-            return confirmation.ShownConfirmed;
+            UpdateBodyBaseline(response);
+            return response.ShownConfirmed;
         }
         catch (BridgeRequestException exception)
         {
-            SetConnectionState("回复已显示，shown确认待重报", ConnectionState.Warning);
-            App.LogMessage(
-                $"event=shown_pending expression_id={_settings.LastShownId} reason={exception.Message}");
+            SetConnectionState("回复已显示，shown 确认待重报", ConnectionState.Warning);
+            App.LogMessage($"event=shown_pending expression_id={_settings.LastShownId} reason={exception.Message}");
             return false;
         }
     }
 
-    private async Task FeedAsync(string itemId)
+    private void UpdateBodyBaseline(BodyStepResponse response)
     {
-        if (_client is null || _animationController is null || _feeding) return;
-        _feeding = true;
-        // Default VPet item trajectories are 2675ms (eat) and 2750ms (drink).
-        var animationFloor = Task.Delay(TimeSpan.FromMilliseconds(2800));
-        var request = new VPetEventRequest
-        {
-            Event = "feed",
-            Context = new() { ["item"] = itemId },
-        };
-        _animationController.Submit(new AnimationRequest(
-            AnimationIntent.Eat,
-            AnimationSource.Feed,
-            request.ClientEventId,
-            AnimationPriority.Feed,
-            new Dictionary<string, string> { ["item"] = itemId }));
-        try
-        {
-            var response = await _client.SendEventAsync(request);
-            if (response.Speech is { Text.Length: > 0 } speech)
-            {
-                SpeechBubble.ShowSpeech(speech.Text, speech.Interrupt);
-            }
-            App.LogMessage(
-                $"event=feed server_time={_state?.ServerTime} client_event_id={request.ClientEventId} " +
-                $"item={itemId}");
-            if (_stateLoop is not null) await _stateLoop.PollAsync();
-        }
-        catch (BridgeRequestException)
-        {
-            await _outbox.EnqueueAsync(request);
-            SetConnectionState("投喂已暂存，恢复连接后补报", ConnectionState.Warning);
-        }
-        finally
-        {
-            await animationFloor;
-            _feeding = false;
-        }
+        _bodyBaseline = response.Baseline;
+        UpdateAnimationBaseline();
     }
 
-    private async Task ToggleWorkAsync()
+    private void UpdateAnimationBaseline()
     {
-        if (_client is null) return;
-        var stopping = !string.IsNullOrWhiteSpace(_settings.ActiveWorkSessionId);
-        var sessionId = stopping ? _settings.ActiveWorkSessionId! : Guid.NewGuid().ToString("N");
-        var request = new VPetEventRequest
-        {
-            Event = stopping ? "work_stop" : "work_start",
-            Context = new() { ["session_id"] = sessionId },
-        };
-        try
-        {
-            var response = await _client.SendEventAsync(request);
-            _settings.ActiveWorkSessionId = stopping ? null : sessionId;
-            SettingsStore.Save(_settings);
-            _tray?.SetWorking(!stopping);
-            UpdateAnimationBaseline();
-            if (response.Speech is { Text.Length: > 0 } speech)
-            {
-                SpeechBubble.ShowSpeech(speech.Text, speech.Interrupt);
-            }
-            App.LogMessage(
-                $"event={request.Event} server_time={_state?.ServerTime} " +
-                $"client_event_id={request.ClientEventId} session_id={sessionId}");
-            if (_stateLoop is not null) await _stateLoop.PollAsync();
-        }
-        catch (BridgeRequestException exception)
-        {
-            await _outbox.EnqueueAsync(request);
-            _settings.ActiveWorkSessionId = stopping ? null : sessionId;
-            SettingsStore.Save(_settings);
-            _tray?.SetWorking(!stopping);
-            UpdateAnimationBaseline();
-            SetConnectionState(exception.Message, ConnectionState.Warning);
-        }
+        var baseline = _bodyBaseline?.GetValueOrDefault("baseline", "idle") ?? "idle";
+        _animationController?.UpdateBaseline(new BaselineSnapshot(_bodyBaseline is not null, baseline));
     }
 
     private void ShowSettings()
     {
-        var window = new SettingsWindow(_settings, _state) { Owner = this };
+        var window = new SettingsWindow(_settings) { Owner = this };
         if (window.ShowDialog() == true) _client?.UpdateSettings(_settings);
     }
 
     private void Settings_Click(object sender, RoutedEventArgs e) => ShowSettings();
     private void Exit_Click(object sender, RoutedEventArgs e) => Close();
 
-    private void AnimationHost_Drop(object sender, DragEventArgs e)
-    {
-        if (e.Data.GetData(DataFormats.Text) is string item) _ = FeedAsync(item);
-    }
-
-    private void UpdateAnimationBaseline()
-    {
-        var baseline = _bodyBaseline?.GetValueOrDefault("baseline", "idle") ?? "idle";
-        _animationController?.UpdateBaseline(new BaselineSnapshot(
-            _bodyBaseline is not null,
-            string.Equals(baseline, "sleep", StringComparison.Ordinal),
-            false,
-            baseline,
-            new PhysioLevels(false, false, false, false),
-            0.5));
-    }
-
     private void RestoreWindowPosition()
     {
         if (_settings.WindowLeft is not double left || _settings.WindowTop is not double top) return;
-        // Window.Left/Top/Width/Height use WPF device-independent pixels. WinForms Screen
-        // returns physical pixels in a per-monitor-DPI-aware process, so mixing both coordinate
-        // systems can restore most of the window below the visible desktop.
         var area = SystemParameters.WorkArea;
         Left = Math.Clamp(left, area.Left, Math.Max(area.Left, area.Right - Width));
         Top = Math.Clamp(top, area.Top, Math.Max(area.Top, area.Bottom - Height));
@@ -491,7 +298,6 @@ public partial class MainWindow : Window
 
     private void DisposeServices()
     {
-        _spikeEvidence?.Dispose();
         if (_animationController is not null) _animationController.TouchDetected -= OnTouchDetected;
         _stateLoop?.Dispose();
         _tray?.Dispose();

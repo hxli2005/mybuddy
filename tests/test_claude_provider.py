@@ -12,7 +12,7 @@ def test_assistant_tool_calls_are_serialized_as_tool_use_blocks() -> None:
         role=Role.ASSISTANT,
         content="我先查一下。",
         tool_calls=[
-            ToolCall(id="toolu_1", name="weather", arguments={"city": "北京"}),
+            ToolCall(id="toolu_1", name="submit_bundle", arguments={"content": "候选"}),
         ],
     )
 
@@ -25,8 +25,8 @@ def test_assistant_tool_calls_are_serialized_as_tool_use_blocks() -> None:
             {
                 "type": "tool_use",
                 "id": "toolu_1",
-                "name": "weather",
-                "input": {"city": "北京"},
+                "name": "submit_bundle",
+                "input": {"content": "候选"},
             },
         ],
     }
@@ -37,7 +37,7 @@ def test_tool_result_serialization_keeps_matching_tool_use_id() -> None:
         role=Role.TOOL,
         content='{"condition":"晴"}',
         tool_call_id="toolu_1",
-        name="weather",
+        name="submit_bundle",
     )
 
     out = _to_anthropic_message(msg)

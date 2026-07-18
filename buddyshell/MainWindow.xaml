@@ -4,8 +4,7 @@
         xmlns:local="clr-namespace:BuddyShell"
         Title="小布" Width="336" Height="420" WindowStyle="None"
         AllowsTransparency="True" Background="Transparent" Topmost="True"
-        ShowInTaskbar="False" ResizeMode="NoResize"
-        FontFamily="Microsoft YaHei UI">
+        ShowInTaskbar="False" ResizeMode="NoResize" FontFamily="Microsoft YaHei UI">
     <Window.Resources>
         <Style x:Key="ToolbarButton" TargetType="Button">
             <Setter Property="Width" Value="38" />
@@ -14,69 +13,29 @@
             <Setter Property="Foreground" Value="#F4F6FA" />
             <Setter Property="Background" Value="Transparent" />
             <Setter Property="BorderThickness" Value="0" />
-            <Setter Property="FontSize" Value="12" />
             <Setter Property="Cursor" Value="Hand" />
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="Button">
-                        <Border x:Name="Chrome" Background="{TemplateBinding Background}"
-                                CornerRadius="16">
-                            <ContentPresenter HorizontalAlignment="Center"
-                                              VerticalAlignment="Center" />
-                        </Border>
-                        <ControlTemplate.Triggers>
-                            <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="Chrome" Property="Background" Value="#28FFFFFF" />
-                            </Trigger>
-                            <Trigger Property="IsPressed" Value="True">
-                                <Setter TargetName="Chrome" Property="Background" Value="#3FFFFFFF" />
-                            </Trigger>
-                        </ControlTemplate.Triggers>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
         </Style>
     </Window.Resources>
-
     <Grid Margin="4">
-        <!-- Only a faint grounding shadow stays behind the pet. -->
         <Ellipse Width="214" Height="34" VerticalAlignment="Bottom"
-                 Margin="0,0,0,51" IsHitTestVisible="False">
-            <Ellipse.Fill>
-                <RadialGradientBrush>
-                    <GradientStop Color="#360B0D12" Offset="0" />
-                    <GradientStop Color="#000B0D12" Offset="1" />
-                </RadialGradientBrush>
-            </Ellipse.Fill>
-        </Ellipse>
-
-        <Border Margin="0,36,0,48" AllowDrop="True" Drop="AnimationHost_Drop">
+                 Margin="0,0,0,51" IsHitTestVisible="False" Fill="#220B0D12" />
+        <Border Margin="0,36,0,48">
             <ContentControl x:Name="AnimationHostSlot" />
         </Border>
-
         <local:Bubble x:Name="SpeechBubble" Panel.ZIndex="30"
                       Margin="8,2" VerticalAlignment="Top" />
-
-        <!-- Drawers overlay the pet temporarily instead of permanently growing the window. -->
         <Border x:Name="ChatDrawer" Panel.ZIndex="20" Visibility="Collapsed"
                 Height="196" VerticalAlignment="Bottom" Margin="5,0,5,51">
             <local:ChatPanel x:Name="Chat" />
         </Border>
-        <Border x:Name="FoodDrawer" Panel.ZIndex="20" Visibility="Collapsed"
-                Height="82" VerticalAlignment="Bottom" Margin="5,0,5,51">
-            <local:FoodTray x:Name="Foods" />
-        </Border>
-
         <Border x:Name="DragBar" Panel.ZIndex="40" Height="42"
-                VerticalAlignment="Bottom" Margin="3,0"
-                Padding="7,5,5,5" Background="#EE20232D"
-                BorderBrush="#32FFFFFF" BorderThickness="1" CornerRadius="21">
+                VerticalAlignment="Bottom" Margin="3,0" Padding="7,5,5,5"
+                Background="#EE20232D" BorderBrush="#32FFFFFF"
+                BorderThickness="1" CornerRadius="21">
             <DockPanel LastChildFill="True">
                 <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
                     <Button Style="{StaticResource ToolbarButton}" Content="聊"
                             ToolTip="聊天" Click="ToggleChat_Click" />
-                    <Button Style="{StaticResource ToolbarButton}" Content="喂"
-                            ToolTip="投喂" Click="ToggleFood_Click" />
                     <Button Style="{StaticResource ToolbarButton}" Content="设"
                             ToolTip="设置" Click="Settings_Click" />
                     <Button Style="{StaticResource ToolbarButton}" Content="×"

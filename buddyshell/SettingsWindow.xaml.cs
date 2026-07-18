@@ -8,25 +8,24 @@ public partial class SettingsWindow : Window
 {
     private readonly ShellSettings _settings;
 
-    public SettingsWindow(ShellSettings settings, VPetStateResponse? state)
+    public SettingsWindow(ShellSettings settings)
     {
         InitializeComponent();
         _settings = settings;
         BridgeUrl.Text = settings.BridgeUrl;
-        BridgeToken.Password = settings.BridgeToken;
-        PhysioInjection.IsChecked = settings.PhysioInjection;
-        if (state is not null)
-        {
-            ServerClock.Text = $"服务端时间：{state.ServerTime}";
-            Offset.Text = $"验收偏移：{state.TimeOffsetMinutes} 分钟";
-        }
+        PetAssetRoot.Text = settings.PetAssetRoot ?? "";
+        IdlePauseMinutes.Text = settings.IdlePauseMinutes.ToString();
     }
 
     private void Save_Click(object sender, RoutedEventArgs e)
     {
         _settings.BridgeUrl = BridgeUrl.Text.Trim();
-        _settings.BridgeToken = BridgeToken.Password.Trim();
-        _settings.PhysioInjection = PhysioInjection.IsChecked == true;
+        _settings.PetAssetRoot = string.IsNullOrWhiteSpace(PetAssetRoot.Text)
+            ? null
+            : PetAssetRoot.Text.Trim();
+        _settings.IdlePauseMinutes = int.TryParse(IdlePauseMinutes.Text, out var minutes)
+            ? Math.Clamp(minutes, 1, 240)
+            : 30;
         SettingsStore.Save(_settings);
         DialogResult = true;
     }

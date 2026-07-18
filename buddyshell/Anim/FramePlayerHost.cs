@@ -72,13 +72,6 @@ public sealed class FramePlayerHost : UserControl, IAnimationRenderer, IAnimatio
         LastFrame = frame;
     }
 
-    public void SetWarmth(double warmth)
-    {
-        var scale = 0.92 + 0.08 * Math.Clamp(warmth, 0, 1);
-        RenderTransformOrigin = new Point(0.5, 1);
-        RenderTransform = new ScaleTransform(scale, scale);
-    }
-
     public void Dispose()
     {
         ReleaseMouseCapture();

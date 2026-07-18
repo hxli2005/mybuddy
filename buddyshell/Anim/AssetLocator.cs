@@ -27,24 +27,6 @@ public static class AssetLocator
         return Path.GetFullPath(found);
     }
 
-    public static string? FindFoodImage(string petRoot, string itemId)
-    {
-        var coreRoot = Directory.GetParent(Directory.GetParent(petRoot)?.FullName ?? "")?.FullName;
-        if (string.IsNullOrWhiteSpace(coreRoot)) return null;
-        var imageRoot = Path.Combine(coreRoot, "image", "food");
-        var fileName = itemId switch
-        {
-            "congee" => "罗宋汤.png",
-            "curry" => "番茄意面.png",
-            "milk_tea" => "奶茶.png",
-            "coffee" => "咖啡饮料.png",
-            "water" => "矿泉水.png",
-            _ => "矿泉水.png",
-        };
-        var path = Path.Combine(imageRoot, fileName);
-        return File.Exists(path) ? path : null;
-    }
-
     private static string? FindSteamPetRoot()
     {
         try

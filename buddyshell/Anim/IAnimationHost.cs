@@ -12,7 +12,6 @@ public interface IAnimationRenderer : IDisposable, ITouchSource
     UIElement View { get; }
     event EventHandler<TouchDetectedEventArgs>? TouchStarted;
     void Render(CompositedFrame frame);
-    void SetWarmth(double warmth);
 }
 
 public interface IAnimationController : IDisposable, ITouchSource

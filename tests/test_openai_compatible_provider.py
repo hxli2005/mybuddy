@@ -26,7 +26,7 @@ def test_openai_message_serialization_with_tools() -> None:
             role=Role.ASSISTANT,
             content="我查一下",
             tool_calls=[
-                ToolCall(id="call_1", name="weather", arguments={"city": "北京"}),
+                ToolCall(id="call_1", name="submit_bundle", arguments={"content": "候选"}),
             ],
         ),
         Message(role=Role.TOOL, content='{"condition":"晴"}', tool_call_id="call_1"),
@@ -35,14 +35,14 @@ def test_openai_message_serialization_with_tools() -> None:
     out = _to_openai_messages(messages, system="system prompt")
 
     assert out[0] == {"role": "system", "content": "system prompt"}
-    assert out[2]["tool_calls"][0]["function"]["name"] == "weather"
-    assert '"city": "北京"' in out[2]["tool_calls"][0]["function"]["arguments"]
+    assert out[2]["tool_calls"][0]["function"]["name"] == "submit_bundle"
+    assert '"content": "候选"' in out[2]["tool_calls"][0]["function"]["arguments"]
     assert out[3]["role"] == "tool"
     assert out[3]["tool_call_id"] == "call_1"
 
 
 def test_openai_response_parses_tool_calls() -> None:
-    fn = type("Fn", (), {"name": "weather", "arguments": '{"city":"北京"}'})()
+    fn = type("Fn", (), {"name": "submit_bundle", "arguments": '{"content":"候选"}'})()
     tc = type("TC", (), {"id": "call_1", "function": fn})()
     msg = type("Msg", (), {"content": "", "tool_calls": [tc]})()
     choice = type("Choice", (), {"message": msg, "finish_reason": "tool_calls"})()
@@ -50,8 +50,8 @@ def test_openai_response_parses_tool_calls() -> None:
 
     out = _from_openai_response(resp)
 
-    assert out.tool_calls[0].name == "weather"
-    assert out.tool_calls[0].arguments == {"city": "北京"}
+    assert out.tool_calls[0].name == "submit_bundle"
+    assert out.tool_calls[0].arguments == {"content": "候选"}
 
 
 @pytest.mark.asyncio
