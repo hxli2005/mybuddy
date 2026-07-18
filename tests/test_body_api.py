@@ -1,5 +1,5 @@
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -16,6 +16,7 @@ class StubProvider(BaseLLMProvider):
         self.calls += 1
         incoming = json.loads(messages[0].content)["incoming_experience"]
         is_time_step = incoming is None
+        is_ambient_time = is_time_step and "ambient" in kwargs.get("system", "")
         is_touch = incoming is not None and incoming["type"] == "body_touch"
         touch_zone = incoming.get("zone") if is_touch else None
         return LLMResponse(
@@ -49,7 +50,9 @@ class StubProvider(BaseLLMProvider):
                                 "target_id": None,
                             }
                         ],
-                        "expression": None
+                        "expression": "我刚读完窗边这一页，纸上还留着一点晒过的暖意。"
+                        if is_ambient_time
+                        else None
                         if is_time_step
                         else "呀，碰到我头发了。"
                         if touch_zone == "head"
@@ -256,3 +259,106 @@ def test_empty_step_advances_due_life_into_continuous_body_baseline(api) -> None
     assert second["baseline"] == first["baseline"]
     assert _history(data_dir) == recorded
     assert provider.calls == 1
+
+
+def test_present_time_step_keeps_ambient_pending_until_body_reports_shown(api) -> None:
+    client, provider, data_dir = api
+    files = MindFiles(data_dir)
+    now = datetime.now(UTC).astimezone()
+    state, history, memories = files.load(now)
+    state["last_step_at"] = (now - timedelta(minutes=31)).isoformat()
+    files.commit(state, history, memories)
+    presence = {"present": True, "fullscreen": False}
+
+    first = client.post("/api/body/step", json={"presence": presence}).json()
+    expression = first["expression"]
+
+    assert first["time_status"] == "advanced"
+    assert expression["kind"] == "ambient"
+    assert expression["text"] == "我刚读完窗边这一页，纸上还留着一点晒过的暖意。"
+    assert [item["type"] for item in _history(data_dir)] == ["self_life"]
+
+    repeated = client.post("/api/body/step", json={"presence": presence}).json()
+    assert repeated["time_status"] == "waiting_for_shown"
+    assert repeated["expression"] == expression
+    assert [item["type"] for item in _history(data_dir)] == ["self_life"]
+    assert provider.calls == 1
+
+    shown = client.post(
+        "/api/body/step",
+        json={"shown_id": expression["id"], "presence": presence},
+    ).json()
+    assert shown["shown_confirmed"] is True
+    assert shown["expression"] is None
+    recorded = _history(data_dir)
+    assert [item["type"] for item in recorded] == ["self_life", "shared_expression"]
+    assert recorded[-1]["expression_kind"] == "ambient"
+
+
+@pytest.mark.parametrize(
+    "presence",
+    [
+        None,
+        {"present": False, "fullscreen": False},
+        {"present": True, "fullscreen": True},
+    ],
+)
+def test_absent_or_fullscreen_time_step_stays_silent(api, presence) -> None:  # noqa: ANN001
+    client, provider, data_dir = api
+    files = MindFiles(data_dir)
+    now = datetime.now(UTC).astimezone()
+    state, history, memories = files.load(now)
+    state["last_step_at"] = (now - timedelta(minutes=31)).isoformat()
+    files.commit(state, history, memories)
+
+    payload = {} if presence is None else {"presence": presence}
+    response = client.post("/api/body/step", json=payload).json()
+
+    assert response["time_status"] == "advanced"
+    assert response["expression"] is None
+    assert [item["type"] for item in _history(data_dir)] == ["self_life"]
+    assert provider.calls == 1
+
+
+def test_silence_after_shown_ambient_creates_no_second_ambient_or_user_trace(api) -> None:
+    client, provider, data_dir = api
+    files = MindFiles(data_dir)
+    now = datetime.now(UTC).astimezone()
+    state, history, memories = files.load(now)
+    state["last_step_at"] = (now - timedelta(minutes=31)).isoformat()
+    files.commit(state, history, memories)
+    presence = {"present": True, "fullscreen": False}
+    first = client.post("/api/body/step", json={"presence": presence}).json()
+    client.post(
+        "/api/body/step",
+        json={"shown_id": first["expression"]["id"], "presence": presence},
+    )
+
+    state, history, memories = files.load(now)
+    state["last_step_at"] = (now - timedelta(minutes=31)).isoformat()
+    files.commit(state, history, memories)
+    later = client.post("/api/body/step", json={"presence": presence}).json()
+    recorded = _history(data_dir)
+
+    assert later["time_status"] == "advanced"
+    assert later["expression"] is None
+    assert sum(item.get("expression_kind") == "ambient" for item in recorded) == 1
+    assert all(item["type"] != "user_experience" for item in recorded)
+    assert "没回" not in json.dumps(recorded, ensure_ascii=False)
+    assert provider.calls == 2
+
+
+def test_presence_rejects_extra_body_authored_meaning(api) -> None:
+    client, _, _ = api
+    response = client.post(
+        "/api/body/step",
+        json={
+            "presence": {
+                "present": True,
+                "fullscreen": False,
+                "meaning": "用户想听我说话",
+            }
+        },
+    )
+
+    assert response.status_code == 422

@@ -126,6 +126,7 @@ async def test_valid_bundle_commits_whole_bundle_but_not_unshown_expression(tmp_
     assert result.attempts == 1
     assert state["condition"]["attention"] == "在听"
     assert state["pending_expression"]["text"] == "今天辛苦了。我在这儿。"
+    assert state["pending_expression"]["kind"] == "direct"
     assert [item["type"] for item in history] == ["user_experience", "self_life"]
     assert all(item.get("content") != "今天辛苦了。我在这儿。" for item in history)
     assert memories["items"][0]["content"] == "用户今天有点累"
@@ -275,6 +276,43 @@ async def test_time_step_rejects_expression_before_committing_whole_retry(tmp_pa
     assert len(history) == 1
     assert failures[0]["candidate_raw"]
     assert "时间推进不能夹带" in failures[0]["reasons"][0]
+
+
+@pytest.mark.asyncio
+async def test_present_time_step_can_offer_ambient_without_reading_unanswered_expressions(
+    tmp_path,
+) -> None:
+    files = MindFiles(tmp_path)
+    start = datetime(2026, 7, 17, 19, 0, tzinfo=UTC)
+    state, history, memories = files.load(start)
+    history.append(
+        {
+            "id": "shown_old",
+            "type": "shared_expression",
+            "content": "这句没有得到回应。",
+            "expression_id": "expr_old",
+            "expression_kind": "ambient",
+            "occurred_at": (start - timedelta(days=1)).isoformat(),
+        }
+    )
+    files.commit(state, history, memories)
+    provider = StubProvider([_time_bundle("窗边这一页刚好读完了。")])
+
+    result = await advance_time(
+        provider=provider,
+        files=files,
+        now=start + timedelta(minutes=31),
+        allow_ambient=True,
+    )
+
+    state, recorded, _, failures = _read(files)
+    prompt = json.loads(provider.calls[0][0].content)
+    assert result.status == "advanced"
+    assert state["pending_expression"]["kind"] == "ambient"
+    assert state["pending_expression"]["text"] == "窗边这一页刚好读完了。"
+    assert [item["type"] for item in recorded] == ["shared_expression", "self_life"]
+    assert prompt["selected_history"] == []
+    assert failures == []
 
 
 @pytest.mark.asyncio

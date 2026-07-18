@@ -9,14 +9,12 @@ public sealed class Tray : IDisposable
     {
         _work = new System.Windows.Forms.ToolStripMenuItem("陪我干活");
         _work.Click += (_, _) => WorkToggled?.Invoke(this, EventArgs.Empty);
-        var quiet = new System.Windows.Forms.ToolStripMenuItem("今天安静");
-        quiet.Click += (_, _) => QuietToggled?.Invoke(this, EventArgs.Empty);
         var settings = new System.Windows.Forms.ToolStripMenuItem("设置");
         settings.Click += (_, _) => SettingsRequested?.Invoke(this, EventArgs.Empty);
         var exit = new System.Windows.Forms.ToolStripMenuItem("退出");
         exit.Click += (_, _) => ExitRequested?.Invoke(this, EventArgs.Empty);
         var menu = new System.Windows.Forms.ContextMenuStrip();
-        menu.Items.AddRange([_work, quiet, settings, new System.Windows.Forms.ToolStripSeparator(), exit]);
+        menu.Items.AddRange([_work, settings, new System.Windows.Forms.ToolStripSeparator(), exit]);
         _icon = new System.Windows.Forms.NotifyIcon
         {
             Icon = System.Drawing.SystemIcons.Information,
@@ -28,7 +26,6 @@ public sealed class Tray : IDisposable
     }
 
     public event EventHandler? WorkToggled;
-    public event EventHandler? QuietToggled;
     public event EventHandler? SettingsRequested;
     public event EventHandler? ExitRequested;
     public event EventHandler? ShowRequested;

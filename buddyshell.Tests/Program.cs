@@ -116,6 +116,7 @@ internal static class Program
         var request = new BodyStepRequest
         {
             ShownId = "expr-previous",
+            Presence = new BodyPresence { Present = true, Fullscreen = false },
             Event = new BodyEvent
             {
                 EventId = "chat-001",
@@ -125,6 +126,9 @@ internal static class Program
         using var document = JsonDocument.Parse(JsonSerializer.Serialize(request));
         var root = document.RootElement;
         Equal("expr-previous", root.GetProperty("shown_id").GetString());
+        var presence = root.GetProperty("presence");
+        Equal(true, presence.GetProperty("present").GetBoolean());
+        Equal(false, presence.GetProperty("fullscreen").GetBoolean());
         var bodyEvent = root.GetProperty("event");
         Equal("chat-001", bodyEvent.GetProperty("event_id").GetString());
         Equal("chat", bodyEvent.GetProperty("type").GetString());

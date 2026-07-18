@@ -46,11 +46,19 @@ class BodyEvent(BaseModel):
         return self
 
 
+class BodyPresence(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    present: bool
+    fullscreen: bool
+
+
 class BodyStepRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     shown_id: str | None = Field(default=None, min_length=1, max_length=160)
     event: BodyEvent | None = None
+    presence: BodyPresence | None = None
 
 
 class BodyStepResponse(BaseModel):
@@ -75,7 +83,11 @@ class BodyBridge:
             now = datetime.now(UTC).astimezone()
             shown_confirmed = self._confirm_shown(request.shown_id, now)
             event_status = await self._process_event(request.event, now)
-            time_status = await self._advance_time(now) if request.event is None else "not_due"
+            time_status = (
+                await self._advance_time(now, request.presence)
+                if request.event is None
+                else "not_due"
+            )
             state, _, _ = self.files.load(now)
             pending = state.get("pending_expression")
             return BodyStepResponse(
@@ -102,6 +114,7 @@ class BodyBridge:
                 "type": "shared_expression",
                 "content": expression.text,
                 "expression_id": expression.id,
+                "expression_kind": expression.kind,
                 "occurred_at": now.isoformat(),
             }
         )
@@ -148,19 +161,39 @@ class BodyBridge:
         return "processed"
 
     async def _advance_time(
-        self, now: datetime
+        self, now: datetime, presence: BodyPresence | None
     ) -> Literal["not_due", "advanced", "failed", "waiting_for_shown"]:
         state, _, _ = self.files.load(now)
         if state.get("pending_expression") is not None:
             return "waiting_for_shown"
         if self._next_time_attempt_at is not None and now < self._next_time_attempt_at:
             return "not_due"
-        result = await advance_time(provider=self.provider, files=self.files, now=now)
+        result = await advance_time(
+            provider=self.provider,
+            files=self.files,
+            now=now,
+            allow_ambient=self._ambient_allowed(presence, now),
+        )
         if result.status == "failed":
             self._next_time_attempt_at = now + TIME_RETRY_INTERVAL
         else:
             self._next_time_attempt_at = None
         return result.status
+
+    def _ambient_allowed(self, presence: BodyPresence | None, now: datetime) -> bool:
+        if presence is None or not presence.present or presence.fullscreen:
+            return False
+        _, history, _ = self.files.load(now)
+        for item in history:
+            if item.get("type") != "shared_expression" or item.get("expression_kind") != "ambient":
+                continue
+            try:
+                occurred_at = datetime.fromisoformat(str(item["occurred_at"]))
+            except (KeyError, TypeError, ValueError):
+                continue
+            if occurred_at.astimezone(now.tzinfo).date() == now.date():
+                return False
+        return True
 
 
 def create_body_app(

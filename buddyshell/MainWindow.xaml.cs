@@ -1,6 +1,5 @@
 using BuddyShell.Anim;
 using BuddyShell.Bridge;
-using System.Globalization;
 using System.IO;
 using System.Windows;
 using System.Windows.Input;
@@ -18,7 +17,6 @@ public partial class MainWindow : Window
     private BridgeClient? _client;
     private StateLoop? _stateLoop;
     private Presence? _presence;
-    private Notices? _notices;
     private Tray? _tray;
     private SpikeEvidence? _spikeEvidence;
     private VPetStateResponse? _state = null;
@@ -110,7 +108,11 @@ public partial class MainWindow : Window
             _spikeEvidence = new SpikeEvidence(_animationController);
 
             _client = new BridgeClient(_settings);
-            _stateLoop = new StateLoop(_client, () => _settings.LastShownId);
+            _presence = new Presence(_settings);
+            _stateLoop = new StateLoop(
+                _client,
+                () => _settings.LastShownId,
+                () => _presence.Snapshot());
             _stateLoop.Updated += OnBodyUpdated;
             _stateLoop.Failed += (_, exception) => Dispatcher.Invoke(() =>
             {
@@ -118,30 +120,8 @@ public partial class MainWindow : Window
                 UpdateAnimationBaseline();
                 SetConnectionState(exception.Message, ConnectionState.Warning);
             });
-            _presence = new Presence(
-                _client,
-                _outbox,
-                _settings,
-                () => _settings.ActiveWorkSessionId,
-                () => _state?.Physio?.Sleeping == true,
-                () => _state is not null);
-            _presence.UserReturned += async (_, _) => await UserBackAsync();
-            _notices = new Notices(
-                _client,
-                _outbox,
-                SpeechBubble,
-                _settings,
-                () => _state,
-                () => _presence.IsFullscreen,
-                () =>
-                {
-                    Show();
-                    Activate();
-                });
             _tray = CreateTray();
 
-            _presence.Start();
-            _notices.Start();
             _stateLoop.Start();
             SetConnectionState("动画状态机已运行", ConnectionState.Connected);
         }
@@ -157,15 +137,15 @@ public partial class MainWindow : Window
         var tray = new Tray();
         tray.SetWorking(!string.IsNullOrWhiteSpace(_settings.ActiveWorkSessionId));
         tray.WorkToggled += async (_, _) => await ToggleWorkAsync();
-        tray.QuietToggled += (_, _) => ToggleQuiet();
         tray.SettingsRequested += (_, _) => ShowSettings();
         tray.ShowRequested += (_, _) => { Show(); Activate(); };
         tray.ExitRequested += (_, _) => Close();
         return tray;
     }
 
-    private void OnBodyUpdated(object? sender, BodyStepResponse response)
+    private async void OnBodyUpdated(object? sender, BodyStepResponse response)
     {
+        var displayed = false;
         Dispatcher.Invoke(() =>
         {
             UpdateBodyBaseline(response);
@@ -173,6 +153,7 @@ public partial class MainWindow : Window
                 !string.Equals(response.Expression.Id, _settings.LastShownId, StringComparison.Ordinal))
             {
                 ShowBodyExpression(response.Expression);
+                displayed = true;
             }
             SetConnectionState("已连接", ConnectionState.Connected);
             App.LogMessage(
@@ -180,6 +161,7 @@ public partial class MainWindow : Window
                 $"activity={response.Baseline.GetValueOrDefault("current_activity", "")} " +
                 $"time_status={response.TimeStatus}");
         });
+        if (displayed) await ConfirmShownAsync();
     }
 
     private void UpdateBodyBaseline(BodyStepResponse response)
@@ -209,6 +191,7 @@ public partial class MainWindow : Window
             var response = await _client.StepBodyAsync(new BodyStepRequest
             {
                 ShownId = _settings.LastShownId,
+                Presence = _presence?.Snapshot(),
                 Event = bodyEvent,
             });
             if (response.EventStatus == "waiting_for_shown" && response.Expression is not null)
@@ -223,6 +206,7 @@ public partial class MainWindow : Window
                 response = await _client.StepBodyAsync(new BodyStepRequest
                 {
                     ShownId = _settings.LastShownId,
+                    Presence = _presence?.Snapshot(),
                     Event = bodyEvent,
                 });
             }
@@ -288,6 +272,7 @@ public partial class MainWindow : Window
             var response = await _client.StepBodyAsync(new BodyStepRequest
             {
                 ShownId = _settings.LastShownId,
+                Presence = _presence?.Snapshot(),
                 Event = bodyEvent,
             });
             if (response.EventStatus == "waiting_for_shown" && response.Expression is not null)
@@ -296,6 +281,7 @@ public partial class MainWindow : Window
                 response = await _client.StepBodyAsync(new BodyStepRequest
                 {
                     ShownId = _settings.LastShownId,
+                    Presence = _presence?.Snapshot(),
                     Event = bodyEvent,
                 });
             }
@@ -347,7 +333,9 @@ public partial class MainWindow : Window
     private void ShowBodyExpression(PendingBodyExpression expression)
     {
         if (string.IsNullOrWhiteSpace(expression.Id) || string.IsNullOrWhiteSpace(expression.Text)) return;
-        SpeechBubble.ShowSpeech(expression.Text, interrupt: true);
+        SpeechBubble.ShowSpeech(
+            expression.Text,
+            interrupt: !string.Equals(expression.Kind, "ambient", StringComparison.Ordinal));
         Chat.AddAssistant(expression.Text);
         _settings.LastShownId = expression.Id;
         SettingsStore.Save(_settings);
@@ -361,6 +349,7 @@ public partial class MainWindow : Window
             var confirmation = await _client!.StepBodyAsync(new BodyStepRequest
             {
                 ShownId = _settings.LastShownId,
+                Presence = _presence?.Snapshot(),
             });
             UpdateBodyBaseline(confirmation);
             App.LogMessage(
@@ -418,33 +407,6 @@ public partial class MainWindow : Window
         }
     }
 
-    private async Task UserBackAsync()
-    {
-        if (_client is null) return;
-        var request = new VPetEventRequest
-        {
-            Event = "user_back",
-            WantReply = _settings.PhysicalProactive && !_settings.TodayQuiet,
-        };
-        try
-        {
-            var response = await _client.SendEventAsync(request);
-            App.LogMessage(
-                $"event=user_back server_time={_state?.ServerTime} " +
-                $"client_event_id={request.ClientEventId}");
-            var displayedDigest = _notices is not null && await _notices.DrainAsync(digest: true);
-            if (!displayedDigest && response.Speech is { Text.Length: > 0 })
-            {
-                ShowResponse(response);
-                if (_notices is not null)
-                {
-                    await _notices.AcknowledgeExternalAsync("user_back");
-                }
-            }
-        }
-        catch (BridgeRequestException) { await _outbox.EnqueueAsync(request); }
-    }
-
     private async Task ToggleWorkAsync()
     {
         if (_client is null) return;
@@ -482,44 +444,6 @@ public partial class MainWindow : Window
         }
     }
 
-    private void ShowResponse(VPetBridgeResponse response, bool submitAnimation = true)
-    {
-        Dispatcher.Invoke(() =>
-        {
-            if (response.Speech is { Text.Length: > 0 } speech)
-            {
-                SpeechBubble.ShowSpeech(speech.Text, speech.Interrupt);
-            }
-            var reaction = ActionMapper.TryFrom(response.Action?.Name, response.Expression?.Name);
-            if (submitAnimation && reaction is { } intent && intent != AnimationIntent.Think)
-            {
-                _animationController?.Submit(new AnimationRequest(
-                    intent,
-                    AnimationSource.BridgeResponse,
-                    $"response:{Guid.NewGuid():N}",
-                    AnimationPriority.Response));
-            }
-        });
-        if (response.Pending.Count > 0 && _notices is not null)
-        {
-            _ = _notices.DisplayPendingAsync(response.Pending);
-        }
-    }
-
-    private void ToggleQuiet()
-    {
-        var date = ServerDate();
-        if (date is null)
-        {
-            SetConnectionState("尚未取得服务端日期，不能设置今天安静", ConnectionState.Warning);
-            return;
-        }
-        _settings.TodayQuiet = !_settings.TodayQuiet;
-        _settings.TodayQuietDate = _settings.TodayQuiet ? date : null;
-        SettingsStore.Save(_settings);
-        SetConnectionState(_settings.TodayQuiet ? "今天安静" : "主动气泡已恢复", ConnectionState.Connected);
-    }
-
     private void ShowSettings()
     {
         var window = new SettingsWindow(_settings, _state) { Owner = this };
@@ -532,13 +456,6 @@ public partial class MainWindow : Window
     private void AnimationHost_Drop(object sender, DragEventArgs e)
     {
         if (e.Data.GetData(DataFormats.Text) is string item) _ = FeedAsync(item);
-    }
-
-    private string? ServerDate()
-    {
-        if (_state is null || !DateTimeOffset.TryParse(_state.ServerTime, CultureInfo.InvariantCulture,
-                DateTimeStyles.RoundtripKind, out var time)) return null;
-        return time.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
     }
 
     private void UpdateAnimationBaseline()
@@ -574,9 +491,7 @@ public partial class MainWindow : Window
 
     private void DisposeServices()
     {
-        _notices?.Dispose();
         _spikeEvidence?.Dispose();
-        _presence?.Dispose();
         if (_animationController is not null) _animationController.TouchDetected -= OnTouchDetected;
         _stateLoop?.Dispose();
         _tray?.Dispose();

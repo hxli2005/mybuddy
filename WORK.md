@@ -7,9 +7,9 @@
 
 - 当前写入者：无
 - 当前任务：无
-- 最近完成：S5 触碰反射→原始事实→心智理解
-- 下一任务：S6 presence→ambient→实际显示→shown（READY）
-- 工作区要求：S6 开始编码前必须确认 S5 提交后工作区干净
+- 最近完成：S6 presence→ambient→实际显示→shown
+- 下一任务：S7 四类记忆与五动词进入同一心智步（READY）
+- 工作区要求：S7 开始编码前必须确认 S6 提交后工作区干净
 
 ## 任务流水线
 
@@ -23,8 +23,8 @@
 | S3 | DONE | WPF输入→step→气泡→shown | S2 | 真实窗口台词、断线不补发 |
 | S4 | DONE | 时间/生活→baseline→身体持续呈现 | S3 | 当场生活事件、断线安全姿态、恢复基线 |
 | S5 | DONE | 触碰反射→原始事实→心智理解 | S4 | 离线不回补、无关系计分、恢复基线 |
-| S6 | READY | presence→ambient→实际显示→shown | S5 | 未显示不入历史、未回应零痕迹 |
-| S7 | BLOCKED | 四类记忆与五动词进入同一心智步 | S6 | record/correct/forget及模式证据轨迹 |
+| S6 | DONE | presence→ambient→实际显示→shown | S5 | 未显示不入历史、未回应零痕迹 |
+| S7 | READY | 四类记忆与五动词进入同一心智步 | S6 | record/correct/forget及模式证据轨迹 |
 | S8 | BLOCKED | 删除旧路径→完整纵向验收 | S7 | 单一写入路径、遗留清单归零、真实轨迹 |
 
 解除依赖时只把下一项改为 READY，不提前铺后续任务。只读评审不占ACTIVE名额，
@@ -41,17 +41,16 @@
 
 ## 最近一次交接
 
-- 任务：S5 触碰反射→原始事实→心智理解
+- 任务：S6 presence→ambient→实际显示→shown
 - 提交：本提交
-- 跑过的命令：BuddyShell构建0警告；C#回归`23 passed`；Python回归`243 passed`；ruff、diff检查；真实WPF窗口与localhost body服务
-- 在线证据：头部瞬时反射→`body_touch{zone:head}`→心智状态改动→气泡→shown；动画随后从touch exit重建`read` baseline，四文件和截图在`data/mini-s5-evidence/`
-- 她显示的话：“呀，碰到我头发了。我刚还低着头看书呢。”；WPF日志`shown confirmed=True`后history才追加对应`shared_expression`
-- 离线证据：停服后触碰仍完成本地反射并恢复`idle.default`安全姿态，日志为`body_touch_unreported`；history行数`4→4`且没有outbox文件
-- 红线证据：身体协议只上报`event_id + touch_head/touch_body`，拒绝身体夹带意义；state/history无warmth、好感、亲密或关系计分字段
-- 模型说明：当前config和环境无API key，本次S5桌面验收用明确标注的确定性候选提供器；没有伪称为新外部模型输出，S1真实模型轨迹保持不动
-- 删除的旧路径：删除`TouchLayer`的首次/五次/30秒窗口/升格/outbox补报政策，同时删除TouchEscalation设置与示例配置
-- 剩余阻塞：无；S6可以领取
-- 她哪里更活了：碰到她时，身体先本能地动一下，心智再把这一次真实触碰接成自己的当下，而不是加一分或积成日后补报的债
+- 跑过的命令：BuddyShell构建0警告；C#回归`23 passed`；Python回归`250 passed`；ruff、diff检查；真实WPF窗口与localhost body服务
+- 在线证据：身体每次step只带当前`present/fullscreen`；09:36:32在场时间推进生成ambient，WPF日志依次为`bubble_shown`和`shown confirmed=True`，四文件与shell日志在`data/mini-s6-evidence/`
+- 她显示的话：“我刚读完窗边这一页，纸上还留着一点晒过的暖意。”；history在shown后才追加`expression_kind:ambient`，09:36:52下一次在场step为`not_due`且history仍只有生活事件与已显示表达
+- 静默证据：缺presence、离场和全屏都只推进生活不生成表达；未shown的ambient保持pending且不入history；当天未回应不会生成第二条ambient、用户事实或负面状态依据
+- 模型说明：当前config和环境无API key，本次S6桌面验收用明确标注的确定性候选提供器；没有伪称为新外部模型输出，S1真实模型轨迹保持不动
+- 删除的旧路径：删除身体侧presence心跳、`user_back`回场、pending drain/notice shown、主动冷却/次数/今天安静及其设置；presence不排队、不补报
+- 剩余阻塞：无；S7可以领取
+- 她哪里更活了：她会从自己刚发生的生活里自然冒出一句话，但只在你此刻确实在场时出现；你不接话，她也只是继续过自己的时间
 
 交接只允许保留最近一次。禁止粘贴完整diff、长测试日志、未来设计和“顺便发现”
 清单；这些分别属于Git、测试产物、`DESIGN.md`和当前任务之外。

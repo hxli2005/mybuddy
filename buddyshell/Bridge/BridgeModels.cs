@@ -7,19 +7,11 @@ public sealed class ShellSettings
     public string BridgeUrl { get; set; } = "http://127.0.0.1:8000";
     public string BridgeToken { get; set; } = "";
     public bool PhysioInjection { get; set; } = true;
-    public bool PhysicalProactive { get; set; } = true;
-    public bool TodayQuiet { get; set; }
-    public string? TodayQuietDate { get; set; }
     public string? PetAssetRoot { get; set; }
     // Legacy JSON compatibility only. The animation route is now fixed to
     // AnimationController + FramePlayerHost and this value is intentionally ignored.
     public bool ForceFramePlayer { get; set; }
     public int IdlePauseMinutes { get; set; } = 30;
-    public int PhysicalCooldownMinutes { get; set; } = 45;
-    public int PhysicalDailyLimit { get; set; } = 12;
-    public string? PhysicalDate { get; set; }
-    public int PhysicalCount { get; set; }
-    public string? LastPhysicalServerTime { get; set; }
     public double? WindowLeft { get; set; }
     public double? WindowTop { get; set; }
     public string? ActiveWorkSessionId { get; set; }
@@ -28,26 +20,7 @@ public sealed class ShellSettings
     public ClientFlags ToClientFlags() => new()
     {
         PhysioInjection = PhysioInjection,
-        PhysicalProactive = PhysicalProactive,
     };
-
-    public void NormalizeTodayQuiet(string serverDate)
-    {
-        if (!TodayQuiet)
-        {
-            TodayQuietDate = null;
-            return;
-        }
-        if (string.IsNullOrWhiteSpace(TodayQuietDate))
-        {
-            TodayQuietDate = serverDate;
-        }
-        else if (!string.Equals(TodayQuietDate, serverDate, StringComparison.Ordinal))
-        {
-            TodayQuiet = false;
-            TodayQuietDate = null;
-        }
-    }
 }
 
 public sealed class ClientFlags
@@ -66,6 +39,18 @@ public sealed class BodyStepRequest
 
     [JsonPropertyName("event")]
     public BodyEvent? Event { get; set; }
+
+    [JsonPropertyName("presence")]
+    public BodyPresence? Presence { get; set; }
+}
+
+public sealed class BodyPresence
+{
+    [JsonPropertyName("present")]
+    public bool Present { get; set; }
+
+    [JsonPropertyName("fullscreen")]
+    public bool Fullscreen { get; set; }
 }
 
 public sealed class BodyEvent
@@ -109,6 +94,9 @@ public sealed class PendingBodyExpression
 
     [JsonPropertyName("created_at")]
     public string CreatedAt { get; set; } = "";
+
+    [JsonPropertyName("kind")]
+    public string Kind { get; set; } = "direct";
 }
 
 public sealed class VPetEventRequest
