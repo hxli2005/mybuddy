@@ -136,9 +136,7 @@ physio:
 
 vpet:
   physio_injection: true               # 引擎生理快照进入 living_state
-  touch_escalation: true               # 触摸事件是否允许升格成一次短句 LLM 反应
   physical_proactive: true             # 主动消息是否允许走到桌宠前台展示
-  touch_escalation_daily_limit: 20     # 每天最多批准多少次触摸升格
   greeting_discard_after_minutes: 120  # greeting 超过多久未派送就丢弃
   bridge_token: ""                     # 非空时保护 /api/*,Header: X-MyBuddy-Token
   acceptance_mode: false               # 仅验收时 true;生产禁止非零时间偏移

@@ -96,7 +96,6 @@
                 <TextBlock Text="行为" FontWeight="SemiBold" Foreground="#303541" Margin="0,0,0,3" />
                 <WrapPanel>
                     <CheckBox x:Name="PhysioInjection" Content="生理状态注入" Width="166" />
-                    <CheckBox x:Name="TouchEscalation" Content="触摸升格" />
                     <CheckBox x:Name="PhysicalProactive" Content="允许主动气泡" Width="166" />
                     <CheckBox Content="TTS（预留）" IsEnabled="False" />
                 </WrapPanel>

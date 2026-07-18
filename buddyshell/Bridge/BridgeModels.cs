@@ -7,7 +7,6 @@ public sealed class ShellSettings
     public string BridgeUrl { get; set; } = "http://127.0.0.1:8000";
     public string BridgeToken { get; set; } = "";
     public bool PhysioInjection { get; set; } = true;
-    public bool TouchEscalation { get; set; } = true;
     public bool PhysicalProactive { get; set; } = true;
     public bool TodayQuiet { get; set; }
     public string? TodayQuietDate { get; set; }
@@ -29,7 +28,6 @@ public sealed class ShellSettings
     public ClientFlags ToClientFlags() => new()
     {
         PhysioInjection = PhysioInjection,
-        TouchEscalation = TouchEscalation,
         PhysicalProactive = PhysicalProactive,
     };
 
@@ -57,9 +55,6 @@ public sealed class ClientFlags
     [JsonPropertyName("physio_injection")]
     public bool PhysioInjection { get; set; }
 
-    [JsonPropertyName("touch_escalation")]
-    public bool TouchEscalation { get; set; }
-
     [JsonPropertyName("physical_proactive")]
     public bool PhysicalProactive { get; set; }
 }
@@ -82,7 +77,8 @@ public sealed class BodyEvent
     public string Type { get; set; } = "chat";
 
     [JsonPropertyName("content")]
-    public string Content { get; set; } = "";
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Content { get; set; }
 }
 
 public sealed class BodyStepResponse

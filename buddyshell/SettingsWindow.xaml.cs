@@ -15,7 +15,6 @@ public partial class SettingsWindow : Window
         BridgeUrl.Text = settings.BridgeUrl;
         BridgeToken.Password = settings.BridgeToken;
         PhysioInjection.IsChecked = settings.PhysioInjection;
-        TouchEscalation.IsChecked = settings.TouchEscalation;
         PhysicalProactive.IsChecked = settings.PhysicalProactive;
         if (state is not null)
         {
@@ -29,7 +28,6 @@ public partial class SettingsWindow : Window
         _settings.BridgeUrl = BridgeUrl.Text.Trim();
         _settings.BridgeToken = BridgeToken.Password.Trim();
         _settings.PhysioInjection = PhysioInjection.IsChecked == true;
-        _settings.TouchEscalation = TouchEscalation.IsChecked == true;
         _settings.PhysicalProactive = PhysicalProactive.IsChecked == true;
         SettingsStore.Save(_settings);
         DialogResult = true;

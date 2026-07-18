@@ -17,7 +17,6 @@ public partial class MainWindow : Window
     private IAnimationController? _animationController;
     private BridgeClient? _client;
     private StateLoop? _stateLoop;
-    private TouchLayer? _touchLayer;
     private Presence? _presence;
     private Notices? _notices;
     private Tray? _tray;
@@ -27,6 +26,7 @@ public partial class MainWindow : Window
     private string? _pendingChatEventId;
     private string? _pendingChatText;
     private bool _chatSending;
+    private bool _touchReporting;
     private bool _feeding;
 
     public MainWindow()
@@ -101,6 +101,7 @@ public partial class MainWindow : Window
             if (string.IsNullOrWhiteSpace(root)) throw new DirectoryNotFoundException("未找到 VPet 素材目录。");
             var renderer = new FramePlayerHost(root);
             _animationController = new AnimationController(AnimationManifest.CreateDefault(root), renderer);
+            _animationController.TouchDetected += OnTouchDetected;
             _animationController.Faulted += (_, args) => SetConnectionState(
                 args.Recovered ? "动画渲染已恢复" : $"动画渲染失败：{args.Exception?.Message}",
                 args.Recovered ? ConnectionState.Connected : ConnectionState.Error);
@@ -117,8 +118,6 @@ public partial class MainWindow : Window
                 UpdateAnimationBaseline();
                 SetConnectionState(exception.Message, ConnectionState.Warning);
             });
-            _touchLayer = new TouchLayer(_animationController, _client, _outbox, ServerDate);
-            _touchLayer.ResponseReceived += (_, response) => ShowSpeechOnly(response);
             _presence = new Presence(
                 _client,
                 _outbox,
@@ -187,6 +186,81 @@ public partial class MainWindow : Window
     {
         _bodyBaseline = response.Baseline;
         UpdateAnimationBaseline();
+    }
+
+    private async void OnTouchDetected(object? sender, TouchDetectedEventArgs args)
+    {
+        if (_client is null) return;
+        if (_touchReporting)
+        {
+            App.LogMessage(
+                $"event=body_touch_unreported event_id={args.CorrelationId} " +
+                $"zone={args.Zone.ToString().ToLowerInvariant()} reason=step_busy");
+            return;
+        }
+        _touchReporting = true;
+        var bodyEvent = new BodyEvent
+        {
+            EventId = args.CorrelationId,
+            Type = args.Zone == TouchZone.Head ? "touch_head" : "touch_body",
+        };
+        try
+        {
+            var response = await _client.StepBodyAsync(new BodyStepRequest
+            {
+                ShownId = _settings.LastShownId,
+                Event = bodyEvent,
+            });
+            if (response.EventStatus == "waiting_for_shown" && response.Expression is not null)
+            {
+                if (!string.Equals(
+                        response.Expression.Id,
+                        _settings.LastShownId,
+                        StringComparison.Ordinal))
+                {
+                    ShowBodyExpression(response.Expression);
+                }
+                response = await _client.StepBodyAsync(new BodyStepRequest
+                {
+                    ShownId = _settings.LastShownId,
+                    Event = bodyEvent,
+                });
+            }
+            if (response.EventStatus is not ("processed" or "duplicate"))
+            {
+                App.LogMessage(
+                    $"event=body_touch_dropped event_id={bodyEvent.EventId} " +
+                    $"zone={args.Zone.ToString().ToLowerInvariant()} status={response.EventStatus}");
+                return;
+            }
+            UpdateBodyBaseline(response);
+            var shownConfirmed = true;
+            if (response.Expression is not null)
+            {
+                ShowBodyExpression(response.Expression);
+                shownConfirmed = await ConfirmShownAsync();
+            }
+            if (shownConfirmed) SetConnectionState("已连接", ConnectionState.Connected);
+            App.LogMessage(
+                $"event=body_touch event_id={bodyEvent.EventId} " +
+                $"zone={args.Zone.ToString().ToLowerInvariant()} status={response.EventStatus}");
+        }
+        catch (BridgeRequestException exception)
+        {
+            SetConnectionState("未连接；这次触碰只做了本地反射", ConnectionState.Warning);
+            App.LogMessage(
+                $"event=body_touch_unreported event_id={bodyEvent.EventId} " +
+                $"zone={args.Zone.ToString().ToLowerInvariant()} reason={exception.Message}");
+        }
+        catch (Exception exception)
+        {
+            App.LogException(exception);
+            SetConnectionState("触碰没有报给心智；本地反射不受影响", ConnectionState.Warning);
+        }
+        finally
+        {
+            _touchReporting = false;
+        }
     }
 
     private async Task SendBodyChatAsync(string text)
@@ -432,14 +506,6 @@ public partial class MainWindow : Window
         }
     }
 
-    private void ShowSpeechOnly(VPetBridgeResponse response)
-    {
-        if (response.Speech is { Text.Length: > 0 } speech)
-        {
-            Dispatcher.Invoke(() => SpeechBubble.ShowSpeech(speech.Text, speech.Interrupt));
-        }
-    }
-
     private void ToggleQuiet()
     {
         var date = ServerDate();
@@ -511,7 +577,7 @@ public partial class MainWindow : Window
         _notices?.Dispose();
         _spikeEvidence?.Dispose();
         _presence?.Dispose();
-        _touchLayer?.Dispose();
+        if (_animationController is not null) _animationController.TouchDetected -= OnTouchDetected;
         _stateLoop?.Dispose();
         _tray?.Dispose();
         _client?.Dispose();

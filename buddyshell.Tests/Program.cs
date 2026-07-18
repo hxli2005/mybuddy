@@ -130,6 +130,16 @@ internal static class Program
         Equal("chat", bodyEvent.GetProperty("type").GetString());
         Equal("今天终于忙完了。", bodyEvent.GetProperty("content").GetString());
         Equal(false, root.TryGetProperty("message", out _));
+
+        var touch = new BodyStepRequest
+        {
+            Event = new BodyEvent { EventId = "touch-001", Type = "touch_head" },
+        };
+        using var touchDocument = JsonDocument.Parse(JsonSerializer.Serialize(touch));
+        var touchEvent = touchDocument.RootElement.GetProperty("event");
+        Equal("touch-001", touchEvent.GetProperty("event_id").GetString());
+        Equal("touch_head", touchEvent.GetProperty("type").GetString());
+        Equal(false, touchEvent.TryGetProperty("content", out _));
     }
 
     private static void InstalledFrameCacheIsBounded()

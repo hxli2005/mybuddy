@@ -16,6 +16,8 @@ class StubProvider(BaseLLMProvider):
         self.calls += 1
         incoming = json.loads(messages[0].content)["incoming_experience"]
         is_time_step = incoming is None
+        is_touch = incoming is not None and incoming["type"] == "body_touch"
+        touch_zone = incoming.get("zone") if is_touch else None
         return LLMResponse(
             tool_calls=[
                 ToolCall(
@@ -25,12 +27,18 @@ class StubProvider(BaseLLMProvider):
                         "state_changes": {
                             "mood": "放松",
                             "energy": "平稳",
-                            "attention": "听你说话",
-                            "current_activity": "把刚翻开的书合上了",
+                            "attention": "感觉到触碰" if is_touch else "听你说话",
+                            "current_activity": "抬手理了理头发"
+                            if touch_zone == "head"
+                            else "低头看了看衣角"
+                            if touch_zone == "body"
+                            else "把刚翻开的书合上了",
                             "baseline": "read" if is_time_step else "idle",
                         },
                         "life_events": [{"content": "刚才读完了窗边那一页。"}],
-                        "memory_operations": [
+                        "memory_operations": []
+                        if is_touch
+                        else [
                             {
                                 "action": "record",
                                 "kind": "self_experience" if is_time_step else "user_fact",
@@ -41,7 +49,13 @@ class StubProvider(BaseLLMProvider):
                                 "target_id": None,
                             }
                         ],
-                        "expression": None if is_time_step else "忙完就好。先在我这儿松口气。",
+                        "expression": None
+                        if is_time_step
+                        else "呀，碰到我头发了。"
+                        if touch_zone == "head"
+                        else "唔，碰到我衣角了。"
+                        if touch_zone == "body"
+                        else "忙完就好。先在我这儿松口气。",
                     },
                 )
             ]
@@ -167,6 +181,57 @@ def test_request_rejects_missing_event_id_and_extra_protocol_fields(api) -> None
 
     assert missing.status_code == 422
     assert extra.status_code == 422
+
+
+@pytest.mark.parametrize(
+    ("event_type", "zone", "expression"),
+    [
+        ("touch_head", "head", "呀，碰到我头发了。"),
+        ("touch_body", "body", "唔，碰到我衣角了。"),
+    ],
+)
+def test_touch_is_raw_fact_for_mind_without_relationship_score(
+    api, event_type: str, zone: str, expression: str
+) -> None:
+    client, provider, data_dir = api
+    event = {"event_id": "touch-001", "type": event_type}
+
+    first = client.post("/api/body/step", json={"event": event})
+    assert first.status_code == 200
+    body = first.json()
+    assert body["event_status"] == "processed"
+    assert body["expression"]["text"] == expression
+
+    history = _history(data_dir)
+    assert history[0]["type"] == "body_touch"
+    assert history[0]["zone"] == zone
+    assert "content" not in history[0]
+    state = json.loads((data_dir / "state.json").read_text(encoding="utf-8"))
+    serialized = json.dumps(state, ensure_ascii=False).lower()
+    assert all(
+        field not in serialized
+        for field in ("warmth", "relationship_score", "好感度", "亲密度", "关系分")
+    )
+
+    repeated = client.post("/api/body/step", json={"event": event}).json()
+    assert repeated["event_status"] == "duplicate"
+    assert provider.calls == 1
+
+
+def test_touch_rejects_body_authored_meaning(api) -> None:
+    client, _, _ = api
+    response = client.post(
+        "/api/body/step",
+        json={
+            "event": {
+                "event_id": "touch-with-meaning",
+                "type": "touch_body",
+                "content": "用户是在表达喜欢",
+            }
+        },
+    )
+
+    assert response.status_code == 422
 
 
 def test_empty_step_advances_due_life_into_continuous_body_baseline(api) -> None:

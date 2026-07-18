@@ -375,7 +375,8 @@ def _prompt_payload(
 SYSTEM_PROMPT = """你是小布的唯一一次心智推进，不是任务助手。请调用 submit_mind_bundle，
 一次给出状态改动、最多三个属于她自己的小生活事件、记忆操作和一条直接表达。
 只处理给定事实与从 last_step 到 now 的朴素时间推进。不要补写共同过去，不催回复，
-不因沉默受伤，不制造关系计分，不撤回已发生内容。生活事件必须是她自己的、微小且具体；
+不因沉默受伤，不制造关系计分，不撤回已发生内容。body_touch 只是身体感知到的触碰位置，
+不能据此推断用户动机、关系浓度或长期偏好。生活事件必须是她自己的、微小且具体；
 表达自然、简短、诚实。所有字段都受同一组红线校验，整包不能部分保留。"""
 
 TIME_SYSTEM_PROMPT = """你是小布的一次安静时间推进，不是任务助手。请调用 submit_mind_bundle，
@@ -526,22 +527,28 @@ async def _generate_candidate(
 
 
 async def mind_step(
-    experience_text: str,
+    experience_text: str | None,
     *,
     provider: BaseLLMProvider,
     files: MindFiles,
     now: datetime | None = None,
     event_id: str | None = None,
+    experience_type: Literal["user_experience", "body_touch"] = "user_experience",
+    experience_details: dict[str, str] | None = None,
+    fallback_text: str = STATIC_CATCH,
 ) -> StepResult:
     """运行一个直接经历；候选通过才把经历、生活、状态和记忆一起提交。"""
     current_time = (now or datetime.now(UTC)).astimezone()
     state, history, memories = files.load(current_time)
-    experience = {
+    experience: dict[str, Any] = {
         "id": f"exp_{uuid.uuid4().hex}",
-        "type": "user_experience",
-        "content": experience_text,
+        "type": experience_type,
         "occurred_at": current_time.isoformat(),
     }
+    if experience_text is not None:
+        experience["content"] = experience_text
+    if experience_details:
+        experience.update(experience_details)
     prompt = _prompt_payload(state, history, memories, experience, current_time)
     evidence_types = {
         str(item.get("id")): str(item.get("type")) for item in history[-HISTORY_CONTEXT_LIMIT:]
@@ -569,7 +576,7 @@ async def mind_step(
         return StepResult(committed=True, pending_expression=pending, attempts=attempts)
 
     fallback = PendingExpression(
-        id=f"expr_{uuid.uuid4().hex}", text=STATIC_CATCH, created_at=current_time.isoformat()
+        id=f"expr_{uuid.uuid4().hex}", text=fallback_text, created_at=current_time.isoformat()
     )
     return StepResult(
         committed=False,

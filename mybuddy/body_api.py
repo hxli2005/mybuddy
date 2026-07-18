@@ -7,7 +7,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from mybuddy.config import load_config
 from mybuddy.llm import BaseLLMProvider, make_provider
@@ -26,8 +26,8 @@ class BodyEvent(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     event_id: str = Field(min_length=1, max_length=160)
-    type: Literal["chat"]
-    content: str = Field(min_length=1, max_length=4000)
+    type: Literal["chat", "touch_head", "touch_body"]
+    content: str | None = Field(default=None, max_length=4000)
 
     @field_validator("event_id")
     @classmethod
@@ -36,12 +36,14 @@ class BodyEvent(BaseModel):
             raise ValueError("must not be blank")
         return value.strip()
 
-    @field_validator("content")
-    @classmethod
-    def reject_blank_content(cls, value: str) -> str:
-        if not value.strip():
-            raise ValueError("must not be blank")
-        return value
+    @model_validator(mode="after")
+    def content_matches_event_type(self) -> BodyEvent:
+        if self.type == "chat":
+            if self.content is None or not self.content.strip():
+                raise ValueError("chat content must not be blank")
+        elif self.content is not None:
+            raise ValueError("touch events carry only the raw type and event_id")
+        return self
 
 
 class BodyStepRequest(BaseModel):
@@ -119,13 +121,25 @@ class BodyBridge:
         if state.get("pending_expression") is not None:
             return "waiting_for_shown"
 
-        result = await mind_step(
-            event.content,
-            provider=self.provider,
-            files=self.files,
-            now=now,
-            event_id=event.event_id,
-        )
+        if event.type == "chat":
+            result = await mind_step(
+                event.content,
+                provider=self.provider,
+                files=self.files,
+                now=now,
+                event_id=event.event_id,
+            )
+        else:
+            result = await mind_step(
+                None,
+                experience_type="body_touch",
+                experience_details={"zone": event.type.removeprefix("touch_")},
+                fallback_text="碰到我了。刚才脑子没转过来，但这一下我感觉到了。",
+                provider=self.provider,
+                files=self.files,
+                now=now,
+                event_id=event.event_id,
+            )
         if not result.committed:
             state, history, memories = self.files.load(now)
             state["pending_expression"] = result.pending_expression.model_dump()
