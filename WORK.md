@@ -7,9 +7,9 @@
 
 - 当前写入者：无
 - 当前任务：无
-- 最近完成：S6 presence→ambient→实际显示→shown
-- 下一任务：S7 四类记忆与五动词进入同一心智步（READY）
-- 工作区要求：S7 开始编码前必须确认 S6 提交后工作区干净
+- 最近完成：S7 四类记忆与五动词进入同一心智步
+- 下一任务：S8 删除旧路径→完整纵向验收（READY）
+- 工作区要求：S8 开始编码前必须确认 S7 提交后工作区干净
 
 ## 任务流水线
 
@@ -24,8 +24,8 @@
 | S4 | DONE | 时间/生活→baseline→身体持续呈现 | S3 | 当场生活事件、断线安全姿态、恢复基线 |
 | S5 | DONE | 触碰反射→原始事实→心智理解 | S4 | 离线不回补、无关系计分、恢复基线 |
 | S6 | DONE | presence→ambient→实际显示→shown | S5 | 未显示不入历史、未回应零痕迹 |
-| S7 | READY | 四类记忆与五动词进入同一心智步 | S6 | record/correct/forget及模式证据轨迹 |
-| S8 | BLOCKED | 删除旧路径→完整纵向验收 | S7 | 单一写入路径、遗留清单归零、真实轨迹 |
+| S7 | DONE | 四类记忆与五动词进入同一心智步 | S6 | record/correct/forget及模式证据轨迹 |
+| S8 | READY | 删除旧路径→完整纵向验收 | S7 | 单一写入路径、遗留清单归零、真实轨迹 |
 
 解除依赖时只把下一项改为 READY，不提前铺后续任务。只读评审不占ACTIVE名额，
 但不得修改文件；评审意见由当前写入者筛选后实现，不直接写入本板。
@@ -41,16 +41,16 @@
 
 ## 最近一次交接
 
-- 任务：S6 presence→ambient→实际显示→shown
+- 任务：S7 四类记忆与五动词进入同一心智步
 - 提交：本提交
-- 跑过的命令：BuddyShell构建0警告；C#回归`23 passed`；Python回归`250 passed`；ruff、diff检查；真实WPF窗口与localhost body服务
-- 在线证据：身体每次step只带当前`present/fullscreen`；09:36:32在场时间推进生成ambient，WPF日志依次为`bubble_shown`和`shown confirmed=True`，四文件与shell日志在`data/mini-s6-evidence/`
-- 她显示的话：“我刚读完窗边这一页，纸上还留着一点晒过的暖意。”；history在shown后才追加`expression_kind:ambient`，09:36:52下一次在场step为`not_due`且history仍只有生活事件与已显示表达
-- 静默证据：缺presence、离场和全屏都只推进生活不生成表达；未shown的ambient保持pending且不入history；当天未回应不会生成第二条ambient、用户事实或负面状态依据
-- 模型说明：当前config和环境无API key，本次S6桌面验收用明确标注的确定性候选提供器；没有伪称为新外部模型输出，S1真实模型轨迹保持不动
-- 删除的旧路径：删除身体侧presence心跳、`user_back`回场、pending drain/notice shown、主动冷却/次数/今天安静及其设置；presence不排队、不补报
-- 剩余阻塞：无；S7可以领取
-- 她哪里更活了：她会从自己刚发生的生活里自然冒出一句话，但只在你此刻确实在场时出现；你不接话，她也只是继续过自己的时间
+- 跑过的命令：Python回归`253 passed`；S7心智/身体回归`29 passed`；ruff、format、diff检查；本机body HTTP三轮对话与shown确认；C#未改且当前机器只有runtime、无SDK，未重复构建
+- 在线证据：`data/mini-s7-evidence/`四文件与HTTP轨迹包含四类记忆、`record/integrate/recall/correct/forget`八条动作；生活证据已从`life:0`换成真实history ID，全部长期记忆证据都能回指history
+- 模式轨迹：两次独立用户经历生成“忙完后常会收拾桌面”；用户随后明确纠正为“有时、并非每次”，correct保留前值和本次证据；forget后共同经历不再位于memories，但动作历史未撤回
+- 她显示的话：“好，我改过来了——不是每次，只是有时候。”；三条直接表达都在shown前保持pending、shown后才入共同历史，最终`pending_expression: null`
+- 模型说明：当前环境未配置外部模型，本次S7运行验收使用明确标注的确定性候选提供器，没有伪称为外部模型输出
+- 删除的旧路径：无；本刀只收紧现有心智包中的记忆语义与证据轨迹
+- 剩余阻塞：无；S8可以领取
+- 她哪里更活了：她留下的不再是只会越积越多的句子——她能从重复经历形成理解，也能在你纠正后真的改过来，并把不该长期留下的放下
 
 交接只允许保留最近一次。禁止粘贴完整diff、长测试日志、未来设计和“顺便发现”
 清单；这些分别属于Git、测试产物、`DESIGN.md`和当前任务之外。

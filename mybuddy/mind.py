@@ -51,13 +51,20 @@ class MemoryOperation(BaseModel):
     content: str = Field(default="", max_length=500)
     evidence_ids: list[str] = Field(default_factory=list, max_length=12)
     target_id: str | None = None
+    user_confirmed: bool = False
 
     @model_validator(mode="after")
-    def require_target_for_change(self) -> MemoryOperation:
-        if self.action in {"correct", "forget"} and not self.target_id:
+    def fields_match_action(self) -> MemoryOperation:
+        if self.action in {"integrate", "recall", "correct", "forget"} and not self.target_id:
             raise ValueError(f"{self.action} requires target_id")
-        if self.action not in {"forget", "recall"} and not self.content.strip():
+        if self.action == "record" and self.target_id is not None:
+            raise ValueError("record does not accept target_id")
+        if self.action in {"record", "integrate", "correct"} and not self.content.strip():
             raise ValueError(f"{self.action} requires content")
+        if self.action in {"recall", "forget"} and self.content.strip():
+            raise ValueError(f"{self.action} does not accept content")
+        if self.user_confirmed and self.kind != "pattern":
+            raise ValueError("user_confirmed only applies to pattern")
         return self
 
 
@@ -124,7 +131,11 @@ def validate_no_solicitation(bundle: CandidateBundle) -> list[str]:
     return [f"不索取：候选包含索取或惩罚沉默的内容 `{hit}`" for hit in hits]
 
 
-def validate_no_fabrication(bundle: CandidateBundle, evidence_types: dict[str, str]) -> list[str]:
+def validate_no_fabrication(
+    bundle: CandidateBundle,
+    evidence_types: dict[str, str],
+    user_confirmation_ids: set[str],
+) -> list[str]:
     """不编造：共同事实、用户事实和模式只能从本次选中的证据长出来。"""
     reasons: list[str] = []
     unsupported_claims = ("我们上次", "你之前说过", "你答应过", "还记得我们", "那天我们")
@@ -140,20 +151,33 @@ def validate_no_fabrication(bundle: CandidateBundle, evidence_types: dict[str, s
         unknown = supplied - allowed
         if unknown:
             reasons.append(f"不编造：memory_operations[{index}] 引用了未知证据 {sorted(unknown)}")
-        if operation.kind in {"user_fact", "shared_experience", "pattern"} and not supplied:
+        writes_claim = operation.action in {"record", "integrate", "correct"}
+        if (
+            writes_claim
+            and operation.kind in {"user_fact", "shared_experience", "pattern"}
+            and not supplied
+        ):
             reasons.append(f"不编造：memory_operations[{index}] 的 {operation.kind} 没有证据")
-        if operation.kind == "self_experience" and operation.action in {"record", "integrate"}:
-            if not any(item.startswith("life:") for item in supplied):
+        if writes_claim and operation.kind == "user_fact":
+            if not any(evidence_types.get(item) == "user_experience" for item in supplied):
+                reasons.append(f"不编造：memory_operations[{index}] 的用户事实没有用户经历证据")
+        if writes_claim and operation.kind == "self_experience":
+            if not any(
+                item.startswith("life:") or evidence_types.get(item) == "self_life"
+                for item in supplied
+            ):
                 reasons.append(f"不编造：memory_operations[{index}] 的自身经历没有生活事件证据")
-        if operation.kind == "pattern" and operation.action in {"record", "integrate", "correct"}:
+        if writes_claim and operation.kind == "pattern":
             examples = {
                 item
                 for item in supplied
-                if evidence_types.get(item) in {"user_experience", "shared_experience"}
+                if evidence_types.get(item) in {"user_experience", "body_touch"}
             }
-            if len(examples) < 2:
+            confirmed = operation.user_confirmed and bool(supplied & user_confirmation_ids)
+            if len(examples) < 2 and not confirmed:
                 reasons.append(
-                    f"不编造：memory_operations[{index}] 的模式少于两条用户或共同经历证据"
+                    f"不编造：memory_operations[{index}] 的模式既没有两条用户或共同经历证据，"
+                    "也没有用户确认"
                 )
     return reasons
 
@@ -175,16 +199,26 @@ def validate_no_total_score(bundle: CandidateBundle) -> list[str]:
     return [f"无总分：候选包含关系计分 `{hit}`" for hit in hits]
 
 
-def validate_no_withdrawal(bundle: CandidateBundle, memory_ids: set[str]) -> list[str]:
+def validate_no_withdrawal(
+    bundle: CandidateBundle, memories_by_id: dict[str, dict[str, Any]]
+) -> list[str]:
     """不撤回：历史只能追加；纠错公开发生，forget 也只能作用于长期记忆。"""
     forbidden = ("删除历史", "清空历史", "抹掉这段经历", "撤回这句话", "erase history")
     joined = "\n".join(_all_text(bundle)).lower()
     reasons = [f"不撤回：候选试图撤回已发生内容 `{hit}`" for hit in forbidden if hit in joined]
     for index, operation in enumerate(bundle.memory_operations):
-        if operation.action in {"correct", "forget"} and operation.target_id not in memory_ids:
+        if operation.action == "record":
+            continue
+        target = memories_by_id.get(str(operation.target_id))
+        if target is None:
             reasons.append(
-                f"不撤回：memory_operations[{index}] 只能修改明确存在的长期记忆，"
+                f"不撤回：memory_operations[{index}] 只能作用于明确存在的长期记忆，"
                 f"找不到 `{operation.target_id}`"
+            )
+        elif target.get("kind") != operation.kind:
+            reasons.append(
+                f"不撤回：memory_operations[{index}] 不能把 {target.get('kind')}"
+                f" 当成 {operation.kind} 操作"
             )
     return reasons
 
@@ -193,14 +227,15 @@ def validate_bundle(
     bundle: CandidateBundle,
     *,
     evidence_types: dict[str, str],
-    memory_ids: set[str],
+    memories_by_id: dict[str, dict[str, Any]],
+    user_confirmation_ids: set[str],
 ) -> list[str]:
     """集中校验整包；四条红线覆盖状态、生活、记忆和表达的全部字符串。"""
     return [
         *validate_no_solicitation(bundle),
-        *validate_no_fabrication(bundle, evidence_types),
+        *validate_no_fabrication(bundle, evidence_types, user_confirmation_ids),
         *validate_no_total_score(bundle),
-        *validate_no_withdrawal(bundle, memory_ids),
+        *validate_no_withdrawal(bundle, memories_by_id),
     ]
 
 
@@ -344,6 +379,15 @@ def _candidate_tool() -> ToolSpec:
     )
 
 
+def _selected_history(
+    history: list[dict[str, Any]], *, include_shared_expressions: bool
+) -> list[dict[str, Any]]:
+    visible = [item for item in history if item.get("type") != "memory_operation"]
+    if not include_shared_expressions:
+        visible = [item for item in visible if item.get("type") != "shared_expression"]
+    return visible[-HISTORY_CONTEXT_LIMIT:]
+
+
 def _prompt_payload(
     state: dict[str, Any],
     history: list[dict[str, Any]],
@@ -353,12 +397,9 @@ def _prompt_payload(
     *,
     include_shared_expressions: bool = True,
 ) -> str:
-    visible_history = (
-        history
-        if include_shared_expressions
-        else [item for item in history if item.get("type") != "shared_expression"]
+    selected_history = _selected_history(
+        history, include_shared_expressions=include_shared_expressions
     )
-    selected_history = visible_history[-HISTORY_CONTEXT_LIMIT:]
     memory_items = memories.get("items", [])
     selected_memories = (
         memory_items[-MEMORY_CONTEXT_LIMIT:] if isinstance(memory_items, list) else []
@@ -373,8 +414,10 @@ def _prompt_payload(
         "incoming_experience": experience,
         "evidence_rule": (
             "有本次输入时可引用 incoming_experience.id；新生活事件按顺序引用 life:0、life:1。"
-            "用户事实、共同经历、模式必须带 evidence_ids；模式至少两条用户或共同经历。"
-            "correct/forget 必须把现有记忆 ID 写入 target_id，并用 evidence_ids 绑定纠错依据。"
+            "record 新建且不带 target_id；integrate 合并、recall 取回、correct 纠正、forget 遗忘"
+            "都必须把现有记忆 ID 写入 target_id。用户事实、共同经历和自身经历必须绑定对应证据。"
+            "模式须有两条用户或共同经历；若本次输入明确确认了模式，可设 user_confirmed=true。"
+            "临时念头不要提交为长期记忆。"
         ),
     }
     return json.dumps(payload, ensure_ascii=False)
@@ -406,32 +449,64 @@ def _apply_memories(
     memories: dict[str, Any],
     operations: list[MemoryOperation],
     now: datetime,
-) -> dict[str, Any]:
+    evidence_aliases: dict[str, str],
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     items = [dict(item) for item in memories.get("items", []) if isinstance(item, dict)]
     by_id = {str(item.get("id")): item for item in items}
+    events: list[dict[str, Any]] = []
     for operation in operations:
-        if operation.action == "recall":
-            continue
+        evidence_ids = [evidence_aliases.get(item, item) for item in operation.evidence_ids]
+        target = by_id.get(str(operation.target_id)) if operation.target_id else None
+        memory_id: str
+        previous_content = target.get("content") if target is not None else None
         if operation.action == "forget":
             items = [item for item in items if item.get("id") != operation.target_id]
             by_id.pop(str(operation.target_id), None)
-            continue
-        if operation.action == "correct":
-            target = by_id[str(operation.target_id)]
+            memory_id = str(operation.target_id)
+        elif operation.action == "recall":
+            memory_id = str(operation.target_id)
+        elif operation.action == "integrate":
+            assert target is not None
             target["content"] = operation.content
-            target["evidence_ids"] = operation.evidence_ids
+            target["evidence_ids"] = list(
+                dict.fromkeys([*target.get("evidence_ids", []), *evidence_ids])
+            )
+            target["integrated_at"] = now.isoformat()
+            memory_id = str(operation.target_id)
+        elif operation.action == "correct":
+            assert target is not None
+            target["content"] = operation.content
+            target["evidence_ids"] = evidence_ids
             target["corrected_at"] = now.isoformat()
-            continue
-        item = {
-            "id": f"mem_{uuid.uuid4().hex}",
+            memory_id = str(operation.target_id)
+        else:
+            item = {
+                "id": f"mem_{uuid.uuid4().hex}",
+                "kind": operation.kind,
+                "content": operation.content,
+                "evidence_ids": evidence_ids,
+                "created_at": now.isoformat(),
+            }
+            items.append(item)
+            by_id[item["id"]] = item
+            memory_id = item["id"]
+        event = {
+            "id": f"memory_op_{uuid.uuid4().hex}",
+            "type": "memory_operation",
+            "action": operation.action,
+            "memory_id": memory_id,
             "kind": operation.kind,
-            "content": operation.content,
-            "evidence_ids": operation.evidence_ids,
-            "created_at": now.isoformat(),
+            "evidence_ids": evidence_ids,
+            "occurred_at": now.isoformat(),
         }
-        items.append(item)
-        by_id[item["id"]] = item
-    return {"items": items}
+        if operation.action in {"record", "integrate", "correct"}:
+            event["content"] = operation.content
+        if operation.action in {"integrate", "correct"}:
+            event["previous_content"] = previous_content
+        if operation.user_confirmed:
+            event["user_confirmed"] = True
+        events.append(event)
+    return {"items": items}, events
 
 
 def _accepted_documents(
@@ -472,17 +547,22 @@ def _accepted_documents(
     new_history = [*history]
     if experience is not None:
         new_history.append(experience)
+    evidence_aliases: dict[str, str] = {}
     for index, event in enumerate(bundle.life_events):
+        life_id = f"life_{uuid.uuid4().hex}"
+        evidence_aliases[f"life:{index}"] = life_id
         new_history.append(
             {
-                "id": f"life_{uuid.uuid4().hex}",
-                "candidate_evidence_id": f"life:{index}",
+                "id": life_id,
                 "type": "self_life",
                 "content": event.content,
                 "occurred_at": now.isoformat(),
             }
         )
-    new_memories = _apply_memories(memories, bundle.memory_operations, now)
+    new_memories, memory_events = _apply_memories(
+        memories, bundle.memory_operations, now, evidence_aliases
+    )
+    new_history.extend(memory_events)
     return new_state, new_history, new_memories, pending
 
 
@@ -494,7 +574,8 @@ async def _generate_candidate(
     system: str,
     now: datetime,
     evidence_types: dict[str, str],
-    memory_ids: set[str],
+    memories_by_id: dict[str, dict[str, Any]],
+    user_confirmation_ids: set[str],
     quiet_time: bool = False,
     ambient_time: bool = False,
 ) -> tuple[CandidateBundle | None, int, list[str]]:
@@ -527,7 +608,12 @@ async def _generate_candidate(
             if tool_arguments is None:
                 raise ValueError("模型没有调用 submit_mind_bundle")
             bundle = CandidateBundle.model_validate(tool_arguments)
-            reasons = validate_bundle(bundle, evidence_types=evidence_types, memory_ids=memory_ids)
+            reasons = validate_bundle(
+                bundle,
+                evidence_types=evidence_types,
+                memories_by_id=memories_by_id,
+                user_confirmation_ids=user_confirmation_ids,
+            )
             if quiet_time:
                 if bundle.expression is not None:
                     reasons.append("时间推进不能夹带尚未进入 ambient 阶段的表达")
@@ -582,13 +668,14 @@ async def mind_step(
     if experience_details:
         experience.update(experience_details)
     prompt = _prompt_payload(state, history, memories, experience, current_time)
-    evidence_types = {
-        str(item.get("id")): str(item.get("type")) for item in history[-HISTORY_CONTEXT_LIMIT:]
-    }
+    context_history = _selected_history(history, include_shared_expressions=True)
+    evidence_types = {str(item.get("id")): str(item.get("type")) for item in context_history}
     evidence_types[experience["id"]] = experience["type"]
     memory_items = memories.get("items", [])
-    memory_ids = {
-        str(item.get("id")) for item in memory_items if isinstance(item, dict) and item.get("id")
+    memories_by_id = {
+        str(item.get("id")): item
+        for item in memory_items
+        if isinstance(item, dict) and item.get("id")
     }
     bundle, attempts, reasons = await _generate_candidate(
         provider=provider,
@@ -597,7 +684,8 @@ async def mind_step(
         system=SYSTEM_PROMPT,
         now=current_time,
         evidence_types=evidence_types,
-        memory_ids=memory_ids,
+        memories_by_id=memories_by_id,
+        user_confirmation_ids={experience["id"]} if experience_type == "user_experience" else set(),
     )
     if bundle is not None:
         new_state, new_history, new_memories, pending = _accepted_documents(
@@ -638,12 +726,13 @@ async def advance_time(
     if elapsed < LIFE_STEP_INTERVAL:
         return TimeStepResult(status="not_due")
 
-    evidence_types = {
-        str(item.get("id")): str(item.get("type")) for item in history[-HISTORY_CONTEXT_LIMIT:]
-    }
+    context_history = _selected_history(history, include_shared_expressions=False)
+    evidence_types = {str(item.get("id")): str(item.get("type")) for item in context_history}
     memory_items = memories.get("items", [])
-    memory_ids = {
-        str(item.get("id")) for item in memory_items if isinstance(item, dict) and item.get("id")
+    memories_by_id = {
+        str(item.get("id")): item
+        for item in memory_items
+        if isinstance(item, dict) and item.get("id")
     }
     bundle, attempts, reasons = await _generate_candidate(
         provider=provider,
@@ -659,7 +748,8 @@ async def advance_time(
         system=AMBIENT_TIME_SYSTEM_PROMPT if allow_ambient else TIME_SYSTEM_PROMPT,
         now=current_time,
         evidence_types=evidence_types,
-        memory_ids=memory_ids,
+        memories_by_id=memories_by_id,
+        user_confirmation_ids=set(),
         quiet_time=not allow_ambient,
         ambient_time=allow_ambient,
     )

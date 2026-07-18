@@ -157,12 +157,14 @@ def test_same_step_confirms_shown_before_processing_next_event(api) -> None:
     assert [item["type"] for item in history] == [
         "user_experience",
         "self_life",
+        "memory_operation",
         "shared_expression",
         "user_experience",
         "self_life",
+        "memory_operation",
     ]
-    assert history[2]["expression_id"] == first["expression"]["id"]
-    assert history[3]["content"] == "第二句"
+    assert history[3]["expression_id"] == first["expression"]["id"]
+    assert history[4]["content"] == "第二句"
 
 
 def test_wrong_shown_id_does_not_destroy_pending_expression(api) -> None:
@@ -251,7 +253,7 @@ def test_empty_step_advances_due_life_into_continuous_body_baseline(api) -> None
     assert first["time_status"] == "advanced"
     assert first["baseline"]["baseline"] == "read"
     assert first["expression"] is None
-    assert [item["type"] for item in recorded] == ["self_life"]
+    assert [item["type"] for item in recorded] == ["self_life", "memory_operation"]
     assert provider.calls == 1
 
     second = client.post("/api/body/step", json={}).json()
@@ -276,12 +278,18 @@ def test_present_time_step_keeps_ambient_pending_until_body_reports_shown(api) -
     assert first["time_status"] == "advanced"
     assert expression["kind"] == "ambient"
     assert expression["text"] == "我刚读完窗边这一页，纸上还留着一点晒过的暖意。"
-    assert [item["type"] for item in _history(data_dir)] == ["self_life"]
+    assert [item["type"] for item in _history(data_dir)] == [
+        "self_life",
+        "memory_operation",
+    ]
 
     repeated = client.post("/api/body/step", json={"presence": presence}).json()
     assert repeated["time_status"] == "waiting_for_shown"
     assert repeated["expression"] == expression
-    assert [item["type"] for item in _history(data_dir)] == ["self_life"]
+    assert [item["type"] for item in _history(data_dir)] == [
+        "self_life",
+        "memory_operation",
+    ]
     assert provider.calls == 1
 
     shown = client.post(
@@ -291,7 +299,11 @@ def test_present_time_step_keeps_ambient_pending_until_body_reports_shown(api) -
     assert shown["shown_confirmed"] is True
     assert shown["expression"] is None
     recorded = _history(data_dir)
-    assert [item["type"] for item in recorded] == ["self_life", "shared_expression"]
+    assert [item["type"] for item in recorded] == [
+        "self_life",
+        "memory_operation",
+        "shared_expression",
+    ]
     assert recorded[-1]["expression_kind"] == "ambient"
 
 
@@ -316,7 +328,10 @@ def test_absent_or_fullscreen_time_step_stays_silent(api, presence) -> None:  # 
 
     assert response["time_status"] == "advanced"
     assert response["expression"] is None
-    assert [item["type"] for item in _history(data_dir)] == ["self_life"]
+    assert [item["type"] for item in _history(data_dir)] == [
+        "self_life",
+        "memory_operation",
+    ]
     assert provider.calls == 1
 
 

@@ -127,7 +127,11 @@ async def test_valid_bundle_commits_whole_bundle_but_not_unshown_expression(tmp_
     assert state["condition"]["attention"] == "在听"
     assert state["pending_expression"]["text"] == "今天辛苦了。我在这儿。"
     assert state["pending_expression"]["kind"] == "direct"
-    assert [item["type"] for item in history] == ["user_experience", "self_life"]
+    assert [item["type"] for item in history] == [
+        "user_experience",
+        "self_life",
+        "memory_operation",
+    ]
     assert all(item.get("content") != "今天辛苦了。我在这儿。" for item in history)
     assert memories["items"][0]["content"] == "用户今天有点累"
     assert failures == []
@@ -190,7 +194,7 @@ async def test_own_life_event_cannot_be_second_example_for_user_pattern(tmp_path
     bad = _valid_bundle("我听见了。")
     bad["memory_operations"] = [
         {
-            "action": "integrate",
+            "action": "record",
             "kind": "pattern",
             "content": "用户累时总会来找我",
             "evidence_ids": ["INCOMING", "life:0"],
@@ -207,7 +211,215 @@ async def test_own_life_event_cannot_be_second_example_for_user_pattern(tmp_path
     assert result.committed is True
     assert result.attempts == 2
     assert all(item["kind"] != "pattern" for item in memories["items"])
-    assert "少于两条用户或共同经历证据" in failures[0]["reasons"][0]
+    assert "没有两条用户或共同经历证据" in failures[0]["reasons"][0]
+
+
+@pytest.mark.asyncio
+async def test_four_memory_kinds_record_canonical_evidence_in_one_mind_step(tmp_path) -> None:
+    files = MindFiles(tmp_path)
+    now = datetime(2026, 7, 18, 10, 0, tzinfo=UTC)
+    state, history, memories = files.load(now)
+    history.extend(
+        [
+            {
+                "id": "exp_earlier",
+                "type": "user_experience",
+                "content": "忙完时我会把桌子收干净。",
+                "occurred_at": (now - timedelta(days=2)).isoformat(),
+            },
+            {
+                "id": "shown_earlier",
+                "type": "shared_expression",
+                "content": "那我陪你安静坐一会儿。",
+                "expression_id": "expr_earlier",
+                "expression_kind": "direct",
+                "occurred_at": (now - timedelta(days=2)).isoformat(),
+            },
+        ]
+    )
+    files.commit(state, history, memories)
+    bundle = _valid_bundle("你收好桌面的时候，像是也给自己腾出了一点地方。")
+    bundle["memory_operations"] = [
+        {
+            "action": "record",
+            "kind": "user_fact",
+            "content": "用户忙完了会收拾桌面",
+            "evidence_ids": ["INCOMING"],
+        },
+        {
+            "action": "record",
+            "kind": "self_experience",
+            "content": "今天合上书后收了收自己的桌面",
+            "evidence_ids": ["life:0"],
+        },
+        {
+            "action": "record",
+            "kind": "shared_experience",
+            "content": "我们有过一次忙完后安静坐着的对话",
+            "evidence_ids": ["exp_earlier", "shown_earlier"],
+        },
+        {
+            "action": "record",
+            "kind": "pattern",
+            "content": "用户忙完后常会整理桌面",
+            "evidence_ids": ["exp_earlier", "INCOMING"],
+        },
+    ]
+
+    result = await mind_step(
+        "今天忙完，我也把桌面收干净了。",
+        provider=StubProvider([bundle]),
+        files=files,
+        now=now,
+    )
+
+    _, recorded, saved, failures = _read(files)
+    by_kind = {item["kind"]: item for item in saved["items"]}
+    life_id = next(item["id"] for item in recorded if item["type"] == "self_life")
+    operations = [item for item in recorded if item["type"] == "memory_operation"]
+    assert result.committed is True
+    assert set(by_kind) == {
+        "user_fact",
+        "self_experience",
+        "shared_experience",
+        "pattern",
+    }
+    assert by_kind["self_experience"]["evidence_ids"] == [life_id]
+    assert "life:0" not in json.dumps(saved, ensure_ascii=False)
+    assert by_kind["pattern"]["evidence_ids"][0] == "exp_earlier"
+    assert [item["action"] for item in operations] == ["record"] * 4
+    assert failures == []
+
+
+@pytest.mark.asyncio
+async def test_integrate_recall_correct_and_forget_have_distinct_traced_effects(tmp_path) -> None:
+    files = MindFiles(tmp_path)
+    now = datetime(2026, 7, 18, 11, 0, tzinfo=UTC)
+    state, history, memories = files.load(now)
+    history.append(
+        {
+            "id": "exp_old",
+            "type": "user_experience",
+            "content": "忙完时我会收桌面。",
+            "occurred_at": (now - timedelta(days=1)).isoformat(),
+        }
+    )
+    memories["items"] = [
+        {
+            "id": "mem_user",
+            "kind": "user_fact",
+            "content": "用户会收拾桌面",
+            "evidence_ids": ["exp_old"],
+            "created_at": (now - timedelta(days=1)).isoformat(),
+        },
+        {
+            "id": "mem_self",
+            "kind": "self_experience",
+            "content": "在窗边读过书",
+            "evidence_ids": ["life_old"],
+            "created_at": (now - timedelta(days=1)).isoformat(),
+        },
+        {
+            "id": "mem_shared",
+            "kind": "shared_experience",
+            "content": "一次已经不需要长期留下的闲聊",
+            "evidence_ids": ["exp_old"],
+            "created_at": (now - timedelta(days=1)).isoformat(),
+        },
+        {
+            "id": "mem_pattern",
+            "kind": "pattern",
+            "content": "用户总在夜里整理桌面",
+            "evidence_ids": ["exp_old"],
+            "created_at": (now - timedelta(days=1)).isoformat(),
+        },
+    ]
+    files.commit(state, history, memories)
+    bundle = _valid_bundle("原来不只是在夜里，是忙完以后。")
+    bundle["memory_operations"] = [
+        {
+            "action": "integrate",
+            "kind": "user_fact",
+            "target_id": "mem_user",
+            "content": "用户忙完后会收拾桌面",
+            "evidence_ids": ["INCOMING"],
+        },
+        {
+            "action": "recall",
+            "kind": "self_experience",
+            "target_id": "mem_self",
+            "evidence_ids": [],
+        },
+        {
+            "action": "correct",
+            "kind": "pattern",
+            "target_id": "mem_pattern",
+            "content": "用户忙完后常会整理桌面，不限于夜里",
+            "evidence_ids": ["exp_old", "INCOMING"],
+        },
+        {
+            "action": "forget",
+            "kind": "shared_experience",
+            "target_id": "mem_shared",
+            "evidence_ids": [],
+        },
+    ]
+
+    result = await mind_step(
+        "我不是只在夜里收桌子，主要是忙完以后会收。",
+        provider=StubProvider([bundle]),
+        files=files,
+        now=now,
+    )
+
+    _, recorded, saved, failures = _read(files)
+    by_id = {item["id"]: item for item in saved["items"]}
+    operations = [item for item in recorded if item["type"] == "memory_operation"]
+    assert result.committed is True
+    assert by_id["mem_user"]["evidence_ids"][0] == "exp_old"
+    assert len(by_id["mem_user"]["evidence_ids"]) == 2
+    assert by_id["mem_self"]["content"] == "在窗边读过书"
+    assert by_id["mem_pattern"]["content"] == "用户忙完后常会整理桌面，不限于夜里"
+    assert "mem_shared" not in by_id
+    assert [item["action"] for item in operations] == [
+        "integrate",
+        "recall",
+        "correct",
+        "forget",
+    ]
+    corrected = next(item for item in operations if item["action"] == "correct")
+    assert corrected["previous_content"] == "用户总在夜里整理桌面"
+    assert failures == []
+
+
+@pytest.mark.asyncio
+async def test_pattern_with_one_example_requires_explicit_user_confirmation(tmp_path) -> None:
+    files = MindFiles(tmp_path)
+    bad = _valid_bundle()
+    bad["memory_operations"] = [
+        {
+            "action": "record",
+            "kind": "pattern",
+            "content": "用户明确说自己忙完后习惯收桌面",
+            "evidence_ids": ["INCOMING"],
+        }
+    ]
+    confirmed = json.loads(json.dumps(bad, ensure_ascii=False))
+    confirmed["memory_operations"][0]["user_confirmed"] = True
+
+    result = await mind_step(
+        "我确认一下：我忙完后就是习惯收桌面。",
+        provider=StubProvider([bad, confirmed]),
+        files=files,
+    )
+
+    _, recorded, saved, failures = _read(files)
+    operation = next(item for item in recorded if item["type"] == "memory_operation")
+    assert result.committed is True
+    assert result.attempts == 2
+    assert saved["items"][0]["kind"] == "pattern"
+    assert operation["user_confirmed"] is True
+    assert "也没有用户确认" in failures[0]["reasons"][0]
 
 
 @pytest.mark.asyncio
@@ -243,8 +455,8 @@ async def test_due_time_step_commits_own_life_and_baseline_without_expression(tm
     assert result.status == "advanced"
     assert state["condition"]["baseline"] == "read"
     assert state["pending_expression"] is None
-    assert [item["type"] for item in history] == ["self_life"]
-    assert memories["items"][0]["evidence_ids"] == ["life:0"]
+    assert [item["type"] for item in history] == ["self_life", "memory_operation"]
+    assert memories["items"][0]["evidence_ids"] == [history[0]["id"]]
     assert failures == []
 
     second = await advance_time(
@@ -273,7 +485,7 @@ async def test_time_step_rejects_expression_before_committing_whole_retry(tmp_pa
     assert result.status == "advanced"
     assert result.attempts == 2
     assert state["pending_expression"] is None
-    assert len(history) == 1
+    assert len(history) == 2
     assert failures[0]["candidate_raw"]
     assert "时间推进不能夹带" in failures[0]["reasons"][0]
 
@@ -310,7 +522,11 @@ async def test_present_time_step_can_offer_ambient_without_reading_unanswered_ex
     assert result.status == "advanced"
     assert state["pending_expression"]["kind"] == "ambient"
     assert state["pending_expression"]["text"] == "窗边这一页刚好读完了。"
-    assert [item["type"] for item in recorded] == ["shared_expression", "self_life"]
+    assert [item["type"] for item in recorded] == [
+        "shared_expression",
+        "self_life",
+        "memory_operation",
+    ]
     assert prompt["selected_history"] == []
     assert failures == []
 
