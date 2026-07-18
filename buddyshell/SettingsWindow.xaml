@@ -1,7 +1,7 @@
 <Window x:Class="BuddyShell.SettingsWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="小布设置" Width="410" Height="510" WindowStartupLocation="CenterOwner"
+        Title="小布设置" Width="410" Height="410" WindowStartupLocation="CenterOwner"
         ResizeMode="NoResize" Background="#F4F5F7" FontFamily="Microsoft YaHei UI">
     <Grid Margin="20,17">
         <Grid.RowDefinitions>
@@ -16,17 +16,17 @@
         <Border Grid.Row="1" Background="White" BorderBrush="#E1E4E9"
                 BorderThickness="1" CornerRadius="14" Padding="14">
             <StackPanel>
-                <TextBlock Text="桥地址" FontSize="11" Foreground="#6E7581" />
-                <TextBox x:Name="BridgeUrl" Height="32" Margin="0,4,0,10" />
-                <TextBlock Text="VPet 素材目录（可留空自动寻找）" FontSize="11" Foreground="#6E7581" />
-                <TextBox x:Name="PetAssetRoot" Height="32" Margin="0,4,0,10" />
                 <TextBlock Text="离开多少分钟后视为不在场" FontSize="11" Foreground="#6E7581" />
-                <TextBox x:Name="IdlePauseMinutes" Height="32" Margin="0,4,0,14" />
+                <TextBox x:Name="IdlePauseMinutes" Height="32" Margin="0,4,0,10" />
+                <Button Content="更换 OpenRouter API key" Click="ChangeKey_Click"
+                        Height="34" Margin="0,0,0,14" />
                 <TextBlock TextWrapping="Wrap" FontSize="10" Foreground="#7A818D">
                     VPet 素材版权归虚拟主播模拟器制作组；当前仅按非商用条件使用。
                     <Hyperlink NavigateUri="https://github.com/LorisYounger/VPet"
                                RequestNavigate="AboutLink_RequestNavigate">项目主页</Hyperlink>
                 </TextBlock>
+                <TextBlock Text="本包只允许免费分发，不得出售其中的动画文件。"
+                           TextWrapping="Wrap" Margin="0,8,0,0" FontSize="10" Foreground="#7A818D" />
             </StackPanel>
         </Border>
         <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,12,0,0">

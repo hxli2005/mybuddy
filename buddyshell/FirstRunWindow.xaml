@@ -1,0 +1,32 @@
+<Window x:Class="BuddyShell.FirstRunWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="第一次见面" Width="430" Height="330"
+        WindowStartupLocation="CenterScreen" ResizeMode="NoResize"
+        Background="#F4F5F7" FontFamily="Microsoft YaHei UI">
+    <Grid Margin="28,24">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+        <StackPanel>
+            <TextBlock Text="让小布醒来" FontSize="23" FontWeight="SemiBold" Foreground="#272C35" />
+            <TextBlock Text="只需要填一次你自己的 OpenRouter API key。"
+                       Margin="0,5,0,0" Foreground="#6E7581" />
+        </StackPanel>
+        <StackPanel Grid.Row="1" Margin="0,24,0,0">
+            <TextBlock Text="OpenRouter API key" FontSize="12" Foreground="#4F5662" />
+            <PasswordBox x:Name="ApiKey" Height="36" Margin="0,6,0,12"
+                         Padding="8,6" PasswordChar="●" />
+            <TextBlock TextWrapping="Wrap" FontSize="11" Foreground="#6E7581" LineHeight="18">
+                对话会发送给 OpenRouter 及所选模型供应商，并由你自己的账户产生费用。
+                key 只会用 Windows 当前用户加密后保存在这台电脑。
+            </TextBlock>
+        </StackPanel>
+        <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right">
+            <Button Content="取消" IsCancel="True" Width="78" Height="36" />
+            <Button Content="开始" Click="Start_Click" Width="78" Height="36" Margin="9,0,0,0" />
+        </StackPanel>
+    </Grid>
+</Window>

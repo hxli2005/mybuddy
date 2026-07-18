@@ -74,6 +74,10 @@ MyBuddy mini 不是任务助手、聊天机器人、角色卡或通用 Agent 框
 反射，不在数小时后补成她的经历；presence 只在重连后报告当前值。身体仅持久化
 一个 `last_shown_id` 收据并重复上报，不维护第二份状态、历史或通用 outbox。
 
+小范围分享只交付免费 Windows zip：身体与心智桥均自包含，内置已归属的
+必需动画子集；收件人自备 OpenRouter key，key 只用 Windows 当前用户加密
+落盘。身体单实例、数据目录 OS 锁和父进程存活共同保证只有一个写者。
+
 旧身体可保留窗口、动画、气泡、触碰、presence 和离线基线；必须移除身体侧的
 PhysioInjection、TouchEscalation、主动次数/冷却、warmth/day index、feed 记忆
 旁路、pending drain/digest、feedback 和协议兼容分支。旧测试只作行为证据，

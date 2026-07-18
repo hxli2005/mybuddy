@@ -14,7 +14,6 @@ public static class AssetLocator
             Path.Combine(AppContext.BaseDirectory, "assets", "pet"),
             Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "assets", "pet")),
             FindSteamPetRoot(),
-            @"D:\steam\steamapps\common\VPet\mod\0000_core\pet\vup",
         };
         var found = candidates.FirstOrDefault(path =>
             !string.IsNullOrWhiteSpace(path) && Directory.Exists(path));

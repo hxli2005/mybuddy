@@ -26,6 +26,21 @@ public partial class App : Application
             LogException(args.ExceptionObject as Exception ?? new Exception("Unknown fatal error"));
         };
         base.OnStartup(e);
+
+        var settings = SettingsStore.Load();
+        if (!SettingsStore.HasApiKey(settings))
+        {
+            var firstRun = new FirstRunWindow();
+            if (firstRun.ShowDialog() != true)
+            {
+                Shutdown();
+                return;
+            }
+        }
+        var main = new MainWindow();
+        MainWindow = main;
+        ShutdownMode = ShutdownMode.OnMainWindowClose;
+        main.Show();
     }
 
     protected override void OnExit(ExitEventArgs e)

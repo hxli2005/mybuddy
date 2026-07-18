@@ -36,5 +36,17 @@ Windows 身体：
 .\.dotnet-sdk\dotnet.exe run --project .\buddyshell\BuddyShell.csproj
 ```
 
+## 免费分享 zip
+
+构建机需有授权可用的 VPet `0000_core/pet/vup` 素材目录：
+
+```powershell
+.\scripts\build_share.ps1 -PetRoot "D:\path\to\0000_core\pet\vup"
+```
+
+产物为 `dist/MyBuddy-S11-win-x64.zip`；收件人不需安装 Python、.NET 或 Steam，
+解压后双击 `BuddyShell.exe`，首次只输入自己的 OpenRouter key。包内
+`THIRD_PARTY_NOTICES.txt` 记录动画归属与免费分发边界。
+
 核心不包含任务工具、外部平台、数据库、调度器、后台队列或第二套协议。桌面身体
 只保留窗口、动画、气泡、聊天、触碰、presence、shown 收据和离线安全姿态。

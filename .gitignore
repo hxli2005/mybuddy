@@ -53,6 +53,7 @@ buddyshell.Tests/obj/
 config.yaml
 
 dist-share/
+.share-build/
 
 # 本地学习材料(不提交)
 study-guide/

@@ -5,7 +5,7 @@ import pytest
 
 from mybuddy.body_api import create_body_app
 from mybuddy.llm import BaseLLMProvider, LLMResponse, ToolCall
-from mybuddy.mind import MindFiles
+from mybuddy.mind import STATIC_CATCH, MindFiles
 
 
 class StubProvider(BaseLLMProvider):
@@ -67,6 +67,16 @@ class StubProvider(BaseLLMProvider):
         )
 
 
+class UnavailableProvider(BaseLLMProvider):
+    async def generate(self, messages, tools=None, **kwargs):  # noqa: ANN001, ANN202
+        raise RuntimeError("network down")
+
+
+class RejectingProvider(BaseLLMProvider):
+    async def generate(self, messages, tools=None, **kwargs):  # noqa: ANN001, ANN202
+        return LLMResponse(tool_calls=[ToolCall(id="bad", name="submit_mind_bundle", arguments={})])
+
+
 @pytest.fixture
 def api(tmp_path):
     pytest.importorskip("fastapi")
@@ -108,6 +118,7 @@ def test_expression_is_non_destructive_and_event_id_is_idempotent(api) -> None:
         "shown_confirmed": True,
         "event_status": "duplicate",
         "time_status": "not_due",
+        "mind_status": "not_run",
     }
     after_shown = _history(data_dir)
     assert after_shown[:-1] == before_shown
@@ -177,6 +188,93 @@ def test_wrong_shown_id_does_not_destroy_pending_expression(api) -> None:
 
     assert wrong["shown_confirmed"] is False
     assert wrong["expression"] == first["expression"]
+
+
+@pytest.mark.parametrize(
+    ("provider", "expected"),
+    [(UnavailableProvider(), "unavailable"), (RejectingProvider(), "rejected")],
+)
+def test_mind_status_does_not_call_a_fallback_connected(provider, expected, tmp_path) -> None:  # noqa: ANN001
+    pytest.importorskip("fastapi")
+    from fastapi.testclient import TestClient
+
+    client = TestClient(create_body_app(data_dir=tmp_path, provider=provider))
+    response = client.post(
+        "/api/body/step",
+        json={"event": {"event_id": "chat-failure", "type": "chat", "content": "在吗"}},
+    ).json()
+
+    assert response["event_status"] == "processed"
+    assert response["mind_status"] == expected
+    assert response["expression"]["text"] == STATIC_CATCH
+
+
+def test_cross_day_unshown_ambient_is_discarded_without_erasing_life(api) -> None:
+    client, provider, data_dir = api
+    files = MindFiles(data_dir)
+    now = datetime.now(UTC).astimezone()
+    state, history, memories = files.load(now)
+    history.append({"id": "life-kept", "type": "self_life", "content": "昨晚读完一页。"})
+    memories["items"] = [{"id": "memory-kept", "kind": "self_experience"}]
+    state["pending_expression"] = {
+        "id": "expr-stale",
+        "text": "我刚读完这一页。",
+        "created_at": (now - timedelta(days=1)).isoformat(),
+        "kind": "ambient",
+    }
+    files.commit(state, history, memories)
+
+    response = client.post("/api/body/step", json={}).json()
+    final_state, final_history, final_memories = files.load(now)
+
+    assert response["expression"] is None
+    assert response["mind_status"] == "not_run"
+    assert final_state["pending_expression"] is None
+    assert final_history == history
+    assert final_memories == memories
+    assert provider.calls == 0
+
+
+def test_stale_ambient_with_matching_receipt_is_confirmed_before_discard(api) -> None:
+    client, provider, data_dir = api
+    files = MindFiles(data_dir)
+    now = datetime.now(UTC).astimezone()
+    state, history, memories = files.load(now)
+    state["pending_expression"] = {
+        "id": "expr-stale-shown",
+        "text": "昨晚真正显示过的话。",
+        "created_at": (now - timedelta(days=1)).isoformat(),
+        "kind": "ambient",
+    }
+    files.commit(state, history, memories)
+
+    response = client.post("/api/body/step", json={"shown_id": "expr-stale-shown"}).json()
+
+    assert response["shown_confirmed"] is True
+    assert _history(data_dir)[-1]["content"] == "昨晚真正显示过的话。"
+    assert provider.calls == 0
+
+
+@pytest.mark.parametrize("kind", ["direct", "ambient"])
+def test_direct_or_same_day_expression_is_not_discarded(api, kind) -> None:  # noqa: ANN001
+    client, provider, data_dir = api
+    files = MindFiles(data_dir)
+    now = datetime.now(UTC).astimezone()
+    state, history, memories = files.load(now)
+    created_at = (now - timedelta(days=1)).isoformat() if kind == "direct" else now.isoformat()
+    state["pending_expression"] = {
+        "id": f"expr-{kind}",
+        "text": "仍应等待显示。",
+        "created_at": created_at,
+        "kind": kind,
+    }
+    files.commit(state, history, memories)
+
+    response = client.post("/api/body/step", json={}).json()
+
+    assert response["expression"]["id"] == f"expr-{kind}"
+    assert response["time_status"] == "waiting_for_shown"
+    assert provider.calls == 0
 
 
 def test_request_rejects_missing_event_id_and_extra_protocol_fields(api) -> None:

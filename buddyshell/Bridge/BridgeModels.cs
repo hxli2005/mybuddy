@@ -10,6 +10,7 @@ public sealed class ShellSettings
     public double? WindowLeft { get; set; }
     public double? WindowTop { get; set; }
     public string? LastShownId { get; set; }
+    public string? ProtectedApiKey { get; set; }
 }
 
 public sealed class BodyStepRequest
@@ -62,6 +63,9 @@ public sealed class BodyStepResponse
 
     [JsonPropertyName("time_status")]
     public string TimeStatus { get; set; } = "not_due";
+
+    [JsonPropertyName("mind_status")]
+    public string MindStatus { get; set; } = "not_run";
 }
 
 public sealed class PendingBodyExpression

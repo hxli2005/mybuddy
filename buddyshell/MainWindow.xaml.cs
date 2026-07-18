@@ -12,6 +12,7 @@ public enum ConnectionState { Connected, Warning, Error }
 public partial class MainWindow : Window
 {
     private readonly ShellSettings _settings = SettingsStore.Load();
+    private EngineHost? _engine;
     private IAnimationController? _animationController;
     private BridgeClient? _client;
     private StateLoop? _stateLoop;
@@ -82,6 +83,7 @@ public partial class MainWindow : Window
             AnimationHostSlot.Content = _animationController.View;
             UpdateAnimationBaseline();
 
+            _engine = EngineHost.Start(_settings);
             _client = new BridgeClient(_settings);
             _presence = new Presence(_settings);
             _stateLoop = new StateLoop(
@@ -120,7 +122,7 @@ public partial class MainWindow : Window
                 ShowBodyExpression(response.Expression);
                 displayed = true;
             }
-            SetConnectionState("已连接", ConnectionState.Connected);
+            SetMindConnectionState(response);
         });
         if (displayed) await ConfirmShownAsync();
     }
@@ -144,7 +146,7 @@ public partial class MainWindow : Window
                 ShowBodyExpression(response.Expression);
                 await ConfirmShownAsync();
             }
-            SetConnectionState("已连接", ConnectionState.Connected);
+            SetMindConnectionState(response);
         }
         catch (BridgeRequestException exception)
         {
@@ -193,7 +195,7 @@ public partial class MainWindow : Window
                 await ConfirmShownAsync();
             }
             _animationController.Complete(animationId, new AnimationOutcome(AnimationIntent.Happy));
-            SetConnectionState("已连接", ConnectionState.Connected);
+            SetMindConnectionState(response);
         }
         catch (BridgeRequestException exception)
         {
@@ -265,6 +267,25 @@ public partial class MainWindow : Window
         UpdateAnimationBaseline();
     }
 
+    private void SetMindConnectionState(BodyStepResponse response)
+    {
+        switch (response.MindStatus)
+        {
+            case "accepted":
+                SetConnectionState("已连接", ConnectionState.Connected);
+                break;
+            case "rejected":
+                SetConnectionState("已接住，但这次候选未通过校验", ConnectionState.Warning);
+                break;
+            case "unavailable":
+                SetConnectionState("模型暂时不可用，这句是诚实的安全接住", ConnectionState.Warning);
+                break;
+            default:
+                SetConnectionState("心智桥在线", ConnectionState.Connected);
+                break;
+        }
+    }
+
     private void UpdateAnimationBaseline()
     {
         var baseline = _bodyBaseline?.GetValueOrDefault("baseline", "idle") ?? "idle";
@@ -303,5 +324,6 @@ public partial class MainWindow : Window
         _tray?.Dispose();
         _client?.Dispose();
         _animationController?.Dispose();
+        _engine?.Dispose();
     }
 }

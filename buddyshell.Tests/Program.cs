@@ -3,7 +3,6 @@ using BuddyShell.Bridge;
 using System.IO;
 using System.Text.Json;
 using System.Windows;
-using System.Windows.Controls;
 
 namespace BuddyShell.Tests;
 
@@ -18,6 +17,7 @@ internal static class Program
             ("missing state stays on safe baseline", MissingStateUsesSafeBaseline),
             ("touch is transient and baseline returns", TouchReturnsToBaseline),
             ("chat think completes without a presentation queue", ChatCompletesWithoutQueue),
+            ("API key is DPAPI protected", ApiKeyIsProtected),
         };
         var failed = 0;
         foreach (var test in tests)
@@ -48,6 +48,30 @@ internal static class Program
         Contains(json, "shown_id");
         Contains(json, "presence");
         Contains(json, "event_id");
+        var response = JsonSerializer.Serialize(new BodyStepResponse { MindStatus = "unavailable" });
+        Contains(response, "mind_status");
+        Contains(response, "unavailable");
+    }
+
+    private static void ApiKeyIsProtected()
+    {
+        var previous = Environment.GetEnvironmentVariable("BUDDYSHELL_DATA_DIR");
+        var root = Path.Combine(Path.GetTempPath(), "buddyshell-mini-settings", Guid.NewGuid().ToString("N"));
+        Environment.SetEnvironmentVariable("BUDDYSHELL_DATA_DIR", root);
+        try
+        {
+            var settings = new ShellSettings();
+            const string secret = "sk-or-test-not-a-real-key";
+            SettingsStore.SaveApiKey(settings, secret);
+            Equal(secret, SettingsStore.ReadApiKey(settings));
+            var disk = File.ReadAllText(SettingsStore.SettingsPath);
+            Equal(false, disk.Contains(secret, StringComparison.Ordinal));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("BUDDYSHELL_DATA_DIR", previous);
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
     }
 
     private static void MissingStateUsesSafeBaseline()
@@ -170,9 +194,9 @@ internal static class Program
         }
     }
 
-    private sealed class RecordingRenderer : Border, IAnimationRenderer
+    private sealed class RecordingRenderer : IAnimationRenderer
     {
-        public UIElement View => this;
+        public UIElement View { get; } = new();
         public event EventHandler<TouchDetectedEventArgs>? TouchStarted;
         public event EventHandler<TouchDetectedEventArgs>? TouchDetected { add { } remove { } }
         public void Render(CompositedFrame frame) { }

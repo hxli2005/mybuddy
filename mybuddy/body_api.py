@@ -67,6 +67,7 @@ class BodyStepResponse(BaseModel):
     shown_confirmed: bool
     event_status: Literal["none", "processed", "duplicate", "waiting_for_shown"]
     time_status: Literal["not_due", "advanced", "failed", "waiting_for_shown"]
+    mind_status: Literal["not_run", "accepted", "rejected", "unavailable"]
 
 
 class BodyBridge:
@@ -82,12 +83,15 @@ class BodyBridge:
         async with self._write_lock:
             now = datetime.now(UTC).astimezone()
             shown_confirmed = self._confirm_shown(request.shown_id, now)
-            event_status = await self._process_event(request.event, now)
-            time_status = (
+            self._discard_stale_ambient(now)
+            event_status, mind_status = await self._process_event(request.event, now)
+            time_status, time_mind_status = (
                 await self._advance_time(now, request.presence)
                 if request.event is None
-                else "not_due"
+                else ("not_due", "not_run")
             )
+            if mind_status == "not_run":
+                mind_status = time_mind_status
             state, _, _ = self.files.load(now)
             pending = state.get("pending_expression")
             return BodyStepResponse(
@@ -98,6 +102,7 @@ class BodyBridge:
                 shown_confirmed=shown_confirmed,
                 event_status=event_status,
                 time_status=time_status,
+                mind_status=mind_status,
             )
 
     def _confirm_shown(self, shown_id: str | None, now: datetime) -> bool:
@@ -122,17 +127,37 @@ class BodyBridge:
         self.files.commit(state, history, memories)
         return True
 
+    def _discard_stale_ambient(self, now: datetime) -> bool:
+        state, history, memories = self.files.load(now)
+        pending = state.get("pending_expression")
+        if not isinstance(pending, dict) or pending.get("kind") != "ambient":
+            return False
+        try:
+            created_at = datetime.fromisoformat(str(pending["created_at"]))
+            if created_at.tzinfo is None:
+                created_at = created_at.replace(tzinfo=now.tzinfo)
+        except (KeyError, TypeError, ValueError):
+            return False
+        if created_at.astimezone(now.tzinfo).date() >= now.date():
+            return False
+        state["pending_expression"] = None
+        self.files.commit(state, history, memories)
+        return True
+
     async def _process_event(
         self, event: BodyEvent | None, now: datetime
-    ) -> Literal["none", "processed", "duplicate", "waiting_for_shown"]:
+    ) -> tuple[
+        Literal["none", "processed", "duplicate", "waiting_for_shown"],
+        Literal["not_run", "accepted", "rejected", "unavailable"],
+    ]:
         if event is None:
-            return "none"
+            return "none", "not_run"
         state, _, _ = self.files.load(now)
         recent = [item for item in state.get("recent_event_ids", []) if isinstance(item, str)]
         if event.event_id in recent:
-            return "duplicate"
+            return "duplicate", "not_run"
         if state.get("pending_expression") is not None:
-            return "waiting_for_shown"
+            return "waiting_for_shown", "not_run"
 
         if event.type == "chat":
             result = await mind_step(
@@ -158,16 +183,20 @@ class BodyBridge:
             state["pending_expression"] = result.pending_expression.model_dump()
             state["recent_event_ids"] = [*recent, event.event_id][-RECENT_EVENT_LIMIT:]
             self.files.commit(state, history, memories)
-        return "processed"
+        mind_status = "accepted" if result.committed else _failure_status(result.rejection_reasons)
+        return "processed", mind_status
 
     async def _advance_time(
         self, now: datetime, presence: BodyPresence | None
-    ) -> Literal["not_due", "advanced", "failed", "waiting_for_shown"]:
+    ) -> tuple[
+        Literal["not_due", "advanced", "failed", "waiting_for_shown"],
+        Literal["not_run", "accepted", "rejected", "unavailable"],
+    ]:
         state, _, _ = self.files.load(now)
         if state.get("pending_expression") is not None:
-            return "waiting_for_shown"
+            return "waiting_for_shown", "not_run"
         if self._next_time_attempt_at is not None and now < self._next_time_attempt_at:
-            return "not_due"
+            return "not_due", "not_run"
         result = await advance_time(
             provider=self.provider,
             files=self.files,
@@ -178,7 +207,11 @@ class BodyBridge:
             self._next_time_attempt_at = now + TIME_RETRY_INTERVAL
         else:
             self._next_time_attempt_at = None
-        return result.status
+        if result.status == "advanced":
+            return result.status, "accepted"
+        if result.status == "failed":
+            return result.status, _failure_status(result.rejection_reasons)
+        return result.status, "not_run"
 
     def _ambient_allowed(self, presence: BodyPresence | None, now: datetime) -> bool:
         if presence is None or not presence.present or presence.fullscreen:
@@ -194,6 +227,16 @@ class BodyBridge:
             if occurred_at.astimezone(now.tzinfo).date() == now.date():
                 return False
         return True
+
+
+def _failure_status(
+    reasons: list[str],
+) -> Literal["rejected", "unavailable"]:
+    return (
+        "unavailable"
+        if any(reason.startswith("模型调用失败：") for reason in reasons)
+        else "rejected"
+    )
 
 
 def create_body_app(

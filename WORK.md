@@ -8,7 +8,7 @@
 - 当前写入者：无
 - 当前任务：无
 - 最近完成：S10 真实-key触碰/quiet/ambient三腿验收
-- 下一任务：S11 BLOCKED；陈旧 ambient 在重启后“弃或送”待所有者一句话裁决
+- 下一任务：S11 BLOCKED；代码与 zip 已就绪，只差无 Python/.NET/Steam 干净 Windows 截图验收
 - 工作区要求：保持提交后干净；新任务先更新本板再领取
 
 ## 任务流水线
@@ -44,19 +44,18 @@
 
 ## 最近一次交接
 
-- 任务：S10 真实-key触碰/quiet/ambient三腿验收
+- 任务：S11 免费 BYOK zip 首次运行（代码已就绪，干净机验收阻塞）
 - 提交：本提交
-- 跑过的命令：Python `45 passed`；ruff、format、diff检查；WPF编译`0 warnings / 0 errors`；身体测试`4/4`；OpenRouter `deepseek/deepseek-v3.2`真实触碰、quiet、ambient与shown
-- 触碰证据：`data/mini-s10-touch-real/`保留首次实测拒绝，定位为`self_experience`漏接`body_touch`；修复后的`data/mini-s10-touch-real-fixed/`按`body_touch→memory_operation→shared_expression`提交，记忆逐id引用原始触碰，failures为0
-- quiet证据：`data/mini-s10-quiet-real/`第二次候选推进三件自身生活并落三条有证据记忆；第一次仅为无target的`integrate`结构错误，没有触碰词表误伤，最终无表达、pending为空
-- ambient证据：`data/mini-s10-ambient-real/`一次通过三件自身生活、一条记忆与shown，failures为0，最终baseline为read、pending为空
-- 她显示的话：“嗯？有人碰了我的头。”、“\"从明天起，做一个幸福的人...\" 轻声念着，目光停留在泛黄的书页上。”
-- 结构修复：`self_experience`现在接受自身生活或`body_touch`证据；触碰内容仍须逐条引用`body_touch`，聊天不能洗白；没有实证支持放宽宁拒词表
-- ACL：`.pytest-cache-s7/`、`data/mini-s8-evidence/`、`data/mini-s9-replay/`已递归补普通用户`li`权限，并以该用户读回三个样本文件
-- 尺寸：形状测试同口径为29个机器侧Python/C#文件、3448/5000行，断言通过
-- 模型说明：真实key来自现有配置，日志未输出key；首次失败目录与三腿成功目录均原样保留
-- 剩余阻塞：无
-- 她哪里更活了：身体真正碰到她时，那一下现在能成为她自己的经历；没人碰她时，她也能安静过自己的午后并只在实际显示后留下话
+- 实现：首次只收 OpenRouter key 并用 Windows CurrentUser DPAPI 加密；WPF 自启 PyInstaller onedir 心智桥；命名 mutex、固定端口、数据目录 OS 锁与父 PID 收尾共同守住单写者
+- 诚实连接：响应新增瞬时 `mind_status=not_run/accepted/rejected/unavailable`，模型失败的静态接住不再显示“已连接”
+- ambient 裁决：先确认匹配 `shown_id`；无收据且已跨本地日期的 ambient pending 才弃，已提交生活与记忆保留
+- 分发：`scripts/build_share.ps1` 产出 `dist/MyBuddy-S11-win-x64.zip`（119.4 MiB），内含自包含 .NET/WPF、自包含 Python 心智桥、248 帧必需 VPet 动画、使用说明与带查阅日期的授权摘要；产物秘钥扫描干净
+- 本机验收：Python `53 passed`；Ruff/format/diff 绿；WPF 编译 `0 warnings / 0 errors`；身体/DPAPI `5/5`；已打包引擎 HTTP 启动、第二写者拒绝、父 PID 消失自退、中文空格路径解压与 248 帧计数通过
+- 真实 key：`data/mini-s11-package-real/`保留内联 PowerShell 再次把中文烧成问号的失败轨迹，不计成功；`data/mini-s11-package-real-utf8/`从固定 UTF-8 文件读取原文，已打包引擎返回 `accepted` 并 shown
+- 她显示的话：“你回来啦。忙完了就好，我一直在呢。”
+- 尺寸：形状测试同口径为31个机器侧 Python/C# 文件、3803/5000行，断言通过
+- 唯一阻塞：当前机器有 Python/.NET/Steam，且 Codex 进程环境启动 WPF 时系统字体 URI 初始化失败；须在无运行时/无 Steam 的干净 Windows 以截图补齐首次只填 key、中文用户、8000 占用、双开、退出、崩溃恢复与 Defender 全轨迹
+- 她哪里更活了：她现在能从一个不带环境的 zip 醒来，同时不会把模型失联说成“我连上了”，也不会在第二天把没说出口的昨日台词冒充“刚刚”
 
 交接只允许保留最近一次。禁止粘贴完整diff、长测试日志、未来设计和“顺便发现”
 清单；这些分别属于Git、测试产物、`DESIGN.md`和当前任务之外。
