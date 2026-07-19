@@ -40,6 +40,19 @@ Windows 身体：
 .\.dotnet-sdk\dotnet.exe run --project .\buddyshell\BuddyShell.csproj
 ```
 
+## 真实-key 验收
+
+`config.yaml` 填好 key 后一条命令跑完全部真实模型腿(chat/touch/raise 事件腿,
+read→walk→read+ambient 时间腿;时间腿按验收惯例停机回拨 `last_step_at` 后重启):
+
+```powershell
+powershell -File scripts\real_key_acceptance.ps1 -DataDir data\real-key-验收日期
+```
+
+证据目录不覆盖已存在路径;结束时打印她实际显示的话、history 类型序列与失败
+候选数。脚本代行身体层,key 只被引擎进程读取;walk 位移是脚本模拟身体的诚实
+收据,真实窗口物理由 BuddyShell 测试与 S15/S16 留档覆盖。
+
 ## 免费分享 zip
 
 构建机需有授权可用的 VPet `0000_core/pet/vup` 素材目录：

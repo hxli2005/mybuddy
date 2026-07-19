@@ -34,7 +34,7 @@ def main() -> None:
     parser.add_argument("--text", default=DEFAULT_TEXT)
     parser.add_argument(
         "--scenario",
-        choices=("chat", "touch-head", "quiet", "ambient"),
+        choices=("chat", "touch-head", "raise", "quiet", "ambient"),
         default="chat",
     )
     args = parser.parse_args()
@@ -43,6 +43,8 @@ def main() -> None:
         payload = {"event": {"event_id": args.event_id, "type": "chat", "content": args.text}}
     elif args.scenario == "touch-head":
         payload = {"event": {"event_id": args.event_id, "type": "touch_head"}}
+    elif args.scenario == "raise":
+        payload = {"event": {"event_id": args.event_id, "type": "raise"}}
     elif args.scenario == "ambient":
         payload = {"presence": {"present": True, "fullscreen": False}}
     else:
@@ -51,12 +53,27 @@ def main() -> None:
     scheduled = None
     if args.scenario in {"quiet", "ambient"} and isinstance(first.get("activity"), dict):
         scheduled = first
-        receipt_payload = {
-            "activity_receipt": {
-                "activity_id": first["activity"]["id"],
-                "status": "completed",
-            }
+        receipt: dict[str, Any] = {
+            "activity_id": first["activity"]["id"],
+            "status": "completed",
         }
+        if first["activity"].get("type") == "walk":
+            # 本脚本在验收里代行身体层;这份位移是模拟身体的诚实收据,
+            # 真实窗口物理已由 BuddyShell 测试与 S15/S16 留档覆盖。
+            receipt["reason"] = "animation_finished"
+            receipt["motion"] = {
+                "start_left": 100,
+                "start_top": 80,
+                "end_left": 220,
+                "end_top": 80,
+                "window_width": 200,
+                "window_height": 240,
+                "work_left": 0,
+                "work_top": 0,
+                "work_right": 800,
+                "work_bottom": 600,
+            }
+        receipt_payload = {"activity_receipt": receipt}
         if args.scenario == "ambient":
             receipt_payload["presence"] = payload["presence"]
         first = _post(args.url, receipt_payload)
