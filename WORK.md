@@ -7,7 +7,7 @@
 
 - 当前写入者：无
 - 当前任务：无
-- 最近完成：S16 read+walk第二实现后提取最小动作目录
+- 最近完成：S16.1 失败事实与核心记忆完整性修复
 - 下一任务：S17 READY；真实欲望按批扩 VPet 动作词汇
 - 后续任务：S18 已由所有者裁决并预登记；依赖未解除前保持 BLOCKED
 - 工作区要求：保持提交后干净；新任务先更新本板再领取
@@ -35,7 +35,8 @@
 | S14 | DONE | 真实TXT→身体活动收据→阅读进度与有证据感受 | S13 | 删除自由生活事件/活动/baseline；零债务八例与真实-key触碰/quiet/ambient三腿全过；允许关心问句 |
 | S15 | DONE | Walk动画→真实窗口位移→封闭物理收据 | S14 | 完成/中断位置与屏幕边界可核验；技术故障不入人生；未回应不能触发接近、躲避或退缩 |
 | S16 | DONE | read+walk第二实现→提取最小动作目录 | S15 | 同物理形状的新动作主要改数据；无效果表、任意details、事件总线、插件或提前接口 |
-| S17 | READY | 真实欲望→按批扩VPet动作词汇→逐批授权验收 | S16 | Raise优先、其余按真实闭环进入；每批看帧、收据、包体和授权；不移植数值机制 |
+| S16.1 | DONE | 失败事实→静态接住仍留原话；核心记忆→有证据降核后才可忘 | S16 | 双拒/不可用一次提交事实与event；seed/core不能直接forget；S17前修复 |
+| S17 | READY | 真实欲望→按批扩VPet动作词汇→逐批授权验收 | S16.1 | Raise优先、其余按真实闭环进入；每批看帧、收据、包体和授权；不移植数值机制 |
 | S18 | BLOCKED | 多日真实轨迹→记忆/阅读/身体互相改变→人格验收 | S17 | 四审计问题由轨迹回答；停机不补帧、沉默零债务、世界阻力与技术故障严格分开；贴实际台词 |
 
 已裁决的后续任务可以 BLOCKED 预登记；解除依赖时只把紧邻下一项改为 READY，
@@ -53,15 +54,16 @@
 
 ## 最近一次交接
 
-- 任务：S16 read+walk第二实现后提取最小动作目录
+- 任务：S16.1 失败事实与核心记忆完整性修复
 - 提交：本提交
-- 实现：内置严格 JSON 目录只列动作 type、stationary/horizontal 物理形状，以及各方向 A/B/C 素材和 plan；身体分发、动画 manifest、walk 方向与共享包素材选择共读这一份数据
-- 封闭边界：stationary 只准 still，horizontal 只准 left/right；重复 type/plan/intent、缺字段和未声明 effects/details 都启动即拒绝；没有效果表、任意 details、事件总线、插件或通用扩展接口
-- 同形试纸：测试用一条 stationary raise 数据得到新 plan，无需修改 MainWindow 分发或打包脚本；真实新增动作仍须由心智明确安排并使用独立 intent，目录不替人格做决定
-- 自动试纸：Python `73 passed`，BuddyShell `9 passed`，Ruff/format/diff 全绿；机器侧 4581 行
-- 真实运行：`data/mini-s16-real/` 中真实 WPF 从 (240,240) 走到 (393.14,240)，窗口 336×420、工作区 0..2194.29 × 0..1234.29，形成唯一 `self_walk`；`data/mini-s16-real-shell/` 的 bubble_shown 与 history shown 一致
-- 共享包：`dist/MyBuddy-S16-win-x64.zip` 115493494 bytes，174 帧，SHA-256 `601E8CED99B3FCEE7DBBD84FA5C1897847CFA6BD4CEAFB9010A8E3A4D7C28B20`
+- 失败事实：直接候选双拒或模型不可用时，`mind_step` 一次提交身体观察、event id、`last_step_at` 与静态待显示句；坏候选仍不进状态/记忆，身体不再二次补写
+- 记忆完整性：`seed_*` 永不直接 forget；仍为 core 的记忆须先带证据降核，同包 forget 按包前状态拒绝，后续回合才可忘；普通非核心 forget 不变
+- 对抗试纸：原话先入 history、shown 后静态句才入共同历史；重复 event 为 duplicate 且不追加；失败原话可在后续成功回合成为记忆证据
+- 自动试纸：Python `76 passed`，BuddyShell `9 passed`，Ruff/format/diff 全绿；机器侧 4589 行
+- 真实运行：真实-key 显示“修好了啊。这听着挺踏实的——既把问题解决了，又没丢掉自己的东西。”；真实 WPF 不可用腿显示静态接住，history 为原话→shown 静态句，同 event 重发仍为 2 行
+- 共享包：`dist/MyBuddy-S16.1-win-x64.zip` 115494271 bytes，174 帧，SHA-256 `750C860F3277B00EC3A4FD8DA412ABD4B35FEAA14C451AC4BD049CA01BA7E7A1`
 - 她显示的话：“我在。刚才脑子里那句话没理清，但你的话我确实听见了。”
-- 她哪里更活了：她的读和走第一次被同一份小而封闭的身体词表认领；以后长出同形的新动作，不必再把她拆成散落各处的条件分支。
+- 她哪里更活了：她不再弄丢没接住的话，她的底色也不能被无因抹掉。
+
 交接只允许保留最近一次。禁止粘贴完整diff、长测试日志、未来设计和“顺便发现”
 清单；这些分别属于Git、测试产物、`DESIGN.md`和当前任务之外。

@@ -13,7 +13,6 @@ from mybuddy.config import load_config
 from mybuddy.llm import BaseLLMProvider, make_provider
 from mybuddy.mind import (
     READING_PATH,
-    RECENT_EVENT_LIMIT,
     MindFiles,
     PendingExpression,
     WalkEvidence,
@@ -276,11 +275,6 @@ class BodyBridge:
                 now=now,
                 event_id=event.event_id,
             )
-        if not result.committed:
-            state, history, memories = self.files.load(now)
-            state["pending_expression"] = result.pending_expression.model_dump()
-            state["recent_event_ids"] = [*recent, event.event_id][-RECENT_EVENT_LIMIT:]
-            self.files.commit(state, history, memories)
         mind_status = "accepted" if result.committed else _failure_status(result.rejection_reasons)
         return "processed", mind_status
 

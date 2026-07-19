@@ -363,6 +363,13 @@ def validate_no_withdrawal(
                 f"不撤回：memory_operations[{index}] 不能把 {target.get('kind')}"
                 f" 当成 {operation.kind} 操作"
             )
+        elif operation.action == "forget" and str(operation.target_id).startswith("seed_"):
+            reasons.append(f"不撤回：memory_operations[{index}] 不能直接 forget 初始人格种子")
+        elif operation.action == "forget" and target.get("core") is True:
+            reasons.append(
+                f"不撤回：memory_operations[{index}] 不能直接 forget 核心记忆；"
+                "须先带证据降为非核心，并在后续回合再忘记"
+            )
     return reasons
 
 
@@ -694,7 +701,8 @@ def _prompt_payload(
             "target_id 只定位被操作的记忆，绝不能放进 evidence_ids；修正 seed_ 倾向只绑定真实经历证据。"
             "模式须有两条用户或共同经历；若本次输入明确确认了模式，可设 user_confirmed=true。"
             "core=true 只给需要跨情景常驻的稳定事实或倾向；临时念头和一般情景记忆不要设为 core。"
-            "seed_ 开头的初始倾向不是传记或既成事实；真实经历不合时，用有证据的 correct 修正它。"
+            "seed_ 开头的初始倾向不是传记或既成事实，不能 forget；真实经历不合时，用有证据的 correct 修正它。"
+            "核心记忆不能直接 forget；先带证据 integrate/correct 为 core=false，后续回合才可忘记。"
             "expression_rendering 只管说话的节奏和表面形式，不能用作事实、关系或亲密浓度的证据。"
         ),
     }
@@ -914,7 +922,7 @@ async def mind_step(
     experience_details: dict[str, str] | None = None,
     fallback_text: str = STATIC_CATCH,
 ) -> StepResult:
-    """运行一个直接经历；候选通过才把经历、生活、状态和记忆一起提交。"""
+    """运行直接经历；观察事实必落盘，候选通过时再一起提交状态和记忆。"""
     current_time = (now or datetime.now(UTC)).astimezone()
     state, history, memories = files.load(current_time)
     experience: dict[str, Any] = {
@@ -959,6 +967,12 @@ async def mind_step(
     fallback = PendingExpression(
         id=f"expr_{uuid.uuid4().hex}", text=fallback_text, created_at=current_time.isoformat()
     )
+    state["last_step_at"] = current_time.isoformat()
+    state["pending_expression"] = fallback.model_dump()
+    if event_id is not None:
+        recent = [item for item in state.get("recent_event_ids", []) if isinstance(item, str)]
+        state["recent_event_ids"] = [*recent, event_id][-RECENT_EVENT_LIMIT:]
+    files.commit(state, [*history, experience], memories)
     return StepResult(
         committed=False,
         pending_expression=fallback,

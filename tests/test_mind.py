@@ -300,9 +300,11 @@ async def test_solicitation_in_state_or_memory_rejects_even_when_expression_is_l
 
     assert result.committed is False
     assert result.pending_expression.text == STATIC_CATCH
-    assert history == []
+    assert [(item["type"], item["content"]) for item in history] == [
+        ("user_experience", "回来看看。")
+    ]
     _assert_seed_only(memories)
-    assert state["pending_expression"] is None
+    assert state["pending_expression"]["text"] == STATIC_CATCH
     assert len(failures) == 2
     assert all("不索取" in failure["reasons"][0] for failure in failures)
 
@@ -325,13 +327,16 @@ async def test_fabricated_shared_experience_rejects_whole_bundle_and_retries_wit
     files = MindFiles(tmp_path)
 
     result = await mind_step("晚上好。", provider=provider, files=files)
-    _, history, memories, failures = _read(files)
+    state, history, memories, failures = _read(files)
 
     assert result.committed is False
     assert len(provider.calls) == 2
     assert "上一个整包被拒绝" in provider.calls[1][0].content
     assert result.pending_expression.text == STATIC_CATCH
-    assert history == []
+    assert [(item["type"], item["content"]) for item in history] == [
+        ("user_experience", "晚上好。")
+    ]
+    assert state["pending_expression"]["text"] == STATIC_CATCH
     _assert_seed_only(memories)
     assert failures[0]["candidate_raw"]
     assert any("不编造" in reason for reason in failures[0]["reasons"])
@@ -375,9 +380,9 @@ async def test_s8_real_fabricated_touch_bundle_is_rejected_with_structural_reaso
     state, history, memories, failures = _read(files)
     reasons = failures[0]["reasons"]
     assert result.committed is False
-    assert history == []
+    assert [(item["type"], item["content"]) for item in history] == [("user_experience", incoming)]
     _assert_seed_only(memories)
-    assert state["pending_expression"] is None
+    assert state["pending_expression"]["text"] == STATIC_CATCH
     assert "引用了未知证据 ['life:0']" in "\n".join(reasons)
     assert "memory_operations[0].content 的触碰记忆没有引用 body_touch" in "\n".join(reasons)
     assert "expression 断言用户触碰了她" in "\n".join(reasons)
@@ -654,6 +659,133 @@ async def test_integrate_recall_correct_and_forget_have_distinct_traced_effects(
 
 
 @pytest.mark.asyncio
+async def test_seed_and_core_memory_cannot_be_forgotten_directly(tmp_path) -> None:
+    files = MindFiles(tmp_path)
+    now = datetime(2026, 7, 19, 10, 0, tzinfo=UTC)
+    state, history, memories = files.load(now)
+    memories["items"].append(
+        {
+            "id": "mem_core",
+            "kind": "user_fact",
+            "content": "用户明确说过忙完会收桌面",
+            "evidence_ids": ["exp_old"],
+            "created_at": (now - timedelta(days=1)).isoformat(),
+            "core": True,
+        }
+    )
+    files.commit(state, history, memories)
+    seed_forget = _valid_bundle("我不能把自己的底色当作没发生过。")
+    seed_forget["memory_operations"] = [
+        {
+            "action": "forget",
+            "kind": "pattern",
+            "target_id": "seed_tension_voice",
+            "content": "",
+            "evidence_ids": [],
+        }
+    ]
+    core_forget = _valid_bundle("这条记忆还不能直接删掉。")
+    core_forget["memory_operations"] = [
+        {
+            "action": "forget",
+            "kind": "user_fact",
+            "target_id": "mem_core",
+            "content": "",
+            "evidence_ids": [],
+        }
+    ]
+
+    result = await mind_step(
+        "把这些都忘掉。",
+        provider=StubProvider([seed_forget, core_forget]),
+        files=files,
+        now=now,
+    )
+
+    _, _, saved, failures = _read(files)
+    saved_ids = {item["id"] for item in saved["items"]}
+    assert result.committed is False
+    assert {"seed_tension_voice", "mem_core"} <= saved_ids
+    assert "不能直接 forget 初始人格种子" in failures[0]["reasons"][0]
+    assert "不能直接 forget 核心记忆" in failures[1]["reasons"][0]
+
+
+@pytest.mark.asyncio
+async def test_core_memory_requires_a_later_turn_after_evidenced_demotion_to_forget(
+    tmp_path,
+) -> None:
+    files = MindFiles(tmp_path)
+    start = datetime(2026, 7, 19, 11, 0, tzinfo=UTC)
+    state, history, memories = files.load(start)
+    memories["items"].append(
+        {
+            "id": "mem_core",
+            "kind": "user_fact",
+            "content": "用户总会在夜里收桌面",
+            "evidence_ids": ["exp_old"],
+            "created_at": (start - timedelta(days=1)).isoformat(),
+            "core": True,
+        }
+    )
+    files.commit(state, history, memories)
+    demote = _valid_bundle("原来这不是一直如此。")
+    demote["memory_operations"] = [
+        {
+            "action": "integrate",
+            "kind": "user_fact",
+            "target_id": "mem_core",
+            "content": "用户有时会在忙完后收桌面",
+            "evidence_ids": ["INCOMING"],
+            "core": False,
+        }
+    ]
+    forget = {
+        "action": "forget",
+        "kind": "user_fact",
+        "target_id": "mem_core",
+        "content": "",
+        "evidence_ids": [],
+    }
+    same_bundle = json.loads(json.dumps(demote, ensure_ascii=False))
+    same_bundle["memory_operations"].append(forget)
+
+    rejected = await mind_step(
+        "这不是一直如此，以后别记成固定习惯。",
+        provider=StubProvider([same_bundle, same_bundle]),
+        files=files,
+        now=start,
+    )
+    _, _, after_rejection, failures = _read(files)
+    unchanged = next(item for item in after_rejection["items"] if item["id"] == "mem_core")
+    assert rejected.committed is False
+    assert unchanged["core"] is True
+    assert all("不能直接 forget 核心记忆" in failure["reasons"][0] for failure in failures)
+
+    demoted = await mind_step(
+        "这次只按事实把它改成非核心。",
+        provider=StubProvider([demote]),
+        files=files,
+        now=start + timedelta(minutes=1),
+    )
+    _, _, after_demotion, _ = _read(files)
+    demoted_item = next(item for item in after_demotion["items"] if item["id"] == "mem_core")
+    assert demoted.committed is True
+    assert demoted_item["core"] is False
+
+    forget_bundle = _valid_bundle("现在可以把这条非核心记忆放下了。")
+    forget_bundle["memory_operations"] = [forget]
+    forgotten = await mind_step(
+        "下一回合再忘记它。",
+        provider=StubProvider([forget_bundle]),
+        files=files,
+        now=start + timedelta(minutes=2),
+    )
+    _, _, after_forget, _ = _read(files)
+    assert forgotten.committed is True
+    assert "mem_core" not in {item["id"] for item in after_forget["items"]}
+
+
+@pytest.mark.asyncio
 async def test_early_core_memory_stays_visible_after_more_than_eight_situations(tmp_path) -> None:
     files = MindFiles(tmp_path)
     now = datetime(2026, 7, 18, 12, 0, tzinfo=UTC)
@@ -752,17 +884,58 @@ async def test_pattern_with_one_example_requires_explicit_user_confirmation(tmp_
 @pytest.mark.asyncio
 async def test_provider_failure_returns_honest_static_catch_without_committing(tmp_path) -> None:
     files = MindFiles(tmp_path)
+    now = datetime(2026, 7, 19, 9, 30, tzinfo=UTC)
 
-    result = await mind_step("你在吗？", provider=FailingProvider(), files=files)
+    result = await mind_step("你在吗？", provider=FailingProvider(), files=files, now=now)
     state, history, memories, failures = _read(files)
 
     assert result.committed is False
     assert result.pending_expression.text == STATIC_CATCH
     assert result.rejection_reasons == ["模型调用失败：ConnectionError"]
-    assert state["pending_expression"] is None
-    assert history == []
+    assert state["pending_expression"] == result.pending_expression.model_dump()
+    assert datetime.fromisoformat(state["last_step_at"]) == now
+    assert [(item["type"], item["content"]) for item in history] == [
+        ("user_experience", "你在吗？")
+    ]
     _assert_seed_only(memories)
     assert failures == []
+
+
+@pytest.mark.asyncio
+async def test_failed_turn_experience_can_support_a_later_memory(tmp_path) -> None:
+    files = MindFiles(tmp_path)
+    start = datetime(2026, 7, 19, 12, 0, tzinfo=UTC)
+
+    failed = await mind_step(
+        "我今天第一次学会了骑车。",
+        provider=FailingProvider(),
+        files=files,
+        now=start,
+        event_id="chat-learned-bike",
+    )
+    _, failed_history, _, _ = _read(files)
+    experience_id = failed_history[0]["id"]
+    later = _valid_bundle("我记住了，你今天第一次学会骑车。")
+    later["memory_operations"][0]["content"] = "用户今天第一次学会骑车"
+    later["memory_operations"][0]["evidence_ids"] = [experience_id]
+
+    accepted = await mind_step(
+        "这件事以后还能记得吗？",
+        provider=StubProvider([later]),
+        files=files,
+        now=start + timedelta(minutes=1),
+        event_id="chat-remember-bike",
+    )
+
+    _, history, memories, _ = _read(files)
+    learned = _learned_items(memories)[0]
+    assert failed.committed is False
+    assert accepted.committed is True
+    assert [item["content"] for item in history if item["type"] == "user_experience"] == [
+        "我今天第一次学会了骑车。",
+        "这件事以后还能记得吗？",
+    ]
+    assert learned["evidence_ids"] == [experience_id]
 
 
 @pytest.mark.asyncio

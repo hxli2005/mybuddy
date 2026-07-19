@@ -47,7 +47,7 @@ Windows 身体：
 .\scripts\build_share.ps1 -PetRoot "D:\path\to\0000_core\pet\vup"
 ```
 
-产物为 `dist/MyBuddy-S16-win-x64.zip`；收件人不需安装 Python、.NET 或 Steam，
+产物为 `dist/MyBuddy-S16.1-win-x64.zip`；收件人不需安装 Python、.NET 或 Steam，
 解压后双击 `BuddyShell.exe`，首次只输入自己的 OpenRouter key。包内
 `THIRD_PARTY_NOTICES.txt` 记录动画归属与免费分发边界。
 包根目录的 `小布读本.txt` 是她实际读取的 UTF-8 来源；第一段是书名，正文以空行

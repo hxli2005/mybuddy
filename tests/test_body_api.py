@@ -229,6 +229,29 @@ def test_mind_status_does_not_call_a_fallback_connected(provider, expected, tmp_
     assert response["mind_status"] == expected
     assert response["expression"]["text"] == STATIC_CATCH
 
+    before_shown = _history(tmp_path)
+    assert [(item["type"], item["content"]) for item in before_shown] == [
+        ("user_experience", "在吗")
+    ]
+
+    repeated = client.post(
+        "/api/body/step",
+        json={"event": {"event_id": "chat-failure", "type": "chat", "content": "在吗"}},
+    ).json()
+    assert repeated["event_status"] == "duplicate"
+    assert _history(tmp_path) == before_shown
+
+    confirmed = client.post(
+        "/api/body/step",
+        json={"shown_id": response["expression"]["id"]},
+    ).json()
+    assert confirmed["shown_confirmed"] is True
+    after_shown = _history(tmp_path)
+    assert [(item["type"], item["content"]) for item in after_shown] == [
+        ("user_experience", "在吗"),
+        ("shared_expression", STATIC_CATCH),
+    ]
+
 
 def test_cross_day_unshown_ambient_is_discarded_without_erasing_life(api) -> None:
     client, provider, data_dir = api
