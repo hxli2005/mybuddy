@@ -17,6 +17,7 @@ internal static class Program
             ("body step is the only wire contract", BodyStepIsOnlyContract),
             ("body action catalog adds same-shape actions as data", BodyActionCatalogIsDataDriven),
             ("read completion emits a physical receipt", ReadCompletionEmitsReceipt),
+            ("raised drag holds until release and interrupts with a receipt", RaisedDragHoldsUntilRelease),
             ("touch interrupts read without a completed receipt", TouchInterruptsRead),
             ("walk displacement stays inside work area", WalkDisplacementStaysInsideWorkArea),
             ("walk completion emits a physical receipt", WalkCompletionEmitsReceipt),
@@ -46,6 +47,7 @@ internal static class Program
     {
         Equal(BodyActionShape.Stationary, BodyActionCatalog.Default.Get("read").Shape);
         Equal(BodyActionShape.Horizontal, BodyActionCatalog.Default.Get("walk").Shape);
+        Equal(BodyActionShape.Interactive, BodyActionCatalog.Default.Get("raise").Shape);
         Equal(
             AnimationIntent.WalkRight,
             BodyActionCatalog.Default.Get("walk").Animation(BodyActionDirection.Right).Intent);
@@ -59,7 +61,7 @@ internal static class Program
                 "direction": "still",
                 "intent": "happy",
                 "plan_id": "activity.raise.normal",
-                "entry": "RAISE/A",
+                "entry": ["RAISE/A"],
                 "body": "RAISE/B",
                 "exit": "RAISE/C"
               }]
@@ -144,6 +146,38 @@ internal static class Program
         Equal(AnimationExecutionKind.Baseline, fixture.Controller.Snapshot.Execution);
         Equal("completed", receipt?.Status);
         Equal("animation_finished", receipt?.Reason);
+    }
+
+    private static void RaisedDragHoldsUntilRelease()
+    {
+        using var fixture = new Fixture();
+        ActivityFinishedEventArgs? receipt = null;
+        fixture.Controller.ActivityFinished += (_, args) => receipt = args;
+        fixture.Controller.Submit(new AnimationRequest(
+            AnimationIntent.Read,
+            AnimationSource.State,
+            "read-before-raise",
+            AnimationPriority.Activity));
+        fixture.Controller.BeginInteractive(new AnimationRequest(
+            AnimationIntent.Raised,
+            AnimationSource.DirectManipulation,
+            "raise-1",
+            AnimationPriority.DirectManipulation));
+
+        Equal("read-before-raise", receipt?.ActivityId);
+        Equal("interrupted", receipt?.Status);
+        Equal("raise", receipt?.Reason);
+        Equal("interaction.raise.normal", fixture.Controller.Snapshot.PlanId);
+        fixture.Advance(10);
+        Equal(AnimationPhaseKind.Body, fixture.Controller.Snapshot.Phase);
+        fixture.Advance(100);
+        Equal(AnimationPhaseKind.Body, fixture.Controller.Snapshot.Phase);
+
+        fixture.Controller.EndInteractive("raise-1");
+        Equal(AnimationPhaseKind.Exit, fixture.Controller.Snapshot.Phase);
+        fixture.Advance(10);
+        Equal(AnimationExecutionKind.Baseline, fixture.Controller.Snapshot.Execution);
+        Equal("idle.default.normal", fixture.Controller.Snapshot.PlanId);
     }
 
     private static void TouchInterruptsRead()
@@ -292,6 +326,7 @@ internal static class Program
                 ("activity.read.normal", AnimationIntent.Read, false, false),
                 ("activity.walk.left.normal", AnimationIntent.WalkLeft, false, false),
                 ("activity.walk.right.normal", AnimationIntent.WalkRight, false, false),
+                ("interaction.raise.normal", AnimationIntent.Raised, false, false),
                 ("think.normal", AnimationIntent.Think, false, true),
                 ("touch.head.normal", AnimationIntent.TouchHeadReflex, false, false),
                 ("touch.body.happy", AnimationIntent.TouchBodyReflex, false, false),
@@ -302,7 +337,7 @@ internal static class Program
                 item.Id,
                 item.Intent,
                 Phase(root, item.Id, AnimationPhaseKind.Entry),
-                Phase(root, item.Id, AnimationPhaseKind.Body, item.Baseline || item.Pending),
+                Phase(root, item.Id, AnimationPhaseKind.Body, item.Baseline || item.Pending || item.Intent == AnimationIntent.Raised),
                 Phase(root, item.Id, AnimationPhaseKind.Exit),
                 item.Baseline,
                 item.Pending));

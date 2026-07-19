@@ -39,6 +39,7 @@ public sealed class FramePlayerHost : UserControl, IAnimationRenderer, IAnimatio
 
     public event EventHandler<TouchDetectedEventArgs>? TouchStarted;
     public event EventHandler<TouchDetectedEventArgs>? TouchDetected;
+    public event EventHandler? DragStarted;
 
     public void Render(CompositedFrame frame)
     {
@@ -155,10 +156,14 @@ public sealed class FramePlayerHost : UserControl, IAnimationRenderer, IAnimatio
     {
         if (!IsMouseCaptured || e.LeftButton != MouseButtonState.Pressed) return;
         var point = e.GetPosition(this);
-        if (Math.Abs(point.X - _pressPoint.X) >= SystemParameters.MinimumHorizontalDragDistance ||
-            Math.Abs(point.Y - _pressPoint.Y) >= SystemParameters.MinimumVerticalDragDistance)
+        if (!_pointerMoved &&
+            (Math.Abs(point.X - _pressPoint.X) >= SystemParameters.MinimumHorizontalDragDistance ||
+             Math.Abs(point.Y - _pressPoint.Y) >= SystemParameters.MinimumVerticalDragDistance))
         {
             _pointerMoved = true;
+            ReleaseMouseCapture();
+            DragStarted?.Invoke(this, EventArgs.Empty);
+            e.Handled = true;
         }
     }
 

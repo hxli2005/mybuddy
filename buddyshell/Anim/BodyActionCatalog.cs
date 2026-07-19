@@ -5,14 +5,14 @@ using System.Text.Json.Serialization;
 
 namespace BuddyShell.Anim;
 
-public enum BodyActionShape { Stationary, Horizontal }
+public enum BodyActionShape { Stationary, Horizontal, Interactive }
 public enum BodyActionDirection { Still, Left, Right }
 
 public sealed record BodyActionAnimation(
     BodyActionDirection Direction,
     AnimationIntent Intent,
     string PlanId,
-    string Entry,
+    IReadOnlyList<string> Entry,
     string Body,
     string Exit);
 
@@ -82,7 +82,7 @@ public sealed class BodyActionCatalog
 
         foreach (var action in actions)
         {
-            var expected = action.Shape == BodyActionShape.Stationary
+            var expected = action.Shape is BodyActionShape.Stationary or BodyActionShape.Interactive
                 ? new[] { BodyActionDirection.Still }
                 : new[] { BodyActionDirection.Left, BodyActionDirection.Right };
             var actual = action.Animations.Select(animation => animation.Direction).ToArray();
@@ -90,8 +90,8 @@ public sealed class BodyActionCatalog
                 errors.Add($"{action.Type}: {action.Shape} 动作的动画方向不完整");
             foreach (var animation in action.Animations)
             {
-                if (new[] { animation.PlanId, animation.Entry, animation.Body, animation.Exit }
-                    .Any(string.IsNullOrWhiteSpace))
+                if (animation.Entry.Count == 0 || animation.Entry.Any(string.IsNullOrWhiteSpace) ||
+                    new[] { animation.PlanId, animation.Body, animation.Exit }.Any(string.IsNullOrWhiteSpace))
                     errors.Add($"{action.Type}/{animation.Direction}: 动画目录字段不能为空");
             }
         }

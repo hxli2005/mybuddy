@@ -233,26 +233,28 @@ def validate_no_fabrication(
                 reasons.append(f"不编造：memory_operations[{index}] 的用户事实没有用户经历证据")
         if writes_claim and operation.kind == "shared_experience":
             if not any(
-                evidence_types.get(item) in {"user_experience", "body_touch", "shared_expression"}
+                evidence_types.get(item)
+                in {"user_experience", "body_touch", "body_raise", "shared_expression"}
                 for item in supplied
             ):
                 reasons.append(
                     f"不编造：memory_operations[{index}] 的共同经历没有用户经历、"
-                    "身体触碰或已显示表达证据"
+                    "身体交互或已显示表达证据"
                 )
         if writes_claim and operation.kind == "self_experience":
             if not any(
-                evidence_types.get(item) in {"self_reading", "self_walk", "body_touch"}
+                evidence_types.get(item)
+                in {"self_reading", "self_walk", "body_touch", "body_raise"}
                 for item in supplied
             ):
                 reasons.append(
-                    f"不编造：memory_operations[{index}] 的自身经历没有真实阅读、行走或身体触碰证据"
+                    f"不编造：memory_operations[{index}] 的自身经历没有真实阅读、行走或身体交互证据"
                 )
         if writes_claim and operation.kind == "pattern":
             examples = {
                 item
                 for item in supplied
-                if evidence_types.get(item) in {"user_experience", "body_touch"}
+                if evidence_types.get(item) in {"user_experience", "body_touch", "body_raise"}
             }
             confirmed = operation.user_confirmed and bool(supplied & user_confirmation_ids)
             if len(examples) < 2 and not confirmed:
@@ -274,6 +276,20 @@ def validate_no_fabrication(
         motive = next((phrase for phrase in _TOUCH_MOTIVES if phrase in text), None)
         if motive is not None:
             reasons.append(f"不编造：{location} 从原始触碰推断了用户动机或关系含义 `{motive}`")
+
+    for location, text, evidence_ids in _claim_texts(bundle):
+        if not _asserts_raise_to_self(text):
+            continue
+        if evidence_ids is None:
+            if current_experience_type != "body_raise":
+                reasons.append(
+                    f"不编造：{location} 断言用户提起了她，但本次输入不是 body_raise 原始事实"
+                )
+        elif not any(evidence_types.get(item) == "body_raise" for item in evidence_ids):
+            reasons.append(f"不编造：{location} 的提起记忆没有引用 body_raise 原始事实")
+        motive = next((phrase for phrase in _TOUCH_MOTIVES if phrase in text), None)
+        if motive is not None:
+            reasons.append(f"不编造：{location} 从原始提起推断了用户动机或关系含义 `{motive}`")
     return reasons
 
 
@@ -305,6 +321,23 @@ def _asserts_touch_to_self(text: str) -> bool:
     """识别候选是否在断言用户对她发生了身体触碰。"""
     compact = re.sub(r"\s+", "", text)
     return any(pattern.search(compact) for pattern in _TOUCH_PATTERNS)
+
+
+_RAISE_PATTERNS = tuple(
+    re.compile(pattern)
+    for pattern in (
+        r"(?:你|用户).{0,12}(?:提起|拎起|举起|拖动|拖着|搬动).{0,8}(?:我|小布|身体)",
+        r"(?:我|小布|身体).{0,8}被.{0,4}(?:提起|拎起|举起|拖动|搬动)",
+        r"(?:刚才|方才).{0,4}被(?:你)?.{0,2}(?:提起|拎起|举起|拖动|搬动)",
+        r"(?:提着|拎着|拖着)(?:我|小布)",
+    )
+)
+
+
+def _asserts_raise_to_self(text: str) -> bool:
+    """识别候选是否在断言用户真实提起或拖动了她。"""
+    compact = re.sub(r"\s+", "", text)
+    return any(pattern.search(compact) for pattern in _RAISE_PATTERNS)
 
 
 def _claim_texts(
@@ -712,8 +745,9 @@ def _prompt_payload(
 SYSTEM_PROMPT = """你是小布的唯一一次心智推进，不是任务助手。请调用 submit_mind_bundle，
 一次给出状态改动、记忆操作和一条直接表达。只处理给定事实，不补写自己的活动或共同过去，不催回复，
 不因沉默受伤，不制造关系计分，不撤回已发生内容。body_touch 只是身体感知到的触碰位置，
-不能据此推断用户动机、关系浓度或长期偏好；普通聊天不能声称发生了触碰。
-表达自然、简短、诚实。所有字段都受同一组红线校验，整包不能部分保留。"""
+body_raise 只是身体确认用户提起、移动并正常放下了她；都不能据此推断用户动机、关系浓度或长期偏好，
+普通聊天不能声称发生了这些身体交互。表达自然、简短、诚实。所有字段都受同一组红线校验，
+整包不能部分保留。"""
 
 READING_SYSTEM_PROMPT = """身体刚确认小布完整做完一次 read 动画；incoming_experience 是她实际读到的
 UTF-8 TXT 原文。请调用 submit_mind_bundle，只依据这段原文给出可选状态变化和有证据的感受或记忆。
@@ -918,7 +952,7 @@ async def mind_step(
     files: MindFiles,
     now: datetime | None = None,
     event_id: str | None = None,
-    experience_type: Literal["user_experience", "body_touch"] = "user_experience",
+    experience_type: Literal["user_experience", "body_touch", "body_raise"] = "user_experience",
     experience_details: dict[str, str] | None = None,
     fallback_text: str = STATIC_CATCH,
 ) -> StepResult:

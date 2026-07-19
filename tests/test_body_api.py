@@ -18,6 +18,7 @@ class StubProvider(BaseLLMProvider):
         is_reading = incoming is not None and incoming["type"] == "self_reading"
         is_ambient_reading = is_reading and "ambient" in kwargs.get("system", "")
         is_touch = incoming is not None and incoming["type"] == "body_touch"
+        is_raise = incoming is not None and incoming["type"] == "body_raise"
         touch_zone = incoming.get("zone") if is_touch else None
         return LLMResponse(
             tool_calls=[
@@ -32,10 +33,22 @@ class StubProvider(BaseLLMProvider):
                             if is_reading
                             else "感觉到触碰"
                             if is_touch
+                            else "刚被提起来又放下"
+                            if is_raise
                             else "听你说话",
                         },
                         "memory_operations": []
                         if is_touch
+                        else [
+                            {
+                                "action": "record",
+                                "kind": "self_experience",
+                                "content": "用户刚才把我提起来移动后正常放下",
+                                "evidence_ids": [incoming["id"]],
+                                "target_id": None,
+                            }
+                        ]
+                        if is_raise
                         else [
                             {
                                 "action": "record",
@@ -55,6 +68,8 @@ class StubProvider(BaseLLMProvider):
                         if touch_zone == "head"
                         else "唔，碰到我衣角了。"
                         if touch_zone == "body"
+                        else "刚才被你提起来晃了一小段，又稳稳落地了。"
+                        if is_raise
                         else "忙完就好。先在我这儿松口气。",
                     },
                 )
@@ -209,6 +224,33 @@ def test_wrong_shown_id_does_not_destroy_pending_expression(api) -> None:
 
     assert wrong["shown_confirmed"] is False
     assert wrong["expression"] == first["expression"]
+
+
+def test_raise_is_a_raw_idempotent_body_fact(api) -> None:
+    client, provider, data_dir = api
+    event = {"event_id": "raise-001", "type": "raise"}
+
+    first = client.post("/api/body/step", json={"event": event})
+    assert first.status_code == 200
+    assert first.json()["event_status"] == "processed"
+    assert first.json()["expression"]["text"] == "刚才被你提起来晃了一小段，又稳稳落地了。"
+    duplicate = client.post("/api/body/step", json={"event": event})
+    assert duplicate.status_code == 200
+    assert duplicate.json()["event_status"] == "duplicate"
+    assert provider.calls == 1
+
+    history = _history(data_dir)
+    assert [item["type"] for item in history] == ["body_raise", "memory_operation"]
+    assert "content" not in history[0]
+    assert history[1]["evidence_ids"] == [history[0]["id"]]
+    state = json.loads((data_dir / "state.json").read_text(encoding="utf-8"))
+    assert "score" not in json.dumps(state, ensure_ascii=False).lower()
+
+    authored = client.post(
+        "/api/body/step",
+        json={"event": {"event_id": "raise-authored", "type": "raise", "content": "想亲近"}},
+    )
+    assert authored.status_code == 422
 
 
 @pytest.mark.parametrize(
@@ -701,6 +743,7 @@ def test_completed_walk_records_only_verified_physical_life(api) -> None:
     ("status", "reason", "motion"),
     [
         ("interrupted", "touch", _walk_motion(end_left=140)),
+        ("interrupted", "raise", _walk_motion(end_left=180)),
         ("failed", "animation_fault", None),
     ],
 )

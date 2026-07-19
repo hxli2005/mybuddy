@@ -6,6 +6,7 @@ public enum AnimationIntent
     Read,
     WalkLeft,
     WalkRight,
+    Raised,
     Think,
     TouchHeadReflex,
     TouchBodyReflex,

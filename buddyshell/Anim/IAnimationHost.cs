@@ -21,6 +21,8 @@ public interface IAnimationController : IDisposable, ITouchSource
     event EventHandler<AnimationFaultEventArgs>? Faulted;
     event EventHandler<ActivityFinishedEventArgs>? ActivityFinished;
     void Submit(AnimationRequest request);
+    void BeginInteractive(AnimationRequest request);
+    void EndInteractive(string correlationId);
     void Complete(string correlationId, AnimationOutcome outcome);
 }
 

@@ -20,6 +20,7 @@ public partial class MainWindow : Window
     private WalkAttempt? _walkAttempt;
     private EngineHost? _engine;
     private IAnimationController? _animationController;
+    private FramePlayerHost? _animationHost;
     private BridgeClient? _client;
     private StateLoop? _stateLoop;
     private Presence? _presence;
@@ -30,6 +31,8 @@ public partial class MainWindow : Window
     private string? _pendingChatText;
     private bool _chatSending;
     private bool _touchReporting;
+    private bool _raiseDragging;
+    private bool _raiseReporting;
 
     public MainWindow()
     {
@@ -41,7 +44,9 @@ public partial class MainWindow : Window
         Closed += (_, _) => DisposeServices();
         DragBar.MouseLeftButtonDown += (_, args) =>
         {
-            if (!IsInsideButton(args.OriginalSource as DependencyObject)) DragMove();
+            if (IsInsideButton(args.OriginalSource as DependencyObject)) return;
+            args.Handled = true;
+            BeginRaisedDrag();
         };
         Chat.SendRequested += async (_, args) => await SendBodyChatAsync(args.Text);
     }
@@ -82,9 +87,11 @@ public partial class MainWindow : Window
                 : AssetLocator.FindPetRoot();
             if (string.IsNullOrWhiteSpace(root))
                 throw new DirectoryNotFoundException("未找到 VPet 素材目录。");
+            _animationHost = new FramePlayerHost(root);
+            _animationHost.DragStarted += OnPetDragStarted;
             _animationController = new AnimationController(
                 AnimationManifest.CreateDefault(root),
-                new FramePlayerHost(root));
+                _animationHost);
             _animationController.TouchDetected += OnTouchDetected;
             _animationController.ActivityFinished += OnActivityFinished;
             _animationController.Faulted += (_, args) => SetConnectionState(
@@ -133,6 +140,74 @@ public partial class MainWindow : Window
             SetMindConnectionState(response);
         });
         if (displayed) await ConfirmShownAsync();
+    }
+
+    private void OnPetDragStarted(object? sender, EventArgs args) => BeginRaisedDrag();
+
+    private async void BeginRaisedDrag()
+    {
+        if (_raiseDragging || _animationController is null) return;
+        _raiseDragging = true;
+        string? eventId = null;
+        var released = false;
+        try
+        {
+            var animation = BodyActionCatalog.Default.Get("raise")
+                .Animation(BodyActionDirection.Still);
+            eventId = $"raise-{Guid.NewGuid():N}";
+            _animationController.BeginInteractive(new AnimationRequest(
+                animation.Intent,
+                AnimationSource.DirectManipulation,
+                eventId,
+                AnimationPriority.DirectManipulation));
+            var start = new Point(Left, Top);
+            DragMove();
+            released = Math.Abs(Left - start.X) >= SystemParameters.MinimumHorizontalDragDistance ||
+                Math.Abs(Top - start.Y) >= SystemParameters.MinimumVerticalDragDistance;
+        }
+        catch (InvalidOperationException exception)
+        {
+            SetConnectionState($"窗口拖动失败：{exception.Message}", ConnectionState.Warning);
+        }
+        finally
+        {
+            if (eventId is not null) _animationController.EndInteractive(eventId);
+            SaveWindowPosition();
+            _raiseDragging = false;
+        }
+        if (released && eventId is not null) await ReportRaiseAsync(eventId);
+    }
+
+    private async Task ReportRaiseAsync(string eventId)
+    {
+        if (_client is null || _raiseReporting)
+        {
+            App.LogMessage($"event=body_raise_unreported event_id={eventId} reason=not_connected_or_busy");
+            return;
+        }
+        _raiseReporting = true;
+        var bodyEvent = new BodyEvent { EventId = eventId, Type = "raise" };
+        try
+        {
+            var response = await StepAsync(bodyEvent);
+            if (response.EventStatus is not ("processed" or "duplicate")) return;
+            ApplyActivity(response);
+            if (response.Expression is not null)
+            {
+                ShowBodyExpression(response.Expression);
+                await ConfirmShownAsync();
+            }
+            SetMindConnectionState(response);
+        }
+        catch (BridgeRequestException exception)
+        {
+            SetConnectionState("未连接；这次提起只做了本地反射", ConnectionState.Warning);
+            App.LogMessage($"event=body_raise_unreported event_id={eventId} reason={exception.Message}");
+        }
+        finally
+        {
+            _raiseReporting = false;
+        }
     }
 
     private async void OnTouchDetected(object? sender, TouchDetectedEventArgs args)
@@ -446,6 +521,7 @@ public partial class MainWindow : Window
 
     private void DisposeServices()
     {
+        if (_animationHost is not null) _animationHost.DragStarted -= OnPetDragStarted;
         if (_animationController is not null)
         {
             _animationController.TouchDetected -= OnTouchDetected;

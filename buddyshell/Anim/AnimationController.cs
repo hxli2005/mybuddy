@@ -84,6 +84,21 @@ public sealed class AnimationController : IAnimationController, IAnimationDiagno
         StartRequest(request);
     });
 
+    public void BeginInteractive(AnimationRequest request) => OnDispatcher(() =>
+    {
+        if (_disposed || request.Source != AnimationSource.DirectManipulation) return;
+        StartRequest(request, AnimationExecutionKind.Interactive);
+    });
+
+    public void EndInteractive(string correlationId) => OnDispatcher(() =>
+    {
+        if (_disposed || _execution != AnimationExecutionKind.Interactive ||
+            _request?.CorrelationId != correlationId || _phase?.Kind == AnimationPhaseKind.Exit)
+            return;
+        if (_plan?.Exit is { } exit) StartPhase(exit);
+        else ResumePersistentView();
+    });
+
     public void Complete(string correlationId, AnimationOutcome outcome) => OnDispatcher(() =>
     {
         if (_disposed || _pendingThink?.CorrelationId != correlationId) return;
@@ -135,12 +150,16 @@ public sealed class AnimationController : IAnimationController, IAnimationDiagno
                 ActivityFinished?.Invoke(
                     this, new ActivityFinishedEventArgs(failedActivity, "failed", "animation_fault"));
             }
+            else if (_execution == AnimationExecutionKind.Interactive)
+            {
+                ResetToBaselineWithoutRender();
+            }
             return;
         }
         if (AnimationTimeline.IsComplete(_phase, elapsed)) AdvancePhase();
     }
 
-    private void StartRequest(AnimationRequest request)
+    private void StartRequest(AnimationRequest request, AnimationExecutionKind? execution = null)
     {
         if (_execution == AnimationExecutionKind.Transient &&
             _request?.Source == AnimationSource.State &&
@@ -153,9 +172,9 @@ public sealed class AnimationController : IAnimationController, IAnimationDiagno
 
         _plan = _manifest.Resolve(request);
         _request = request;
-        _execution = request.Intent == AnimationIntent.Think
+        _execution = execution ?? (request.Intent == AnimationIntent.Think
             ? AnimationExecutionKind.Pending
-            : AnimationExecutionKind.Transient;
+            : AnimationExecutionKind.Transient);
         StartPhase(_plan.Entry ?? _plan.Body);
     }
 
@@ -182,6 +201,7 @@ public sealed class AnimationController : IAnimationController, IAnimationDiagno
     {
         AnimationSource.Touch => "touch",
         AnimationSource.Chat => "chat",
+        AnimationSource.DirectManipulation => "raise",
         _ => "activity_replaced",
     };
 

@@ -28,7 +28,7 @@ class BodyEvent(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     event_id: str = Field(min_length=1, max_length=160)
-    type: Literal["chat", "touch_head", "touch_body"]
+    type: Literal["chat", "touch_head", "touch_body", "raise"]
     content: str | None = Field(default=None, max_length=4000)
 
     @field_validator("event_id")
@@ -44,7 +44,7 @@ class BodyEvent(BaseModel):
             if self.content is None or not self.content.strip():
                 raise ValueError("chat content must not be blank")
         elif self.content is not None:
-            raise ValueError("touch events carry only the raw type and event_id")
+            raise ValueError("body events carry only the raw type and event_id")
         return self
 
 
@@ -66,6 +66,7 @@ class BodyActivityReceipt(BaseModel):
             "touch",
             "chat",
             "activity_replaced",
+            "raise",
             "animation_fault",
             "window_fault",
         ]
@@ -77,7 +78,7 @@ class BodyActivityReceipt(BaseModel):
     def completed_motion_must_be_a_horizontal_walk(self) -> BodyActivityReceipt:
         allowed_reasons = {
             "completed": {None, "animation_finished"},
-            "interrupted": {"touch", "chat", "activity_replaced"},
+            "interrupted": {"touch", "chat", "activity_replaced", "raise"},
             "failed": {"animation_fault", "window_fault"},
         }
         if self.reason not in allowed_reasons[self.status]:
@@ -264,12 +265,22 @@ class BodyBridge:
                 now=now,
                 event_id=event.event_id,
             )
-        else:
+        elif event.type.startswith("touch_"):
             result = await mind_step(
                 None,
                 experience_type="body_touch",
                 experience_details={"zone": event.type.removeprefix("touch_")},
                 fallback_text="碰到我了。刚才脑子没转过来，但这一下我感觉到了。",
+                provider=self.provider,
+                files=self.files,
+                now=now,
+                event_id=event.event_id,
+            )
+        else:
+            result = await mind_step(
+                None,
+                experience_type="body_raise",
+                fallback_text="刚才被你提起来又放下了。脑子没转过来，但这一下我感觉到了。",
                 provider=self.provider,
                 files=self.files,
                 now=now,

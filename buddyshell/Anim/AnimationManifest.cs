@@ -85,13 +85,8 @@ public sealed partial class AnimationManifest
         public IReadOnlyList<AnimationPlan> Build()
         {
             var activityPlans = BodyActionCatalog.Default.Actions
-                .SelectMany(action => action.Animations)
-                .Select(animation => Transient(
-                    animation.PlanId,
-                    animation.Intent,
-                    animation.Entry,
-                    animation.Body,
-                    animation.Exit))
+                .SelectMany(action => action.Animations.Select(animation =>
+                    Action(animation, action.Shape)))
                 .ToArray();
             return
             [
@@ -105,6 +100,14 @@ public sealed partial class AnimationManifest
             ];
         }
 
+        private AnimationPlan Action(BodyActionAnimation animation, BodyActionShape shape) =>
+            new(
+                animation.PlanId,
+                animation.Intent,
+                SequencePhase(animation.Entry, AnimationPhaseKind.Entry),
+                Phase(animation.Body, AnimationPhaseKind.Body, shape == BodyActionShape.Interactive)!,
+                Phase(animation.Exit, AnimationPhaseKind.Exit));
+
         private AnimationPlan Baseline(string id, AnimationIntent intent, string? entry, string body, string? exit) =>
             new(id, intent, Phase(entry, AnimationPhaseKind.Entry), Phase(body, AnimationPhaseKind.Body, true)!, Phase(exit, AnimationPhaseKind.Exit), true);
 
@@ -117,14 +120,22 @@ public sealed partial class AnimationManifest
         private AnimationPhasePlan? Phase(string? relative, AnimationPhaseKind kind, bool loop = false) =>
             relative is null ? null : new(kind, loop, [Layer(relative)]);
 
-        private AnimationLayerPlan Layer(string relative)
+        private AnimationPhasePlan SequencePhase(
+            IReadOnlyList<string> relatives,
+            AnimationPhaseKind kind) =>
+            new(kind, false, [new AnimationLayerPlan(
+                "main", 0, relatives.SelectMany(Frames).ToArray())]);
+
+        private AnimationLayerPlan Layer(string relative) =>
+            new("main", 0, Frames(relative));
+
+        private IReadOnlyList<AnimationFrameSpec> Frames(string relative)
         {
             var folder = Path.Combine(_root, relative.Replace('/', Path.DirectorySeparatorChar));
             if (!Directory.Exists(folder)) throw new DirectoryNotFoundException($"动画目录不存在：{relative}");
-            var frames = Directory.EnumerateFiles(folder, "*.png", SearchOption.TopDirectoryOnly)
+            return Directory.EnumerateFiles(folder, "*.png", SearchOption.TopDirectoryOnly)
                 .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
                 .Select(path => new AnimationFrameSpec(path, ParseDuration(path))).ToArray();
-            return new AnimationLayerPlan("main", 0, frames);
         }
 
         private static int ParseDuration(string path)

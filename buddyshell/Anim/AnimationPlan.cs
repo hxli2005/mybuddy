@@ -1,9 +1,9 @@
 namespace BuddyShell.Anim;
 
 public enum AnimationPhaseKind { Entry, Body, Exit }
-public enum AnimationExecutionKind { Baseline, Transient, Pending }
-public enum AnimationSource { State, Touch, Chat, System }
-public enum AnimationPriority { Activity = 20, Think = 60, Response = 70, Touch = 90 }
+public enum AnimationExecutionKind { Baseline, Transient, Pending, Interactive }
+public enum AnimationSource { State, Touch, Chat, System, DirectManipulation }
+public enum AnimationPriority { Activity = 20, Think = 60, Response = 70, Touch = 90, DirectManipulation = 100 }
 
 public sealed record LayerPlacement(
     double Width,

@@ -444,6 +444,35 @@ async def test_body_touch_can_be_evidence_for_her_own_touch_experience(tmp_path)
 
 
 @pytest.mark.asyncio
+async def test_raise_claim_requires_raw_fact_and_cannot_infer_motive(tmp_path) -> None:
+    unsupported = _valid_bundle("刚才被你提起来晃了一段。")
+    unsupported["memory_operations"] = []
+    unsupported_files = MindFiles(tmp_path / "unsupported")
+
+    result = await mind_step(
+        "今天只是聊天",
+        provider=StubProvider([unsupported, unsupported]),
+        files=unsupported_files,
+    )
+
+    assert result.committed is False
+    assert any("本次输入不是 body_raise 原始事实" in reason for reason in result.rejection_reasons)
+
+    authored_motive = _valid_bundle("刚才被你提起来，是因为喜欢我吧。")
+    authored_motive["memory_operations"] = []
+    motive_files = MindFiles(tmp_path / "motive")
+    result = await mind_step(
+        None,
+        experience_type="body_raise",
+        provider=StubProvider([authored_motive, authored_motive]),
+        files=motive_files,
+    )
+
+    assert result.committed is False
+    assert any("从原始提起推断了用户动机" in reason for reason in result.rejection_reasons)
+
+
+@pytest.mark.asyncio
 async def test_deleted_life_alias_cannot_be_second_example_for_user_pattern(tmp_path) -> None:
     bad = _valid_bundle("我听见了。")
     bad["memory_operations"] = [
