@@ -47,7 +47,8 @@ MyBuddy mini 不是任务助手、聊天机器人、角色卡或通用 Agent 框
 5. 生活内容只在时间推进到当下时生成，不许为了回答而回场补写。生活事件先入
    history，有意义的才进入长期记忆；不逐分钟模拟，也不建设完整虚拟世界。
 6. 记忆四类：用户事实/偏好、她的经历、共同经历、有证据的模式（须多例或用户
-   确认）；五动词：`record/integrate/recall/correct/forget`；temporary 不落盘。
+   确认）；五动词：`record/integrate/recall/correct/forget`；核心按字符预算常驻，
+   较新的情景记忆填余量，核心超额只推动整合而不阻塞直接回复；temporary 不落盘。
 7. 她的时钟由引擎自产。身体只报告看见了什么、表达是否显示；心智决定意义与
    表达意图。ambient 身体基线保持到被替换，引擎离线时身体回安全姿态。
 8. 权威数据只有 `state.json + history.jsonl + memories.json + failures.jsonl`：

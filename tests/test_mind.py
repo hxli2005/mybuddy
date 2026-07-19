@@ -6,7 +6,14 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from mybuddy.llm import BaseLLMProvider, LLMResponse, Message, ToolCall, ToolSpec
-from mybuddy.mind import STATIC_CATCH, MindFiles, _replace_texts, advance_time, mind_step
+from mybuddy.mind import (
+    MEMORY_CONTEXT_BUDGET,
+    STATIC_CATCH,
+    MindFiles,
+    _replace_texts,
+    advance_time,
+    mind_step,
+)
 from scripts.accept_real_key import DEFAULT_TEXT, encode_payload
 
 
@@ -108,6 +115,17 @@ def _read(files: MindFiles) -> tuple[dict, list[dict], dict, list[dict]]:
         json.loads(line) for line in files.failures_path.read_text(encoding="utf-8").splitlines()
     ]
     return state, history, memories, failures
+
+
+def _memory_item(index: int, content: str, *, core: bool = False) -> dict:
+    return {
+        "id": f"mem_{index}",
+        "kind": "self_experience",
+        "content": content,
+        "evidence_ids": [f"life_{index}"],
+        "created_at": f"2026-07-{index + 1:02d}T00:00:00+00:00",
+        "core": core,
+    }
 
 
 def test_real_key_acceptance_payload_preserves_chinese_as_utf8() -> None:
@@ -437,6 +455,7 @@ async def test_integrate_recall_correct_and_forget_have_distinct_traced_effects(
             "content": "用户会收拾桌面",
             "evidence_ids": ["exp_old"],
             "created_at": (now - timedelta(days=1)).isoformat(),
+            "core": True,
         },
         {
             "id": "mem_self",
@@ -469,6 +488,7 @@ async def test_integrate_recall_correct_and_forget_have_distinct_traced_effects(
             "target_id": "mem_user",
             "content": "用户忙完后会收拾桌面",
             "evidence_ids": ["INCOMING"],
+            "core": False,
         },
         {
             "action": "recall",
@@ -504,6 +524,7 @@ async def test_integrate_recall_correct_and_forget_have_distinct_traced_effects(
     assert result.committed is True
     assert by_id["mem_user"]["evidence_ids"][0] == "exp_old"
     assert len(by_id["mem_user"]["evidence_ids"]) == 2
+    assert by_id["mem_user"]["core"] is False
     assert by_id["mem_self"]["content"] == "在窗边读过书"
     assert by_id["mem_pattern"]["content"] == "用户忙完后常会整理桌面，不限于夜里"
     assert "mem_shared" not in by_id
@@ -514,8 +535,76 @@ async def test_integrate_recall_correct_and_forget_have_distinct_traced_effects(
         "forget",
     ]
     corrected = next(item for item in operations if item["action"] == "correct")
+    integrated = next(item for item in operations if item["action"] == "integrate")
+    assert integrated["core"] is False
     assert corrected["previous_content"] == "用户总在夜里整理桌面"
     assert failures == []
+
+
+@pytest.mark.asyncio
+async def test_early_core_memory_stays_visible_after_more_than_eight_situations(tmp_path) -> None:
+    files = MindFiles(tmp_path)
+    now = datetime(2026, 7, 18, 12, 0, tzinfo=UTC)
+    state, history, memories = files.load(now)
+    memories["items"] = [
+        _memory_item(0, "我遇到不确定的事时会先承认不知道。", core=True),
+        *[_memory_item(index, f"情景记忆{index}：" + "页" * 450) for index in range(1, 11)],
+    ]
+    files.commit(state, history, memories)
+    bundle = _valid_bundle("我记得自己要把不知道的地方说清楚。")
+    bundle["memory_operations"] = []
+    provider = StubProvider([bundle])
+
+    result = await mind_step("你还记得自己会怎么面对不确定吗？", provider=provider, files=files)
+
+    prompt = json.loads(provider.calls[0][0].content)
+    selected_ids = [item["id"] for item in prompt["selected_memories"]]
+    assert result.committed is True
+    assert "mem_0" in selected_ids
+    assert "mem_10" in selected_ids
+    assert "mem_1" not in selected_ids
+    assert prompt["memory_context"]["selected_chars"] <= MEMORY_CONTEXT_BUDGET
+    assert prompt["memory_context"]["core_over_budget"] is False
+
+
+@pytest.mark.asyncio
+async def test_core_over_budget_requests_integration_without_blocking_direct_reply(
+    tmp_path,
+) -> None:
+    files = MindFiles(tmp_path)
+    now = datetime(2026, 7, 18, 13, 0, tzinfo=UTC)
+    state, history, memories = files.load(now)
+    memories["items"] = [
+        _memory_item(index, f"核心倾向{index}：" + "稳" * 480, core=True) for index in range(9)
+    ]
+    files.commit(state, history, memories)
+    bundle = _valid_bundle("这件事我听见了，先和你一起把它放在这里。")
+    bundle["memory_operations"] = []
+    provider = StubProvider([bundle])
+
+    result = await mind_step("今天有件事让我有点乱。", provider=provider, files=files)
+
+    prompt = json.loads(provider.calls[0][0].content)
+    context = prompt["memory_context"]
+    assert result.committed is True
+    assert result.pending_expression.text == "这件事我听见了，先和你一起把它放在这里。"
+    assert len(prompt["selected_memories"]) == 9
+    assert context["core_over_budget"] is True
+    assert context["core_chars"] > MEMORY_CONTEXT_BUDGET
+    assert "integrate" in context["guidance"]
+
+
+@pytest.mark.asyncio
+async def test_record_can_make_a_memory_core_for_later_context(tmp_path) -> None:
+    bundle = _valid_bundle()
+    bundle["memory_operations"][0]["core"] = True
+    files = MindFiles(tmp_path)
+
+    result = await mind_step("我不喜欢被催着回答。", provider=StubProvider([bundle]), files=files)
+
+    _, _, memories, _ = _read(files)
+    assert result.committed is True
+    assert memories["items"][0]["core"] is True
 
 
 @pytest.mark.asyncio

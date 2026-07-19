@@ -20,7 +20,7 @@ from mybuddy.config import load_config
 from mybuddy.llm import BaseLLMProvider, Message, Role, ToolSpec, make_provider
 
 HISTORY_CONTEXT_LIMIT = 12
-MEMORY_CONTEXT_LIMIT = 8
+MEMORY_CONTEXT_BUDGET = 4000
 RECENT_EVENT_LIMIT = 128
 LIFE_STEP_INTERVAL = timedelta(minutes=30)
 STATIC_CATCH = "我在。刚才脑子里那句话没理清，但你的话我确实听见了。"
@@ -49,10 +49,22 @@ class MemoryOperation(BaseModel):
 
     action: Literal["record", "integrate", "recall", "correct", "forget"]
     kind: Literal["user_fact", "self_experience", "shared_experience", "pattern"]
-    content: str = Field(default="", max_length=500)
-    evidence_ids: list[str] = Field(default_factory=list, max_length=12)
+    content: str = Field(
+        default="",
+        max_length=500,
+        description="record/integrate/correct 必填；recall/forget 必须省略",
+    )
+    evidence_ids: list[str] = Field(
+        default_factory=list,
+        max_length=12,
+        description="写入事实时绑定给定证据；recall/forget 可为空",
+    )
     target_id: str | None = None
     user_confirmed: bool = False
+    core: bool | None = Field(
+        default=None,
+        description="仅 record/integrate/correct 可用；true 常驻，false 情景化",
+    )
 
     @model_validator(mode="after")
     def fields_match_action(self) -> MemoryOperation:
@@ -66,6 +78,8 @@ class MemoryOperation(BaseModel):
             raise ValueError(f"{self.action} does not accept content")
         if self.user_confirmed and self.kind != "pattern":
             raise ValueError("user_confirmed only applies to pattern")
+        if self.action in {"recall", "forget"} and self.core is not None:
+            raise ValueError(f"{self.action} does not accept core")
         return self
 
 
@@ -478,6 +492,61 @@ def _selected_history(
     return visible[-HISTORY_CONTEXT_LIMIT:]
 
 
+def _memory_chars(item: dict[str, Any]) -> int:
+    return len(json.dumps(item, ensure_ascii=False, separators=(",", ":")))
+
+
+def _selected_memories(
+    memories: dict[str, Any],
+) -> tuple[list[dict[str, Any]], dict[str, int | bool | str]]:
+    """核心全部常驻；较新的情景记忆按完整条目填满剩余字符额度。"""
+    items = [item for item in memories.get("items", []) if isinstance(item, dict)]
+    core = [item for item in items if item.get("core") is True]
+    situational = [item for item in items if item.get("core") is not True]
+    core_chars = sum(_memory_chars(item) for item in core)
+    remaining = max(0, MEMORY_CONTEXT_BUDGET - core_chars)
+    newest: list[dict[str, Any]] = []
+    for item in reversed(situational):
+        size = _memory_chars(item)
+        if size <= remaining:
+            newest.append(item)
+            remaining -= size
+    selected = [*core, *reversed(newest)]
+    over_budget = core_chars > MEMORY_CONTEXT_BUDGET
+    guidance = (
+        "核心记忆已经超过字符预算；本次仍全部提供且直接回复照常进行。"
+        "若证据足够，优先用 integrate 压缩重复核心，或将不再需要常驻的记忆设为 core=false。"
+        if over_budget
+        else "核心记忆全部常驻；较新的情景记忆只按完整条目填入剩余额度。"
+    )
+    return selected, {
+        "budget_chars": MEMORY_CONTEXT_BUDGET,
+        "core_chars": core_chars,
+        "selected_chars": sum(_memory_chars(item) for item in selected),
+        "core_over_budget": over_budget,
+        "guidance": guidance,
+    }
+
+
+def _evidence_types_for_context(
+    history: list[dict[str, Any]],
+    selected_history: list[dict[str, Any]],
+    selected_memories: list[dict[str, Any]],
+) -> dict[str, str]:
+    memory_evidence = {
+        str(evidence_id)
+        for memory in selected_memories
+        for evidence_id in memory.get("evidence_ids", [])
+        if isinstance(evidence_id, str)
+    }
+    visible_ids = {str(item.get("id")) for item in selected_history} | memory_evidence
+    return {
+        str(item.get("id")): str(item.get("type"))
+        for item in history
+        if str(item.get("id")) in visible_ids
+    }
+
+
 def _prompt_payload(
     state: dict[str, Any],
     history: list[dict[str, Any]],
@@ -490,10 +559,7 @@ def _prompt_payload(
     selected_history = _selected_history(
         history, include_shared_expressions=include_shared_expressions
     )
-    memory_items = memories.get("items", [])
-    selected_memories = (
-        memory_items[-MEMORY_CONTEXT_LIMIT:] if isinstance(memory_items, list) else []
-    )
+    selected_memories, memory_context = _selected_memories(memories)
     last_step = state.get("last_step_at", now.isoformat())
     payload = {
         "now": now.isoformat(),
@@ -501,14 +567,16 @@ def _prompt_payload(
         "state": state,
         "selected_history": selected_history,
         "selected_memories": selected_memories,
+        "memory_context": memory_context,
         "incoming_experience": experience,
         "evidence_rule": (
             "有本次输入时可引用 incoming_experience.id；仅时间推进可产生新生活事件，"
             "并按顺序引用 life:0、life:1。"
-            "record 新建且不带 target_id；integrate 合并、recall 取回、correct 纠正、forget 遗忘"
-            "都必须把现有记忆 ID 写入 target_id。用户事实、共同经历和自身经历必须绑定对应证据。"
+            "不必每回合都操作记忆。record 新建，必须有 content 且不带 target_id；"
+            "integrate/correct 必须有 content 和现有 target_id；recall/forget 只带现有 target_id，"
+            "必须省略 content。用户事实、共同经历和自身经历必须绑定对应证据。"
             "模式须有两条用户或共同经历；若本次输入明确确认了模式，可设 user_confirmed=true。"
-            "临时念头不要提交为长期记忆。"
+            "core=true 只给需要跨情景常驻的稳定事实或倾向；临时念头和一般情景记忆不要设为 core。"
         ),
     }
     return json.dumps(payload, ensure_ascii=False)
@@ -563,12 +631,16 @@ def _apply_memories(
                 dict.fromkeys([*target.get("evidence_ids", []), *evidence_ids])
             )
             target["integrated_at"] = now.isoformat()
+            if operation.core is not None:
+                target["core"] = operation.core
             memory_id = str(operation.target_id)
         elif operation.action == "correct":
             assert target is not None
             target["content"] = operation.content
             target["evidence_ids"] = evidence_ids
             target["corrected_at"] = now.isoformat()
+            if operation.core is not None:
+                target["core"] = operation.core
             memory_id = str(operation.target_id)
         else:
             item = {
@@ -577,6 +649,7 @@ def _apply_memories(
                 "content": operation.content,
                 "evidence_ids": evidence_ids,
                 "created_at": now.isoformat(),
+                "core": bool(operation.core),
             }
             items.append(item)
             by_id[item["id"]] = item
@@ -592,6 +665,8 @@ def _apply_memories(
         }
         if operation.action in {"record", "integrate", "correct"}:
             event["content"] = operation.content
+        if operation.action == "record" or operation.core is not None:
+            event["core"] = bool(operation.core)
         if operation.action in {"integrate", "correct"}:
             event["previous_content"] = previous_content
         if operation.user_confirmed:
@@ -764,7 +839,8 @@ async def mind_step(
         experience.update(experience_details)
     prompt = _prompt_payload(state, history, memories, experience, current_time)
     context_history = _selected_history(history, include_shared_expressions=True)
-    evidence_types = {str(item.get("id")): str(item.get("type")) for item in context_history}
+    context_memories, _ = _selected_memories(memories)
+    evidence_types = _evidence_types_for_context(history, context_history, context_memories)
     evidence_types[experience["id"]] = experience["type"]
     memory_items = memories.get("items", [])
     memories_by_id = {
@@ -823,7 +899,8 @@ async def advance_time(
         return TimeStepResult(status="not_due")
 
     context_history = _selected_history(history, include_shared_expressions=False)
-    evidence_types = {str(item.get("id")): str(item.get("type")) for item in context_history}
+    context_memories, _ = _selected_memories(memories)
+    evidence_types = _evidence_types_for_context(history, context_history, context_memories)
     memory_items = memories.get("items", [])
     memories_by_id = {
         str(item.get("id")): item
