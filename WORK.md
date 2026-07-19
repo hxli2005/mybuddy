@@ -7,8 +7,8 @@
 
 - 当前写入者：无
 - 当前任务：无
-- 最近完成：S10 真实-key触碰/quiet/ambient三腿验收
-- 下一任务：S11 BLOCKED；代码与 zip 已就绪，只差无 Python/.NET/Steam 干净 Windows 截图验收
+- 最近完成：S11 Hyper-V 干净 Win11 首次运行验收
+- 下一任务：无；S0-S11 流水线完成，新任务由所有者裁决后领取
 - 工作区要求：保持提交后干净；新任务先更新本板再领取
 
 ## 任务流水线
@@ -28,7 +28,7 @@
 | S8 | DONE | 删除旧路径→完整纵向验收 | S7 | 单一写入路径、遗留清单归零、真实轨迹 |
 | S9 | DONE | 真实输入→语义证据→真实-key复验 | S8 | UTF-8原文、伪造整包可读拒绝、干净目录真实轨迹 |
 | S10 | DONE | 真实-key触碰/quiet/ambient三腿验收 | S9 | 三腿真实轨迹、误伤签名、shown与四文件一致 |
-| S11 | BLOCKED | 免费BYOK zip→内置授权素材→单写者首次运行 | S10 | 无Python/.NET/Steam干净机只填key即说出原话；中文用户/中文空格路径/8000占用/Defender说明/双开/退出/崩溃恢复全留证 |
+| S11 | DONE | 免费BYOK zip→内置授权素材→单写者首次运行 | S10 | 无Python/.NET/Steam干净机只填key即说出原话；中文用户/中文空格路径/8000占用/Defender说明/双开/退出/崩溃恢复全留证 |
 
 解除依赖时只把下一项改为 READY，不提前铺后续任务。只读评审不占ACTIVE名额，
 但不得修改文件；评审意见由当前写入者筛选后实现，不直接写入本板。
@@ -44,18 +44,17 @@
 
 ## 最近一次交接
 
-- 任务：S11 免费 BYOK zip 首次运行（代码已就绪，干净机验收阻塞）
+- 任务：S11 免费 BYOK zip 在 Hyper-V 干净 Win11 首次运行验收
 - 提交：本提交
-- 实现：首次只收 OpenRouter key 并用 Windows CurrentUser DPAPI 加密；WPF 自启 PyInstaller onedir 心智桥；命名 mutex、固定端口、数据目录 OS 锁与父 PID 收尾共同守住单写者
-- 诚实连接：响应新增瞬时 `mind_status=not_run/accepted/rejected/unavailable`，模型失败的静态接住不再显示“已连接”
-- ambient 裁决：先确认匹配 `shown_id`；无收据且已跨本地日期的 ambient pending 才弃，已提交生活与记忆保留
-- 分发：`scripts/build_share.ps1` 产出 `dist/MyBuddy-S11-win-x64.zip`（119.4 MiB），内含自包含 .NET/WPF、自包含 Python 心智桥、248 帧必需 VPet 动画、使用说明与带查阅日期的授权摘要；产物秘钥扫描干净
-- 本机验收：Python `53 passed`；Ruff/format/diff 绿；WPF 编译 `0 warnings / 0 errors`；身体/DPAPI `5/5`；已打包引擎 HTTP 启动、第二写者拒绝、父 PID 消失自退、中文空格路径解压与 248 帧计数通过
-- 真实 key：`data/mini-s11-package-real/`保留内联 PowerShell 再次把中文烧成问号的失败轨迹，不计成功；`data/mini-s11-package-real-utf8/`从固定 UTF-8 文件读取原文，已打包引擎返回 `accepted` 并 shown
-- 她显示的话：“你回来啦。忙完了就好，我一直在呢。”
-- 尺寸：形状测试同口径为31个机器侧 Python/C# 文件、3803/5000行，断言通过
-- 唯一阻塞：当前机器有 Python/.NET/Steam，且 Codex 进程环境启动 WPF 时系统字体 URI 初始化失败；须在无运行时/无 Steam 的干净 Windows 以截图补齐首次只填 key、中文用户、8000 占用、双开、退出、崩溃恢复与 Defender 全轨迹
-- 她哪里更活了：她现在能从一个不带环境的 zip 醒来，同时不会把模型失联说成“我连上了”，也不会在第二天把没说出口的昨日台词冒充“刚刚”
+- 环境：Windows 11 Pro 25H2 build 26200，中文本地用户`小布验收`，无 Python/.NET CLI/Steam，Defender 实时保护开启
+- 产物：`dist/MyBuddy-S11-win-x64.zip` SHA256 `BA27A524C9078B23569E1395D6E8CC2585742B18251113CBC8F1876CD97E0EA5`；从中文空格路径启动，只填用户自己的 key，DPAPI 密文落盘且无明文前缀
+- 真实轨迹：双开仍为身体/引擎各一；真实退出后身体/引擎/8000 全零；8000 被占时身体一、引擎零且明确留存拒因；强制杀身体后引擎与端口自退，再启恢复为一/一/一
+- 权威文件：`state/history/memories`穿过崩溃逐字节不变；`failures.jsonl`只追加被拒候选与拒因、旧记录前缀未覆盖；共同历史仍为两条
+- 证据：`data/mini-s11-clean-win11/`；关键为真实界面`05-real-key-reply-user.png`、双开`06`、退出`07`、端口占用`08/09`、Defender`11`、失败留痕`12`、崩溃语义验收`13`
+- 她显示的话：“欢迎回来～忙完啦？辛苦了，先歇口气吧。”
+- 回归：Python `53 passed`；Ruff/format/diff 绿；WPF `0 warnings / 0 errors`；身体/DPAPI `5/5`；形状测试继续守住3803/5000行
+- 裁决：所有者确认首次运行界面正常，先前异常来自截图方式；发布代码不改，只完成真实干净机验收
+- 她哪里更活了：她现在能在一台什么运行时都没装的新 Windows 里从中文路径醒来，接住人、守住唯一的自己，并在身体突然消失后带着双方真正说过的话回来
 
 交接只允许保留最近一次。禁止粘贴完整diff、长测试日志、未来设计和“顺便发现”
 清单；这些分别属于Git、测试产物、`DESIGN.md`和当前任务之外。
