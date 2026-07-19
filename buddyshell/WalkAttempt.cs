@@ -41,11 +41,11 @@ public sealed class WalkAttempt
         if (Math.Max(leftRoom, rightRoom) < 1)
             throw new InvalidOperationException("工作区没有可核验的水平 walk 距离。");
         _direction = rightRoom >= leftRoom ? 1 : -1;
-        Intent = _direction > 0 ? AnimationIntent.WalkRight : AnimationIntent.WalkLeft;
+        Direction = _direction > 0 ? BodyActionDirection.Right : BodyActionDirection.Left;
     }
 
     public string ActivityId { get; }
-    public AnimationIntent Intent { get; }
+    public BodyActionDirection Direction { get; }
     public Rect WorkArea { get; }
     public double WindowWidth { get; }
     public double WindowHeight { get; }

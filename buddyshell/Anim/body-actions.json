@@ -1,0 +1,38 @@
+[
+  {
+    "type": "read",
+    "shape": "stationary",
+    "animations": [
+      {
+        "direction": "still",
+        "intent": "read",
+        "plan_id": "activity.read.normal",
+        "entry": "WORK/Study/A_Nomal",
+        "body": "WORK/Study/B_1_Nomal",
+        "exit": "WORK/Study/C_Nomal"
+      }
+    ]
+  },
+  {
+    "type": "walk",
+    "shape": "horizontal",
+    "animations": [
+      {
+        "direction": "left",
+        "intent": "walk_left",
+        "plan_id": "activity.walk.left.normal",
+        "entry": "MOVE/walk.left/A_Nomal",
+        "body": "MOVE/walk.left/B_Nomal",
+        "exit": "MOVE/walk.left/C_Nomal"
+      },
+      {
+        "direction": "right",
+        "intent": "walk_right",
+        "plan_id": "activity.walk.right.normal",
+        "entry": "MOVE/walk.right/A_Nomal",
+        "body": "MOVE/walk.right/B_Nomal",
+        "exit": "MOVE/walk.right/C_Nomal"
+      }
+    ]
+  }
+]

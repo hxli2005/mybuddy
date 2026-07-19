@@ -7,9 +7,9 @@
 
 - 当前写入者：无
 - 当前任务：无
-- 最近完成：S15 Walk动画进入真实窗口位移与封闭物理收据
-- 下一任务：S16 READY；read+walk第二实现后提取最小动作目录
-- 后续任务：S17-S18 已由所有者裁决并预登记；依赖未解除前保持 BLOCKED
+- 最近完成：S16 read+walk第二实现后提取最小动作目录
+- 下一任务：S17 READY；真实欲望按批扩 VPet 动作词汇
+- 后续任务：S18 已由所有者裁决并预登记；依赖未解除前保持 BLOCKED
 - 工作区要求：保持提交后干净；新任务先更新本板再领取
 
 ## 任务流水线
@@ -34,8 +34,8 @@
 | S13 | DONE | 受约束种子→初始核心倾向→可被真实经历修正 | S12 | 行为试纸与两组张力进入核心记忆；表达样本只管渲染；无虚构传记、无固化亲密浓度 |
 | S14 | DONE | 真实TXT→身体活动收据→阅读进度与有证据感受 | S13 | 删除自由生活事件/活动/baseline；零债务八例与真实-key触碰/quiet/ambient三腿全过；允许关心问句 |
 | S15 | DONE | Walk动画→真实窗口位移→封闭物理收据 | S14 | 完成/中断位置与屏幕边界可核验；技术故障不入人生；未回应不能触发接近、躲避或退缩 |
-| S16 | READY | read+walk第二实现→提取最小动作目录 | S15 | 同物理形状的新动作主要改数据；无效果表、任意details、事件总线、插件或提前接口 |
-| S17 | BLOCKED | 真实欲望→按批扩VPet动作词汇→逐批授权验收 | S16 | Raise优先、其余按真实闭环进入；每批看帧、收据、包体和授权；不移植数值机制 |
+| S16 | DONE | read+walk第二实现→提取最小动作目录 | S15 | 同物理形状的新动作主要改数据；无效果表、任意details、事件总线、插件或提前接口 |
+| S17 | READY | 真实欲望→按批扩VPet动作词汇→逐批授权验收 | S16 | Raise优先、其余按真实闭环进入；每批看帧、收据、包体和授权；不移植数值机制 |
 | S18 | BLOCKED | 多日真实轨迹→记忆/阅读/身体互相改变→人格验收 | S17 | 四审计问题由轨迹回答；停机不补帧、沉默零债务、世界阻力与技术故障严格分开；贴实际台词 |
 
 已裁决的后续任务可以 BLOCKED 预登记；解除依赖时只把紧邻下一项改为 READY，
@@ -53,16 +53,15 @@
 
 ## 最近一次交接
 
-- 任务：S15 Walk动画进入真实窗口位移与封闭物理收据
+- 任务：S16 read+walk第二实现后提取最小动作目录
 - 提交：本提交
-- 实现：到点 read/walk 轮转；walk 不看 presence、关系或未回应，只由当前窗口与当前屏工作区决定左右，以 80 px/s 播放真实 Walk 帧并移动窗口；固定收据只含状态/原因、起终点、窗口尺寸与工作区
-- 提交边界：只有边界内且水平位移≥1的 completed 才追加 `self_walk`；touch/chat/activity_replaced 中断和 animation/window failed 只幂等关闭尝试，history/memories/表达零写入；越界、零位移和身体夹带含义均 422
-- 自动试纸：Python `73 passed`，BuddyShell `8 passed`，仓库形状 `3 passed`；机器侧 4463 行；Ruff/format/diff 全绿
-- 真实 Walk：`data/mini-s15-real-walk/` 中窗口从 (251.43,251.43) 走到 (404.57,251.43)，实际横移 153.14 DIP；窗口 336×420，当前屏工作区 0..2194.29 × 0..1234.29，1.6 秒后形成唯一 `self_walk`，next_activity=read，零模型调用、零表达
-- 零债务：已有 ambient 问句显示后故意不回应，下一到点活动仍是纯 walk；provider 调用不增加、无第二 ambient，history 中没有用户反应、接近、躲避或退缩含义
-- 真实显示：外发真实-key 因未获明确授权而未执行；改用完全本地 unavailable provider，WPF 实际显示并回 shown，`shared_expression` 与 `bubble_shown` 一致
-- 共享包：`dist/MyBuddy-S15-win-x64.zip` 115488844 bytes，SHA-256 `563E4D9542C09FAFF7094404A5A66EAE89086EC08BC447D38A5CB8B2AFCEE1E9`；自包含引擎，174 帧中 Walk 左右各 15 帧
+- 实现：内置严格 JSON 目录只列动作 type、stationary/horizontal 物理形状，以及各方向 A/B/C 素材和 plan；身体分发、动画 manifest、walk 方向与共享包素材选择共读这一份数据
+- 封闭边界：stationary 只准 still，horizontal 只准 left/right；重复 type/plan/intent、缺字段和未声明 effects/details 都启动即拒绝；没有效果表、任意 details、事件总线、插件或通用扩展接口
+- 同形试纸：测试用一条 stationary raise 数据得到新 plan，无需修改 MainWindow 分发或打包脚本；真实新增动作仍须由心智明确安排并使用独立 intent，目录不替人格做决定
+- 自动试纸：Python `73 passed`，BuddyShell `9 passed`，Ruff/format/diff 全绿；机器侧 4581 行
+- 真实运行：`data/mini-s16-real/` 中真实 WPF 从 (240,240) 走到 (393.14,240)，窗口 336×420、工作区 0..2194.29 × 0..1234.29，形成唯一 `self_walk`；`data/mini-s16-real-shell/` 的 bubble_shown 与 history shown 一致
+- 共享包：`dist/MyBuddy-S16-win-x64.zip` 115493494 bytes，174 帧，SHA-256 `601E8CED99B3FCEE7DBBD84FA5C1897847CFA6BD4CEAFB9010A8E3A4D7C28B20`
 - 她显示的话：“我在。刚才脑子里那句话没理清，但你的话我确实听见了。”
-- 她哪里更活了：她第一次不是在原地播放一段“像在走”的动画，而是真的从屏幕上的一处走到另一处；只有这段身体做完且边界可核验的路，才成为她自己的生活
+- 她哪里更活了：她的读和走第一次被同一份小而封闭的身体词表认领；以后长出同形的新动作，不必再把她拆成散落各处的条件分支。
 交接只允许保留最近一次。禁止粘贴完整diff、长测试日志、未来设计和“顺便发现”
 清单；这些分别属于Git、测试产物、`DESIGN.md`和当前任务之外。

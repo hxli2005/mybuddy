@@ -41,27 +41,34 @@ $engineDist = Join-Path $work "engine-dist"
 if ($LASTEXITCODE -ne 0) { throw "MyBuddyEngine PyInstaller 打包失败。" }
 Copy-Item -LiteralPath (Join-Path $engineDist "MyBuddyEngine") -Destination (Join-Path $stage "engine") -Recurse
 
+$actionCatalog = Get-Content -Raw -LiteralPath (Join-Path $projectRoot "buddyshell\Anim\body-actions.json") |
+    ConvertFrom-Json
+$activityAssetFolders = @($actionCatalog | ForEach-Object {
+    $_.animations | ForEach-Object { $_.entry; $_.body; $_.exit }
+})
 $assetFolders = @(
     "Default/Nomal/1",
-    "WORK/Study/A_Nomal", "WORK/Study/B_1_Nomal", "WORK/Study/C_Nomal",
-    "MOVE/walk.left/A_Nomal", "MOVE/walk.left/B_Nomal", "MOVE/walk.left/C_Nomal",
-    "MOVE/walk.right/A_Nomal", "MOVE/walk.right/B_Nomal", "MOVE/walk.right/C_Nomal",
     "Think/Nomal/A", "Think/Nomal/B", "Think/Nomal/C",
     "Touch_Head/A_Nomal", "Touch_Head/B_Nomal", "Touch_Head/C_Nomal",
     "Touch_Body/A_Happy/tb1", "Touch_Body/B_Happy/tb1", "Touch_Body/C_Happy/tb1",
     "Say/Self/A", "Say/Self/B_1", "Say/Self/C",
     "Say/Shining/A", "Say/Shining/B_1", "Say/Shining/C"
-)
+) + $activityAssetFolders
+$assetFolders = @($assetFolders | Sort-Object -Unique)
 $assetRoot = Join-Path $stage "assets\pet"
+$expectedPngCount = 0
 foreach ($relative in $assetFolders) {
     $source = Join-Path $petSource $relative
     if (-not (Test-Path -LiteralPath $source -PathType Container)) { throw "缺少动画目录：$relative" }
+    $expectedPngCount += @(Get-ChildItem -LiteralPath $source -File -Filter *.png).Count
     $destination = Join-Path $assetRoot $relative
     New-Item -ItemType Directory -Path (Split-Path $destination -Parent) -Force | Out-Null
     Copy-Item -LiteralPath $source -Destination $destination -Recurse
 }
 $pngCount = @(Get-ChildItem -LiteralPath $assetRoot -Recurse -File -Filter *.png).Count
-if ($pngCount -ne 174) { throw "内置动画应为 174 帧，实际为 $pngCount。" }
+if ($pngCount -ne $expectedPngCount) {
+    throw "内置动画应为 $expectedPngCount 帧，实际为 $pngCount。"
+}
 
 Copy-Item -LiteralPath (Join-Path $projectRoot "distribution\config.default.yaml") -Destination $stage
 Copy-Item -LiteralPath (Join-Path $projectRoot "mybuddy\reading.txt") -Destination (Join-Path $stage "小布读本.txt")
@@ -76,7 +83,7 @@ $leaks = Get-ChildItem -LiteralPath $stage -Recurse -File | Where-Object {
 } | Select-String -Pattern "sk-or-v1-|sk-ant-|api_key:\s+(?!\$\{MYBUDDY_API_KEY\})\S+"
 if ($leaks) { throw "分发目录疑似含有真实 key：$($leaks.Path -join ', ')" }
 
-$archive = Join-Path $outputRoot "MyBuddy-S15-win-x64.zip"
+$archive = Join-Path $outputRoot "MyBuddy-S16-win-x64.zip"
 if (Test-Path -LiteralPath $archive) { Remove-Item -LiteralPath $archive -Force }
 Compress-Archive -LiteralPath $stage -DestinationPath $archive -CompressionLevel Optimal
 Write-Host "SHARE_BUILD_OK archive=$archive png=$pngCount"

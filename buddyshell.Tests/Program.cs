@@ -15,6 +15,7 @@ internal static class Program
         var tests = new (string Name, Action Run)[]
         {
             ("body step is the only wire contract", BodyStepIsOnlyContract),
+            ("body action catalog adds same-shape actions as data", BodyActionCatalogIsDataDriven),
             ("read completion emits a physical receipt", ReadCompletionEmitsReceipt),
             ("touch interrupts read without a completed receipt", TouchInterruptsRead),
             ("walk displacement stays inside work area", WalkDisplacementStaysInsideWorkArea),
@@ -39,6 +40,45 @@ internal static class Program
         }
         Console.WriteLine($"RESULT total={tests.Length} failed={failed}");
         return failed == 0 ? 0 : 1;
+    }
+
+    private static void BodyActionCatalogIsDataDriven()
+    {
+        Equal(BodyActionShape.Stationary, BodyActionCatalog.Default.Get("read").Shape);
+        Equal(BodyActionShape.Horizontal, BodyActionCatalog.Default.Get("walk").Shape);
+        Equal(
+            AnimationIntent.WalkRight,
+            BodyActionCatalog.Default.Get("walk").Animation(BodyActionDirection.Right).Intent);
+
+        var added = BodyActionCatalog.Parse(
+            """
+            [{
+              "type": "raise",
+              "shape": "stationary",
+              "animations": [{
+                "direction": "still",
+                "intent": "happy",
+                "plan_id": "activity.raise.normal",
+                "entry": "RAISE/A",
+                "body": "RAISE/B",
+                "exit": "RAISE/C"
+              }]
+            }]
+            """).Get("raise");
+        Equal(BodyActionShape.Stationary, added.Shape);
+        Equal("activity.raise.normal", added.Animation(BodyActionDirection.Still).PlanId);
+
+        var rejectedExtraField = false;
+        try
+        {
+            BodyActionCatalog.Parse(
+                """[{"type":"read","shape":"stationary","animations":[],"effects":{}}]""");
+        }
+        catch (JsonException)
+        {
+            rejectedExtraField = true;
+        }
+        Equal(true, rejectedExtraField);
     }
 
     private static void BodyStepIsOnlyContract()
@@ -131,13 +171,13 @@ internal static class Program
     {
         var area = new Rect(0, 0, 800, 600);
         var right = new WalkAttempt("walk-right", 0, 80, 200, 240, area);
-        Equal(AnimationIntent.WalkRight, right.Intent);
+        Equal(BodyActionDirection.Right, right.Direction);
         right.Advance(2000);
         Equal(160.0, right.Left);
         Equal(true, right.Contains(right.Left, right.Top));
 
         var left = new WalkAttempt("walk-left", 560, 80, 200, 240, area);
-        Equal(AnimationIntent.WalkLeft, left.Intent);
+        Equal(BodyActionDirection.Left, left.Direction);
         left.Advance(10000);
         Equal(0.0, left.Left);
         Equal(true, left.Contains(left.Left, left.Top));

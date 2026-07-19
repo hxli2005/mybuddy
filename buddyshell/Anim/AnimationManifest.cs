@@ -7,15 +7,17 @@ public sealed partial class AnimationManifest
 {
     private static readonly string[] RequiredPlanIds =
     [
-        "idle.default.normal", "activity.read.normal", "activity.walk.left.normal", "activity.walk.right.normal",
-        "think.normal", "touch.head.normal", "touch.body.happy", "speech.neutral", "speech.happy",
+        "idle.default.normal", "think.normal", "touch.head.normal", "touch.body.happy",
+        "speech.neutral", "speech.happy",
     ];
     private readonly Dictionary<string, AnimationPlan> _plans;
+    private readonly Dictionary<AnimationIntent, AnimationPlan> _plansByIntent;
 
     private AnimationManifest(string petRoot, IEnumerable<AnimationPlan> plans)
     {
         PetRoot = Path.GetFullPath(petRoot);
         _plans = plans.ToDictionary(plan => plan.Id, StringComparer.Ordinal);
+        _plansByIntent = _plans.Values.ToDictionary(plan => plan.Intent);
     }
 
     public string PetRoot { get; }
@@ -40,17 +42,10 @@ public sealed partial class AnimationManifest
         return manifest;
     }
 
-    public AnimationPlan Resolve(AnimationRequest request) => Get(request.Intent switch
-    {
-        AnimationIntent.Read => "activity.read.normal",
-        AnimationIntent.WalkLeft => "activity.walk.left.normal",
-        AnimationIntent.WalkRight => "activity.walk.right.normal",
-        AnimationIntent.Think => "think.normal",
-        AnimationIntent.TouchHeadReflex => "touch.head.normal",
-        AnimationIntent.TouchBodyReflex => "touch.body.happy",
-        AnimationIntent.Happy => "speech.happy",
-        _ => "speech.neutral",
-    });
+    public AnimationPlan Resolve(AnimationRequest request) =>
+        _plansByIntent.TryGetValue(request.Intent, out var plan)
+            ? plan
+            : throw new KeyNotFoundException($"动画 intent 不存在：{request.Intent}");
 
     public AnimationPlan Get(string id) => _plans.TryGetValue(id, out var plan)
         ? plan
@@ -58,7 +53,10 @@ public sealed partial class AnimationManifest
 
     public IReadOnlyList<string> Validate()
     {
-        var errors = RequiredPlanIds.Where(id => !_plans.ContainsKey(id))
+        var required = RequiredPlanIds.Concat(
+            BodyActionCatalog.Default.Actions.SelectMany(action =>
+                action.Animations.Select(animation => animation.PlanId)));
+        var errors = required.Where(id => !_plans.ContainsKey(id))
             .Select(id => $"缺少必需 plan：{id}").ToList();
         foreach (var plan in _plans.Values)
         {
@@ -84,18 +82,28 @@ public sealed partial class AnimationManifest
     {
         private readonly string _root = Path.GetFullPath(petRoot);
 
-        public IReadOnlyList<AnimationPlan> Build() =>
-        [
-            Baseline("idle.default.normal", AnimationIntent.Idle, null, "Default/Nomal/1", null),
-            Transient("activity.read.normal", AnimationIntent.Read, "WORK/Study/A_Nomal", "WORK/Study/B_1_Nomal", "WORK/Study/C_Nomal"),
-            Transient("activity.walk.left.normal", AnimationIntent.WalkLeft, "MOVE/walk.left/A_Nomal", "MOVE/walk.left/B_Nomal", "MOVE/walk.left/C_Nomal"),
-            Transient("activity.walk.right.normal", AnimationIntent.WalkRight, "MOVE/walk.right/A_Nomal", "MOVE/walk.right/B_Nomal", "MOVE/walk.right/C_Nomal"),
-            Pending("think.normal", AnimationIntent.Think, "Think/Nomal/A", "Think/Nomal/B", "Think/Nomal/C"),
-            Transient("touch.head.normal", AnimationIntent.TouchHeadReflex, "Touch_Head/A_Nomal", "Touch_Head/B_Nomal", "Touch_Head/C_Nomal"),
-            Transient("touch.body.happy", AnimationIntent.TouchBodyReflex, "Touch_Body/A_Happy/tb1", "Touch_Body/B_Happy/tb1", "Touch_Body/C_Happy/tb1"),
-            Transient("speech.neutral", AnimationIntent.Neutral, "Say/Self/A", "Say/Self/B_1", "Say/Self/C"),
-            Transient("speech.happy", AnimationIntent.Happy, "Say/Shining/A", "Say/Shining/B_1", "Say/Shining/C"),
-        ];
+        public IReadOnlyList<AnimationPlan> Build()
+        {
+            var activityPlans = BodyActionCatalog.Default.Actions
+                .SelectMany(action => action.Animations)
+                .Select(animation => Transient(
+                    animation.PlanId,
+                    animation.Intent,
+                    animation.Entry,
+                    animation.Body,
+                    animation.Exit))
+                .ToArray();
+            return
+            [
+                Baseline("idle.default.normal", AnimationIntent.Idle, null, "Default/Nomal/1", null),
+                ..activityPlans,
+                Pending("think.normal", AnimationIntent.Think, "Think/Nomal/A", "Think/Nomal/B", "Think/Nomal/C"),
+                Transient("touch.head.normal", AnimationIntent.TouchHeadReflex, "Touch_Head/A_Nomal", "Touch_Head/B_Nomal", "Touch_Head/C_Nomal"),
+                Transient("touch.body.happy", AnimationIntent.TouchBodyReflex, "Touch_Body/A_Happy/tb1", "Touch_Body/B_Happy/tb1", "Touch_Body/C_Happy/tb1"),
+                Transient("speech.neutral", AnimationIntent.Neutral, "Say/Self/A", "Say/Self/B_1", "Say/Self/C"),
+                Transient("speech.happy", AnimationIntent.Happy, "Say/Shining/A", "Say/Shining/B_1", "Say/Shining/C"),
+            ];
+        }
 
         private AnimationPlan Baseline(string id, AnimationIntent intent, string? entry, string body, string? exit) =>
             new(id, intent, Phase(entry, AnimationPhaseKind.Entry), Phase(body, AnimationPhaseKind.Body, true)!, Phase(exit, AnimationPhaseKind.Exit), true);

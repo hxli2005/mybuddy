@@ -283,25 +283,26 @@ public partial class MainWindow : Window
             string.Equals(activity.Id, _activeActivityId, StringComparison.Ordinal) ||
             string.Equals(activity.Id, _activityReceipt?.ActivityId, StringComparison.Ordinal))
             return;
+        if (!BodyActionCatalog.Default.TryGet(activity.Type, out var action) || action is null) return;
         _activeActivityId = activity.Id;
-        if (string.Equals(activity.Type, "read", StringComparison.Ordinal))
+        if (action.Shape == BodyActionShape.Stationary)
         {
             _animationController?.Submit(new AnimationRequest(
-                AnimationIntent.Read,
+                action.Animation(BodyActionDirection.Still).Intent,
                 AnimationSource.State,
                 activity.Id,
                 AnimationPriority.Activity));
             return;
         }
-        if (string.Equals(activity.Type, "walk", StringComparison.Ordinal))
+        if (action.Shape == BodyActionShape.Horizontal)
         {
-            StartWalk(activity.Id);
+            StartWalk(activity.Id, action);
             return;
         }
         _activeActivityId = null;
     }
 
-    private void StartWalk(string activityId)
+    private void StartWalk(string activityId, BodyActionDefinition action)
     {
         try
         {
@@ -317,7 +318,7 @@ public partial class MainWindow : Window
             _walkClock.Restart();
             _walkTimer.Start();
             _animationController?.Submit(new AnimationRequest(
-                _walkAttempt.Intent,
+                action.Animation(_walkAttempt.Direction).Intent,
                 AnimationSource.State,
                 activityId,
                 AnimationPriority.Activity));
