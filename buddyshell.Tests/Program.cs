@@ -15,6 +15,8 @@ internal static class Program
         var tests = new (string Name, Action Run)[]
         {
             ("body step is the only wire contract", BodyStepIsOnlyContract),
+            ("edge docking exposes only a narrow strip", EdgeDockingExposesNarrowStrip),
+            ("edge peek returns to the edge baseline", EdgePeekReturnsToBaseline),
             ("body action catalog adds same-shape actions as data", BodyActionCatalogIsDataDriven),
             ("read completion emits a physical receipt", ReadCompletionEmitsReceipt),
             ("raised drag holds until release and interrupts with a receipt", RaisedDragHoldsUntilRelease),
@@ -93,11 +95,12 @@ internal static class Program
                 ActivityId = "read-1",
                 Status = "completed",
             },
-            Presence = new BodyPresence { Present = true, Fullscreen = false },
+            Presence = new BodyPresence { Present = true, Fullscreen = false, Surface = "edge" },
             Event = new BodyEvent { EventId = "chat-1", Type = "chat", Content = "在吗" },
         });
         Contains(json, "shown_id");
         Contains(json, "presence");
+        Contains(json, "\"surface\":\"edge\"");
         Contains(json, "activity_receipt");
         Contains(json, "event_id");
         var response = JsonSerializer.Serialize(new BodyStepResponse
@@ -105,6 +108,47 @@ internal static class Program
         Contains(response, "mind_status");
         Contains(response, "unavailable");
         Contains(response, "activity_confirmed");
+    }
+
+    private static void EdgeDockingExposesNarrowStrip()
+    {
+        var area = new Rect(100, 50, 1200, 800);
+        const double width = 336;
+        const double height = 420;
+        Equal(EdgeSide.Left, EdgeDock.Detect(area, area.Left, width));
+        Equal(EdgeSide.Right, EdgeDock.Detect(area, area.Right - width, width));
+        Equal<EdgeSide?>(null, EdgeDock.Detect(area, area.Left + 100, width));
+
+        var ratio = EdgeDock.TopRatio(area, height, 240);
+        var left = EdgeDock.Place(
+            EdgeSide.Left,
+            area,
+            width,
+            height,
+            EdgeDock.TopFromRatio(area, height, ratio));
+        var right = EdgeDock.Place(EdgeSide.Right, area, width, height, -1000);
+        Equal(EdgeDock.VisibleWidth, left.X + width - area.Left);
+        Equal(EdgeDock.VisibleWidth, area.Right - right.X);
+        Equal(240.0, left.Y);
+        Equal(area.Top, right.Y);
+    }
+
+    private static void EdgePeekReturnsToBaseline()
+    {
+        using var fixture = new Fixture();
+        fixture.Controller.SetBaseline(AnimationIntent.EdgeLeft);
+        Equal("edge.left.normal", fixture.Controller.Snapshot.PlanId);
+        Equal("edge.left.normal", fixture.Controller.Snapshot.BaselinePlanId);
+
+        fixture.Controller.Submit(new AnimationRequest(
+            AnimationIntent.EdgeLeftRise,
+            AnimationSource.System,
+            "edge-peek-1",
+            AnimationPriority.Response));
+        Equal("edge.left.rise.normal", fixture.Controller.Snapshot.PlanId);
+        fixture.Advance(30);
+        Equal(AnimationExecutionKind.Baseline, fixture.Controller.Snapshot.Execution);
+        Equal("edge.left.normal", fixture.Controller.Snapshot.PlanId);
     }
 
     private static void ApiKeyIsProtected()
@@ -327,6 +371,10 @@ internal static class Program
                 ("activity.walk.left.normal", AnimationIntent.WalkLeft, false, false),
                 ("activity.walk.right.normal", AnimationIntent.WalkRight, false, false),
                 ("interaction.raise.normal", AnimationIntent.Raised, false, false),
+                ("edge.left.normal", AnimationIntent.EdgeLeft, true, false),
+                ("edge.right.normal", AnimationIntent.EdgeRight, true, false),
+                ("edge.left.rise.normal", AnimationIntent.EdgeLeftRise, false, false),
+                ("edge.right.rise.normal", AnimationIntent.EdgeRightRise, false, false),
                 ("think.normal", AnimationIntent.Think, false, true),
                 ("touch.head.normal", AnimationIntent.TouchHeadReflex, false, false),
                 ("touch.body.happy", AnimationIntent.TouchBodyReflex, false, false),

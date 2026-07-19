@@ -9,6 +9,8 @@ public sealed class ShellSettings
     public int IdlePauseMinutes { get; set; } = 30;
     public double? WindowLeft { get; set; }
     public double? WindowTop { get; set; }
+    public string? EdgeSide { get; set; }
+    public double? EdgeTopRatio { get; set; }
     public string? LastShownId { get; set; }
     public string? ProtectedApiKey { get; set; }
 }
@@ -35,6 +37,9 @@ public sealed class BodyPresence
 
     [JsonPropertyName("fullscreen")]
     public bool Fullscreen { get; set; }
+
+    [JsonPropertyName("surface")]
+    public string Surface { get; set; } = "full";
 }
 
 public sealed class BodyEvent

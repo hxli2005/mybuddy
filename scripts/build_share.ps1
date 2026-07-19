@@ -52,7 +52,11 @@ $assetFolders = @(
     "Touch_Head/A_Nomal", "Touch_Head/B_Nomal", "Touch_Head/C_Nomal",
     "Touch_Body/A_Happy/tb1", "Touch_Body/B_Happy/tb1", "Touch_Body/C_Happy/tb1",
     "Say/Self/A", "Say/Self/B_1", "Say/Self/C",
-    "Say/Shining/A", "Say/Shining/B_1", "Say/Shining/C"
+    "Say/Shining/A", "Say/Shining/B_1", "Say/Shining/C",
+    "SideHide_Left_Main/Nomal/A", "SideHide_Left_Main/Nomal/B_1", "SideHide_Left_Main/Nomal/C",
+    "SideHide_Right_Main/Nomal/A", "SideHide_Right_Main/Nomal/B_1", "SideHide_Right_Main/Nomal/C",
+    "SideHide_Left_Rise/Nomal/A", "SideHide_Left_Rise/Nomal/B", "SideHide_Left_Rise/Nomal/C",
+    "SideHide_Right_Rise/Nomal/A", "SideHide_Right_Rise/Nomal/B", "SideHide_Right_Rise/Nomal/C"
 ) + $activityAssetFolders
 $assetFolders = @($assetFolders | Sort-Object -Unique)
 $assetRoot = Join-Path $stage "assets\pet"
@@ -83,7 +87,7 @@ $leaks = Get-ChildItem -LiteralPath $stage -Recurse -File | Where-Object {
 } | Select-String -Pattern "sk-or-v1-|sk-ant-|api_key:\s+(?!\$\{MYBUDDY_API_KEY\})\S+"
 if ($leaks) { throw "分发目录疑似含有真实 key：$($leaks.Path -join ', ')" }
 
-$archive = Join-Path $outputRoot "MyBuddy-S17-win-x64.zip"
+$archive = Join-Path $outputRoot "MyBuddy-win-x64.zip"
 if (Test-Path -LiteralPath $archive) { Remove-Item -LiteralPath $archive -Force }
 Compress-Archive -LiteralPath $stage -DestinationPath $archive -CompressionLevel Optimal
 Write-Host "SHARE_BUILD_OK archive=$archive png=$pngCount"

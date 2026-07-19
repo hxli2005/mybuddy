@@ -53,6 +53,7 @@ class BodyPresence(BaseModel):
 
     present: bool
     fullscreen: bool
+    surface: Literal["full", "edge"] = "full"
 
 
 class BodyActivityReceipt(BaseModel):
@@ -132,10 +133,10 @@ class BodyBridge:
             activity_confirmed, receipt_mind_status = await self._confirm_activity(
                 request.activity_receipt, request.presence, now
             )
-            self._discard_stale_ambient(now)
+            self._discard_stale_ambient(now, request.presence)
             event_status, mind_status = await self._process_event(request.event, now)
             time_status = (
-                self._advance_time(now)
+                self._advance_time(now, request.presence)
                 if request.event is None and request.activity_receipt is None
                 else "not_due"
             )
@@ -225,7 +226,7 @@ class BodyBridge:
             return True, "accepted"
         return False, _failure_status(result.rejection_reasons)
 
-    def _discard_stale_ambient(self, now: datetime) -> bool:
+    def _discard_stale_ambient(self, now: datetime, presence: BodyPresence | None) -> bool:
         state, history, memories = self.files.load(now)
         pending = state.get("pending_expression")
         if not isinstance(pending, dict) or pending.get("kind") != "ambient":
@@ -236,7 +237,9 @@ class BodyBridge:
                 created_at = created_at.replace(tzinfo=now.tzinfo)
         except (KeyError, TypeError, ValueError):
             return False
-        if created_at.astimezone(now.tzinfo).date() >= now.date():
+        if (presence is None or presence.surface != "edge") and created_at.astimezone(
+            now.tzinfo
+        ).date() >= now.date():
             return False
         state["pending_expression"] = None
         self.files.commit(state, history, memories)
@@ -290,8 +293,10 @@ class BodyBridge:
         return "processed", mind_status
 
     def _advance_time(
-        self, now: datetime
+        self, now: datetime, presence: BodyPresence | None
     ) -> Literal["not_due", "scheduled", "waiting_for_activity", "waiting_for_shown"]:
+        if presence is not None and presence.surface == "edge":
+            return "not_due"
         state, _, _ = self.files.load(now)
         if state.get("pending_expression") is not None:
             return "waiting_for_shown"
@@ -300,7 +305,12 @@ class BodyBridge:
         return advance_time(files=self.files, now=now).status
 
     def _ambient_allowed(self, presence: BodyPresence | None, now: datetime) -> bool:
-        if presence is None or not presence.present or presence.fullscreen:
+        if (
+            presence is None
+            or not presence.present
+            or presence.fullscreen
+            or presence.surface == "edge"
+        ):
             return False
         _, history, _ = self.files.load(now)
         for item in history:

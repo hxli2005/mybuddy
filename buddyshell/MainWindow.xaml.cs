@@ -16,6 +16,14 @@ public partial class MainWindow : Window
 {
     private readonly ShellSettings _settings = SettingsStore.Load();
     private readonly DispatcherTimer _walkTimer = new(DispatcherPriority.Render);
+    private readonly DispatcherTimer _edgeHoverTimer = new()
+    {
+        Interval = TimeSpan.FromMilliseconds(350),
+    };
+    private readonly DispatcherTimer _edgeVisibilityTimer = new()
+    {
+        Interval = TimeSpan.FromMilliseconds(500),
+    };
     private readonly Stopwatch _walkClock = new();
     private WalkAttempt? _walkAttempt;
     private EngineHost? _engine;
@@ -33,6 +41,9 @@ public partial class MainWindow : Window
     private bool _touchReporting;
     private bool _raiseDragging;
     private bool _raiseReporting;
+    private EdgeSide? _edgeSide;
+    private bool _edgePeeked;
+    private bool _edgeHiddenForFullscreen;
 
     public MainWindow()
     {
@@ -40,6 +51,23 @@ public partial class MainWindow : Window
         Loaded += OnLoaded;
         _walkTimer.Interval = TimeSpan.FromMilliseconds(16);
         _walkTimer.Tick += OnWalkTick;
+        _edgeHoverTimer.Tick += OnEdgeHoverTick;
+        _edgeVisibilityTimer.Tick += (_, _) => UpdateEdgeVisibility();
+        MouseEnter += (_, _) =>
+        {
+            if (_edgeSide is not null && !_edgePeeked) _edgeHoverTimer.Start();
+        };
+        MouseLeave += (_, _) =>
+        {
+            _edgeHoverTimer.Stop();
+            _edgePeeked = false;
+        };
+        PreviewMouseLeftButtonDown += (_, args) =>
+        {
+            if (_edgeSide is null) return;
+            args.Handled = true;
+            ExitEdge();
+        };
         Closing += (_, _) => SaveWindowPosition();
         Closed += (_, _) => DisposeServices();
         DragBar.MouseLeftButtonDown += (_, args) =>
@@ -106,16 +134,25 @@ public partial class MainWindow : Window
                 _client,
                 () => _settings.LastShownId,
                 () => _activityReceipt,
-                () => _presence.Snapshot());
+                () => _presence.Snapshot(_edgeSide is not null));
             _stateLoop.Updated += OnBodyUpdated;
             _stateLoop.Failed += (_, exception) => Dispatcher.Invoke(() =>
             {
                 SetConnectionState(exception.Message, ConnectionState.Warning);
             });
             _tray = new Tray();
-            _tray.SettingsRequested += (_, _) => ShowSettings();
-            _tray.ShowRequested += (_, _) => { Show(); Activate(); };
+            _tray.SettingsRequested += (_, _) =>
+            {
+                if (_edgeSide is not null) ExitEdge();
+                ShowSettings();
+            };
+            _tray.ShowRequested += (_, _) =>
+            {
+                if (_edgeSide is not null) ExitEdge();
+                else { Show(); Activate(); }
+            };
             _tray.ExitRequested += (_, _) => Close();
+            RestoreEdgeMode();
             _stateLoop.Start();
         }
         catch (Exception exception)
@@ -131,7 +168,7 @@ public partial class MainWindow : Window
         Dispatcher.Invoke(() =>
         {
             ApplyActivity(response);
-            if (response.Expression is not null &&
+            if (_edgeSide is null && response.Expression is not null &&
                 !string.Equals(response.Expression.Id, _settings.LastShownId, StringComparison.Ordinal))
             {
                 ShowBodyExpression(response.Expression);
@@ -150,6 +187,7 @@ public partial class MainWindow : Window
         _raiseDragging = true;
         string? eventId = null;
         var released = false;
+        EdgeSide? dockSide = null;
         try
         {
             var animation = BodyActionCatalog.Default.Get("raise")
@@ -164,6 +202,7 @@ public partial class MainWindow : Window
             DragMove();
             released = Math.Abs(Left - start.X) >= SystemParameters.MinimumHorizontalDragDistance ||
                 Math.Abs(Top - start.Y) >= SystemParameters.MinimumVerticalDragDistance;
+            if (released) dockSide = EdgeDock.Detect(CurrentWorkArea(), Left, ActualWidth);
         }
         catch (InvalidOperationException exception)
         {
@@ -174,6 +213,11 @@ public partial class MainWindow : Window
             if (eventId is not null) _animationController.EndInteractive(eventId);
             SaveWindowPosition();
             _raiseDragging = false;
+        }
+        if (dockSide is { } side)
+        {
+            EnterEdge(side);
+            return;
         }
         if (released && eventId is not null) await ReportRaiseAsync(eventId);
     }
@@ -297,7 +341,7 @@ public partial class MainWindow : Window
         {
             ShownId = _settings.LastShownId,
             ActivityReceipt = _activityReceipt,
-            Presence = _presence?.Snapshot(),
+            Presence = _presence?.Snapshot(_edgeSide is not null),
             Event = bodyEvent,
         });
         if (response.EventStatus == "waiting_for_shown" && response.Expression is not null)
@@ -307,7 +351,7 @@ public partial class MainWindow : Window
             {
                 ShownId = _settings.LastShownId,
                 ActivityReceipt = _activityReceipt,
-                Presence = _presence?.Snapshot(),
+                Presence = _presence?.Snapshot(_edgeSide is not null),
                 Event = bodyEvent,
             });
         }
@@ -334,7 +378,7 @@ public partial class MainWindow : Window
             {
                 ShownId = _settings.LastShownId,
                 ActivityReceipt = _activityReceipt,
-                Presence = _presence?.Snapshot(),
+                Presence = _presence?.Snapshot(_edgeSide is not null),
             });
             ApplyActivity(response);
             return response.ShownConfirmed;
@@ -354,6 +398,7 @@ public partial class MainWindow : Window
             _activityReceipt = null;
             _activeActivityId = null;
         }
+        if (_edgeSide is not null) return;
         if (response.Activity is not { } activity ||
             string.Equals(activity.Id, _activeActivityId, StringComparison.Ordinal) ||
             string.Equals(activity.Id, _activityReceipt?.ActivityId, StringComparison.Ordinal))
@@ -464,6 +509,99 @@ public partial class MainWindow : Window
         if (_stateLoop is not null) await _stateLoop.PollAsync();
     }
 
+    private void RestoreEdgeMode()
+    {
+        var side = _settings.EdgeSide?.ToLowerInvariant() switch
+        {
+            "left" => EdgeSide.Left,
+            "right" => EdgeSide.Right,
+            _ => (EdgeSide?)null,
+        };
+        if (side is not null) EnterEdge(side.Value, restoring: true);
+    }
+
+    private void EnterEdge(EdgeSide side, bool restoring = false)
+    {
+        var area = CurrentWorkArea();
+        if (_edgeSide is null) SaveWindowPosition();
+        _edgeSide = side;
+        var topRatio = restoring
+            ? Math.Clamp(_settings.EdgeTopRatio ?? 0.5, 0, 1)
+            : EdgeDock.TopRatio(area, ActualHeight, Top);
+        var top = EdgeDock.TopFromRatio(area, ActualHeight, topRatio);
+        var position = EdgeDock.Place(side, area, ActualWidth, ActualHeight, top);
+        Left = position.X;
+        Top = position.Y;
+        _settings.EdgeSide = side.ToString().ToLowerInvariant();
+        _settings.EdgeTopRatio = topRatio;
+        SettingsStore.Save(_settings);
+
+        SpeechBubble.Visibility = Visibility.Collapsed;
+        ChatDrawer.Visibility = Visibility.Collapsed;
+        DragBar.Visibility = Visibility.Collapsed;
+        PetShadow.Visibility = Visibility.Collapsed;
+        _animationController?.SetBaseline(
+            side == EdgeSide.Left ? AnimationIntent.EdgeLeft : AnimationIntent.EdgeRight);
+        _edgePeeked = false;
+        _edgeVisibilityTimer.Start();
+        UpdateEdgeVisibility();
+        _ = _stateLoop?.PollAsync();
+        App.LogMessage($"event=edge_enter side={_settings.EdgeSide} top_ratio={topRatio:F3}");
+    }
+
+    private void ExitEdge()
+    {
+        if (_edgeSide is not { } side) return;
+        var area = CurrentWorkArea();
+        var top = EdgeDock.TopFromRatio(area, ActualHeight, _settings.EdgeTopRatio ?? 0.5);
+        _edgeSide = null;
+        _edgeHoverTimer.Stop();
+        _edgeVisibilityTimer.Stop();
+        _edgePeeked = false;
+        _edgeHiddenForFullscreen = false;
+        Opacity = 1;
+        IsHitTestVisible = true;
+        SpeechBubble.Visibility = Visibility.Visible;
+        DragBar.Visibility = Visibility.Visible;
+        PetShadow.Visibility = Visibility.Visible;
+        _animationController?.SetBaseline(AnimationIntent.Idle);
+        Left = side == EdgeSide.Left
+            ? area.Left + 12
+            : Math.Max(area.Left, area.Right - ActualWidth - 12);
+        Top = Math.Clamp(top, area.Top, Math.Max(area.Top, area.Bottom - ActualHeight));
+        _settings.EdgeSide = null;
+        _settings.EdgeTopRatio = null;
+        SaveWindowPosition();
+        Show();
+        Activate();
+        _ = _stateLoop?.PollAsync();
+        App.LogMessage($"event=edge_exit side={side.ToString().ToLowerInvariant()}");
+    }
+
+    private void OnEdgeHoverTick(object? sender, EventArgs args)
+    {
+        _edgeHoverTimer.Stop();
+        if (_edgeSide is not { } side || !IsMouseOver || _edgeHiddenForFullscreen) return;
+        _edgePeeked = true;
+        _animationController?.Submit(new AnimationRequest(
+            side == EdgeSide.Left ? AnimationIntent.EdgeLeftRise : AnimationIntent.EdgeRightRise,
+            AnimationSource.System,
+            $"edge-peek:{Guid.NewGuid():N}",
+            AnimationPriority.Response));
+        App.LogMessage($"event=edge_peek side={side.ToString().ToLowerInvariant()}");
+    }
+
+    private void UpdateEdgeVisibility()
+    {
+        if (_edgeSide is null || _presence is null) return;
+        var hidden = _presence.Snapshot(edgeDocked: true).Fullscreen;
+        if (hidden == _edgeHiddenForFullscreen) return;
+        _edgeHiddenForFullscreen = hidden;
+        Opacity = hidden ? 0 : 1;
+        IsHitTestVisible = !hidden;
+        App.LogMessage($"event=edge_fullscreen hidden={hidden.ToString().ToLowerInvariant()}");
+    }
+
     private Rect CurrentWorkArea()
     {
         var handle = new WindowInteropHelper(this).Handle;
@@ -514,6 +652,12 @@ public partial class MainWindow : Window
     private void SaveWindowPosition()
     {
         if (!double.IsFinite(Left) || !double.IsFinite(Top)) return;
+        if (_edgeSide is { })
+        {
+            _settings.EdgeTopRatio = EdgeDock.TopRatio(CurrentWorkArea(), ActualHeight, Top);
+            SettingsStore.Save(_settings);
+            return;
+        }
         _settings.WindowLeft = Left;
         _settings.WindowTop = Top;
         SettingsStore.Save(_settings);
@@ -530,6 +674,8 @@ public partial class MainWindow : Window
         _stateLoop?.Dispose();
         _walkTimer.Stop();
         _walkTimer.Tick -= OnWalkTick;
+        _edgeHoverTimer.Stop();
+        _edgeVisibilityTimer.Stop();
         _walkClock.Stop();
         _tray?.Dispose();
         _client?.Dispose();

@@ -84,6 +84,16 @@ public sealed class AnimationController : IAnimationController, IAnimationDiagno
         StartRequest(request);
     });
 
+    public void SetBaseline(AnimationIntent intent) => OnDispatcher(() =>
+    {
+        if (_disposed) return;
+        var plan = _manifest.Resolve(new AnimationRequest(
+            intent, AnimationSource.System, $"baseline:{intent}", AnimationPriority.Activity));
+        if (!plan.IsBaseline) throw new InvalidOperationException($"动画不是 baseline：{intent}");
+        _desiredBaseline = plan;
+        if (_execution == AnimationExecutionKind.Baseline) StartBaseline();
+    });
+
     public void BeginInteractive(AnimationRequest request) => OnDispatcher(() =>
     {
         if (_disposed || request.Source != AnimationSource.DirectManipulation) return;

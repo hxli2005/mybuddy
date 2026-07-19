@@ -5,13 +5,14 @@ namespace BuddyShell;
 
 public sealed class Presence(ShellSettings settings)
 {
-    public BodyPresence Snapshot()
+    public BodyPresence Snapshot(bool edgeDocked = false)
     {
         var fullscreen = ForegroundIsFullscreen();
         return new BodyPresence
         {
             Present = GetIdleSeconds() < Math.Max(1, settings.IdlePauseMinutes) * 60,
             Fullscreen = fullscreen,
+            Surface = edgeDocked ? "edge" : "full",
         };
     }
 

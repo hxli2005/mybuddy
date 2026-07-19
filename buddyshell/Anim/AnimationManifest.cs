@@ -9,6 +9,7 @@ public sealed partial class AnimationManifest
     [
         "idle.default.normal", "think.normal", "touch.head.normal", "touch.body.happy",
         "speech.neutral", "speech.happy",
+        "edge.left.normal", "edge.right.normal", "edge.left.rise.normal", "edge.right.rise.normal",
     ];
     private readonly Dictionary<string, AnimationPlan> _plans;
     private readonly Dictionary<AnimationIntent, AnimationPlan> _plansByIntent;
@@ -91,6 +92,10 @@ public sealed partial class AnimationManifest
             return
             [
                 Baseline("idle.default.normal", AnimationIntent.Idle, null, "Default/Nomal/1", null),
+                Baseline("edge.left.normal", AnimationIntent.EdgeLeft, "SideHide_Left_Main/Nomal/A", "SideHide_Left_Main/Nomal/B_1", "SideHide_Left_Main/Nomal/C"),
+                Baseline("edge.right.normal", AnimationIntent.EdgeRight, "SideHide_Right_Main/Nomal/A", "SideHide_Right_Main/Nomal/B_1", "SideHide_Right_Main/Nomal/C"),
+                Transient("edge.left.rise.normal", AnimationIntent.EdgeLeftRise, "SideHide_Left_Rise/Nomal/A", "SideHide_Left_Rise/Nomal/B", "SideHide_Left_Rise/Nomal/C"),
+                Transient("edge.right.rise.normal", AnimationIntent.EdgeRightRise, "SideHide_Right_Rise/Nomal/A", "SideHide_Right_Rise/Nomal/B", "SideHide_Right_Rise/Nomal/C"),
                 ..activityPlans,
                 Pending("think.normal", AnimationIntent.Think, "Think/Nomal/A", "Think/Nomal/B", "Think/Nomal/C"),
                 Transient("touch.head.normal", AnimationIntent.TouchHeadReflex, "Touch_Head/A_Nomal", "Touch_Head/B_Nomal", "Touch_Head/C_Nomal"),

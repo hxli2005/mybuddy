@@ -804,3 +804,85 @@ def test_walk_receipt_rejects_out_of_bounds_zero_or_authored_meaning(api, motion
     assert state["pending_activity"]["id"] == scheduled["activity"]["id"]
     assert _history(data_dir) == []
     assert provider.calls == 0
+
+
+def test_edge_surface_pauses_semantic_life_without_touching_four_files(api) -> None:
+    client, provider, data_dir = api
+    files = MindFiles(data_dir)
+    now = datetime.now(UTC).astimezone()
+    state, history, memories = files.load(now)
+    state["next_activity"] = "read"
+    state["last_step_at"] = (now - timedelta(minutes=31)).isoformat()
+    files.commit(state, history, memories)
+    paths = [
+        files.state_path,
+        files.history_path,
+        files.memories_path,
+        files.failures_path,
+    ]
+    before = {path: path.read_bytes() for path in paths}
+
+    response = client.post(
+        "/api/body/step",
+        json={
+            "presence": {
+                "present": True,
+                "fullscreen": False,
+                "surface": "edge",
+            }
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["activity"] is None
+    assert response.json()["expression"] is None
+    assert response.json()["time_status"] == "not_due"
+    assert {path: path.read_bytes() for path in paths} == before
+    assert provider.calls == 0
+
+
+def test_edge_surface_discards_unshown_ambient_without_recording_it(api) -> None:
+    client, provider, data_dir = api
+    files = MindFiles(data_dir)
+    now = datetime.now(UTC).astimezone()
+    state, history, memories = files.load(now)
+    state["pending_expression"] = {
+        "id": "expr-edge-ambient",
+        "text": "这一页有点绕。",
+        "created_at": now.isoformat(),
+        "kind": "ambient",
+    }
+    files.commit(state, history, memories)
+    history_before = files.history_path.read_bytes()
+    memories_before = files.memories_path.read_bytes()
+
+    response = client.post(
+        "/api/body/step",
+        json={
+            "presence": {
+                "present": True,
+                "fullscreen": False,
+                "surface": "edge",
+            }
+        },
+    )
+
+    final_state = json.loads(files.state_path.read_text(encoding="utf-8"))
+    assert response.status_code == 200
+    assert response.json()["expression"] is None
+    assert final_state["pending_expression"] is None
+    assert files.history_path.read_bytes() == history_before
+    assert files.memories_path.read_bytes() == memories_before
+    assert provider.calls == 0
+
+    invalid = client.post(
+        "/api/body/step",
+        json={
+            "presence": {
+                "present": True,
+                "fullscreen": False,
+                "surface": "imaginary",
+            }
+        },
+    )
+    assert invalid.status_code == 422
