@@ -7,6 +7,7 @@ public sealed class StateLoop : IDisposable
 {
     private readonly BridgeClient _client;
     private readonly Func<string?> _shownId;
+    private readonly Func<BodyActivityReceipt?> _activityReceipt;
     private readonly Func<BodyPresence> _presence;
     private readonly DispatcherTimer _timer = new() { Interval = TimeSpan.FromSeconds(20) };
     private readonly CancellationTokenSource _stop = new();
@@ -15,10 +16,12 @@ public sealed class StateLoop : IDisposable
     public StateLoop(
         BridgeClient client,
         Func<string?> shownId,
+        Func<BodyActivityReceipt?> activityReceipt,
         Func<BodyPresence> presence)
     {
         _client = client;
         _shownId = shownId;
+        _activityReceipt = activityReceipt;
         _presence = presence;
         _timer.Tick += async (_, _) => await PollAsync();
     }
@@ -39,7 +42,12 @@ public sealed class StateLoop : IDisposable
         try
         {
             var state = await _client.StepBodyAsync(
-                new BodyStepRequest { ShownId = _shownId(), Presence = _presence() },
+                new BodyStepRequest
+                {
+                    ShownId = _shownId(),
+                    ActivityReceipt = _activityReceipt(),
+                    Presence = _presence(),
+                },
                 _stop.Token);
             Updated?.Invoke(this, state);
         }

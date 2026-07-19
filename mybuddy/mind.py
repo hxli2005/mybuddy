@@ -25,6 +25,7 @@ RECENT_EVENT_LIMIT = 128
 LIFE_STEP_INTERVAL = timedelta(minutes=30)
 STATIC_CATCH = "我在。刚才脑子里那句话没理清，但你的话我确实听见了。"
 PERSONALITY_PATH = Path(__file__).with_name("personality.json")
+READING_PATH = Path(__file__).with_name("reading.txt")
 
 
 class StateChanges(BaseModel):
@@ -35,14 +36,6 @@ class StateChanges(BaseModel):
     mood: str | None = None
     energy: str | None = None
     attention: str | None = None
-    current_activity: str | None = None
-    baseline: Literal["idle", "read", "write", "gaze", "sleep"] | None = None
-
-
-class LifeEvent(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    content: str = Field(min_length=1, max_length=300)
 
 
 class MemoryOperation(BaseModel):
@@ -86,12 +79,22 @@ class CandidateBundle(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     state_changes: StateChanges
-    life_events: list[LifeEvent] = Field(max_length=3)
     memory_operations: list[MemoryOperation] = Field(max_length=5)
     expression: str | None = Field(
         max_length=500,
-        description="所有回合都必须给出；直接经历非空，安静时间推进为 null",
+        description="所有回合都必须给出；直接经历非空，安静阅读可为 null",
     )
+
+
+class PendingActivity(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    type: Literal["read"] = "read"
+    source: str
+    title: str
+    passage_index: int
+    text: str
 
 
 class PendingExpression(BaseModel):
@@ -109,8 +112,15 @@ class StepResult(BaseModel):
 
 
 class TimeStepResult(BaseModel):
-    status: Literal["not_due", "advanced", "failed"]
+    status: Literal["not_due", "scheduled"]
     attempts: int = 0
+    rejection_reasons: list[str] = Field(default_factory=list)
+
+
+class ReceiptResult(BaseModel):
+    committed: bool
+    pending_expression: PendingExpression | None = None
+    attempts: int
     rejection_reasons: list[str] = Field(default_factory=list)
 
 
@@ -154,21 +164,16 @@ def validate_no_fabrication(
     user_confirmation_ids: set[str],
     *,
     current_experience_type: str | None,
-    allow_life_events: bool,
 ) -> list[str]:
     """不编造：共同事实、用户事实和模式只能从本次选中的证据长出来。"""
     reasons: list[str] = []
-    if bundle.life_events and not allow_life_events:
-        reasons.append("不编造：直接经历不能生成生活事件；生活只能由时间推进产生")
-
     unsupported_claims = ("我们上次", "你之前说过", "你答应过", "还记得我们", "那天我们")
     for text in _all_text(bundle):
         for phrase in unsupported_claims:
             if phrase in text:
                 reasons.append(f"不编造：出现未经逐条证据绑定的共同经历断言 `{phrase}`")
 
-    local_life = {f"life:{i}" for i in range(len(bundle.life_events))}
-    allowed = set(evidence_types) | local_life
+    allowed = set(evidence_types)
     for index, operation in enumerate(bundle.memory_operations):
         supplied = set(operation.evidence_ids)
         unknown = supplied - allowed
@@ -195,11 +200,10 @@ def validate_no_fabrication(
                 )
         if writes_claim and operation.kind == "self_experience":
             if not any(
-                item.startswith("life:") or evidence_types.get(item) in {"self_life", "body_touch"}
-                for item in supplied
+                evidence_types.get(item) in {"self_reading", "body_touch"} for item in supplied
             ):
                 reasons.append(
-                    f"不编造：memory_operations[{index}] 的自身经历没有生活事件或身体触碰证据"
+                    f"不编造：memory_operations[{index}] 的自身经历没有真实阅读或身体触碰证据"
                 )
         if writes_claim and operation.kind == "pattern":
             examples = {
@@ -267,8 +271,6 @@ def _claim_texts(
     for field, text in bundle.state_changes.model_dump(exclude_none=True).items():
         if isinstance(text, str):
             yield f"state_changes.{field}", text, None
-    for index, event in enumerate(bundle.life_events):
-        yield f"life_events[{index}].content", event.content, None
     for index, operation in enumerate(bundle.memory_operations):
         if operation.action in {"record", "integrate", "correct"}:
             yield (
@@ -328,7 +330,6 @@ def validate_bundle(
     memories_by_id: dict[str, dict[str, Any]],
     user_confirmation_ids: set[str],
     current_experience_type: str | None,
-    allow_life_events: bool,
 ) -> list[str]:
     """集中校验整包；四条红线覆盖状态、生活、记忆和表达的全部字符串。"""
     return [
@@ -338,18 +339,33 @@ def validate_bundle(
             evidence_types,
             user_confirmation_ids,
             current_experience_type=current_experience_type,
-            allow_life_events=allow_life_events,
         ),
         *validate_no_total_score(bundle),
         *validate_no_withdrawal(bundle, memories_by_id),
     ]
 
 
+def _reading_source(path: Path) -> dict[str, Any]:
+    blocks = [block.strip() for block in re.split(r"\n\s*\n", path.read_text(encoding="utf-8"))]
+    blocks = [block for block in blocks if block]
+    if len(blocks) < 2:
+        raise ValueError(f"{path} 必须包含书名和至少一段正文，段落之间留空行")
+    passages = [
+        block[start : start + 1200] for block in blocks[1:] for start in range(0, len(block), 1200)
+    ]
+    return {
+        "source": path.name,
+        "title": blocks[0].removeprefix("#").strip(),
+        "passages": passages,
+    }
+
+
 class MindFiles:
     """四文件的单写者；每次写入都先在目标文件同目录完整落临时文件。"""
 
-    def __init__(self, directory: str | Path) -> None:
+    def __init__(self, directory: str | Path, reading_path: str | Path = READING_PATH) -> None:
         self.directory = Path(directory)
+        self.reading_path = Path(reading_path)
         self.state_path = self.directory / "state.json"
         self.history_path = self.directory / "history.jsonl"
         self.memories_path = self.directory / "memories.json"
@@ -358,6 +374,7 @@ class MindFiles:
     def load(self, now: datetime) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, Any]]:
         self.directory.mkdir(parents=True, exist_ok=True)
         personality = _personality_seed()
+        reading = _reading_source(self.reading_path)
         initial_memories = [
             {
                 **item,
@@ -376,9 +393,15 @@ class MindFiles:
                         "mood": "平静",
                         "energy": "平稳",
                         "attention": "在这里",
-                        "current_activity": "刚刚安静下来",
-                        "baseline": "idle",
                     },
+                    "reading": {
+                        "source": reading["source"],
+                        "title": reading["title"],
+                        "next_passage": 0,
+                        "total_passages": len(reading["passages"]),
+                        "finished": False,
+                    },
+                    "pending_activity": None,
                     "pending_expression": None,
                 }
             ),
@@ -394,6 +417,33 @@ class MindFiles:
         memories = json.loads(self.memories_path.read_text(encoding="utf-8"))
         if not isinstance(state, dict) or not isinstance(memories, dict):
             raise ValueError("state.json and memories.json must contain JSON objects")
+        original_state = json.loads(json.dumps(state, ensure_ascii=False))
+        condition = dict(state.get("condition", {}))
+        state["condition"] = {
+            key: value for key, value in condition.items() if key in {"mood", "energy", "attention"}
+        }
+        progress = state.get("reading")
+        source_changed = not isinstance(progress, dict) or any(
+            (
+                progress.get("source") != reading["source"],
+                progress.get("title") != reading["title"],
+                progress.get("total_passages") != len(reading["passages"]),
+            )
+        )
+        if source_changed:
+            progress = {"next_passage": 0}
+            state["pending_activity"] = None
+        next_passage = min(max(int(progress.get("next_passage", 0)), 0), len(reading["passages"]))
+        state["reading"] = {
+            "source": reading["source"],
+            "title": reading["title"],
+            "next_passage": next_passage,
+            "total_passages": len(reading["passages"]),
+            "finished": next_passage >= len(reading["passages"]),
+        }
+        state.setdefault("pending_activity", None)
+        if state != original_state:
+            _replace_texts({self.state_path: _json_text(state)})
         return state, history, memories
 
     def commit(
@@ -590,8 +640,7 @@ def _prompt_payload(
         "expression_rendering": _personality_seed()["expression_rendering"],
         "incoming_experience": experience,
         "evidence_rule": (
-            "有本次输入时可引用 incoming_experience.id；仅时间推进可产生新生活事件，"
-            "并按顺序引用 life:0、life:1。"
+            "有本次输入时可引用 incoming_experience.id；除此之外不能生成经历。"
             "不必每回合都操作记忆。record 新建，必须有 content 且不带 target_id；"
             "integrate/correct 必须有 content 和现有 target_id；recall/forget 必须有现有 target_id，"
             "并明确给 content=空字符串、evidence_ids=[]。用户事实、共同经历和自身经历必须绑定对应证据。"
@@ -606,38 +655,33 @@ def _prompt_payload(
 
 
 SYSTEM_PROMPT = """你是小布的唯一一次心智推进，不是任务助手。请调用 submit_mind_bundle，
-一次给出状态改动、记忆操作和一条直接表达；life_events 必须是空数组，直接经历不能补写生活。
-只处理给定事实。不要补写共同过去，不催回复，
+一次给出状态改动、记忆操作和一条直接表达。只处理给定事实，不补写自己的活动或共同过去，不催回复，
 不因沉默受伤，不制造关系计分，不撤回已发生内容。body_touch 只是身体感知到的触碰位置，
 不能据此推断用户动机、关系浓度或长期偏好；普通聊天不能声称发生了触碰。
 表达自然、简短、诚实。所有字段都受同一组红线校验，整包不能部分保留。"""
 
-TIME_SYSTEM_PROMPT = """你是小布的一次安静时间推进，不是任务助手。请调用 submit_mind_bundle，
-根据 last_step 到 now 真正经过的时间，一次给出状态改动、她自己刚发生的一至三个微小具体生活事件，
-以及有直接生活事件证据的记忆操作。state_changes.baseline 必须是 idle/read/write/gaze/sleep 之一，
-与她此刻正在做的事一致。这不是主动搭话，expression 必须为 null。不要逐分钟补写，不补写共同过去，
-不因用户沉默受伤，不催回复，不制造关系计分，不撤回已发生内容。整包不能部分保留。"""
+READING_SYSTEM_PROMPT = """身体刚确认小布完整做完一次 read 动画；incoming_experience 是她实际读到的
+UTF-8 TXT 原文。请调用 submit_mind_bundle，只依据这段原文给出可选状态变化和有证据的感受或记忆。
+这是安静阅读，expression 必须为 null。不要编造书外情节、阅读动作、共同过去或用户反应；不因用户
+沉默受伤，不催回复，不制造关系计分，不撤回已发生内容。整包不能部分保留。"""
 
-AMBIENT_TIME_SYSTEM_PROMPT = """你是小布的一次安静时间推进，不是任务助手。请调用 submit_mind_bundle，
-根据 last_step 到 now 真正经过的时间，一次给出状态改动、她自己刚发生的一至三个微小具体生活事件，
-以及有直接生活事件证据的记忆操作。state_changes.baseline 必须是 idle/read/write/gaze/sleep 之一，
-与她此刻正在做的事一致。用户此刻在场，所以你可以把刚发生的生活或当前活动自然说成一句简短的
-ambient 表达，也可以令 expression 为 null 保持安静；不要问问题、索取回应、欢迎回来或暗示你知道
-用户此前是否在场和是否回应。baseline 为 sleep 时 expression 必须为 null。不要补写共同过去，
-不因用户沉默受伤，不制造关系计分，不撤回已发生内容。整包不能部分保留。"""
+AMBIENT_READING_SYSTEM_PROMPT = """身体刚确认小布完整做完一次 read 动画；incoming_experience 是她实际
+读到的 UTF-8 TXT 原文。请调用 submit_mind_bundle，只依据原文给出可选状态变化和有证据的感受或记忆。
+用户此刻在场，可以自然说一句简短 ambient，也可以保持安静；允许顺手关心地问一句，但不得要求回应，
+未回应不能留下任何状态、记忆或频率痕迹。不要编造书外情节、共同过去或用户反应，不欢迎回来，不暗示
+知道用户此前是否在场，不制造关系计分，不撤回已发生内容。整包不能部分保留。"""
 
 
 def _apply_memories(
     memories: dict[str, Any],
     operations: list[MemoryOperation],
     now: datetime,
-    evidence_aliases: dict[str, str],
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     items = [dict(item) for item in memories.get("items", []) if isinstance(item, dict)]
     by_id = {str(item.get("id")): item for item in items}
     events: list[dict[str, Any]] = []
     for operation in operations:
-        evidence_ids = [evidence_aliases.get(item, item) for item in operation.evidence_ids]
+        evidence_ids = list(operation.evidence_ids)
         target = by_id.get(str(operation.target_id)) if operation.target_id else None
         memory_id: str
         previous_content = target.get("content") if target is not None else None
@@ -736,21 +780,7 @@ def _accepted_documents(
     new_history = [*history]
     if experience is not None:
         new_history.append(experience)
-    evidence_aliases: dict[str, str] = {}
-    for index, event in enumerate(bundle.life_events):
-        life_id = f"life_{uuid.uuid4().hex}"
-        evidence_aliases[f"life:{index}"] = life_id
-        new_history.append(
-            {
-                "id": life_id,
-                "type": "self_life",
-                "content": event.content,
-                "occurred_at": now.isoformat(),
-            }
-        )
-    new_memories, memory_events = _apply_memories(
-        memories, bundle.memory_operations, now, evidence_aliases
-    )
+    new_memories, memory_events = _apply_memories(memories, bundle.memory_operations, now)
     new_history.extend(memory_events)
     return new_state, new_history, new_memories, pending
 
@@ -766,7 +796,6 @@ async def _generate_candidate(
     memories_by_id: dict[str, dict[str, Any]],
     user_confirmation_ids: set[str],
     current_experience_type: str | None = None,
-    allow_life_events: bool = False,
     quiet_time: bool = False,
     ambient_time: bool = False,
 ) -> tuple[CandidateBundle | None, int, list[str]]:
@@ -805,24 +834,12 @@ async def _generate_candidate(
                 memories_by_id=memories_by_id,
                 user_confirmation_ids=user_confirmation_ids,
                 current_experience_type=current_experience_type,
-                allow_life_events=allow_life_events,
             )
             if not quiet_time and not ambient_time and not bundle.expression:
                 reasons.append("直接经历必须给出非空 expression")
             if quiet_time:
                 if bundle.expression is not None:
-                    reasons.append("时间推进不能夹带尚未进入 ambient 阶段的表达")
-                if not bundle.life_events:
-                    reasons.append("时间推进必须包含至少一件当场发生的自身生活事件")
-                if bundle.state_changes.baseline is None:
-                    reasons.append("时间推进必须明确身体持续呈现的 baseline")
-            if ambient_time:
-                if not bundle.life_events:
-                    reasons.append("时间推进必须包含至少一件当场发生的自身生活事件")
-                if bundle.state_changes.baseline is None:
-                    reasons.append("时间推进必须明确身体持续呈现的 baseline")
-                if bundle.state_changes.baseline == "sleep" and bundle.expression is not None:
-                    reasons.append("睡眠 baseline 不能生成 ambient 表达")
+                    reasons.append("安静阅读不能夹带 ambient 表达")
         except (ValidationError, ValueError) as error:
             reasons = [f"结构化候选无效：{error}"]
         if not reasons:
@@ -903,16 +920,12 @@ async def mind_step(
     )
 
 
-async def advance_time(
-    *,
-    provider: BaseLLMProvider,
-    files: MindFiles,
-    now: datetime | None = None,
-    allow_ambient: bool = False,
-) -> TimeStepResult:
-    """只在真实时间跨过间隔后推进一次生活；在场时可顺带产生稀疏 ambient。"""
+def advance_time(*, files: MindFiles, now: datetime | None = None) -> TimeStepResult:
+    """到点只发出一次具体 read 活动；没有身体完成收据就没有阅读经历。"""
     current_time = (now or datetime.now(UTC)).astimezone()
     state, history, memories = files.load(current_time)
+    if state.get("pending_activity") is not None or state["reading"]["finished"]:
+        return TimeStepResult(status="not_due")
     try:
         last_step = datetime.fromisoformat(str(state["last_step_at"]))
         if last_step.tzinfo is None:
@@ -923,9 +936,62 @@ async def advance_time(
     if elapsed < LIFE_STEP_INTERVAL:
         return TimeStepResult(status="not_due")
 
+    source = _reading_source(files.reading_path)
+    passage_index = int(state["reading"]["next_passage"])
+    state["pending_activity"] = PendingActivity(
+        id=f"activity_{uuid.uuid4().hex}",
+        source=source["source"],
+        title=source["title"],
+        passage_index=passage_index,
+        text=source["passages"][passage_index],
+    ).model_dump()
+    files.commit(state, history, memories)
+    return TimeStepResult(status="scheduled")
+
+
+def interrupt_reading(activity_id: str, *, files: MindFiles, now: datetime) -> bool:
+    """中断只关闭这次物理尝试；不写经历、感受、记忆或用户债务。"""
+    state, history, memories = files.load(now)
+    recent = [item for item in state.get("recent_activity_ids", []) if isinstance(item, str)]
+    if activity_id in recent:
+        return True
+    pending = state.get("pending_activity")
+    if not isinstance(pending, dict) or pending.get("id") != activity_id:
+        return False
+    state["pending_activity"] = None
+    state["last_step_at"] = now.isoformat()
+    state["recent_activity_ids"] = [*recent, activity_id][-RECENT_EVENT_LIMIT:]
+    files.commit(state, history, memories)
+    return True
+
+
+async def complete_reading(
+    activity_id: str,
+    *,
+    provider: BaseLLMProvider,
+    files: MindFiles,
+    now: datetime,
+    allow_ambient: bool,
+) -> ReceiptResult:
+    """完成收据、真实段落、进度、感受和可选表达作为一个整包提交。"""
+    state, history, memories = files.load(now)
+    pending_value = state.get("pending_activity")
+    if not isinstance(pending_value, dict) or pending_value.get("id") != activity_id:
+        return ReceiptResult(committed=False, attempts=0, rejection_reasons=["阅读活动不存在"])
+    activity = PendingActivity.model_validate(pending_value)
+    experience = {
+        "id": activity.id,
+        "type": "self_reading",
+        "source": activity.source,
+        "title": activity.title,
+        "passage_index": activity.passage_index,
+        "content": activity.text,
+        "occurred_at": now.isoformat(),
+    }
     context_history = _selected_history(history, include_shared_expressions=False)
     context_memories, _ = _selected_memories(memories)
     evidence_types = _evidence_types_for_context(history, context_history, context_memories)
+    evidence_types[activity.id] = "self_reading"
     memory_items = memories.get("items", [])
     memories_by_id = {
         str(item.get("id")): item
@@ -939,36 +1005,43 @@ async def advance_time(
             state,
             history,
             memories,
-            None,
-            current_time,
+            experience,
+            now,
             include_shared_expressions=False,
         ),
-        system=AMBIENT_TIME_SYSTEM_PROMPT if allow_ambient else TIME_SYSTEM_PROMPT,
-        now=current_time,
+        system=AMBIENT_READING_SYSTEM_PROMPT if allow_ambient else READING_SYSTEM_PROMPT,
+        now=now,
         evidence_types=evidence_types,
         memories_by_id=memories_by_id,
         user_confirmation_ids=set(),
-        allow_life_events=True,
+        current_experience_type="self_reading",
         quiet_time=not allow_ambient,
         ambient_time=allow_ambient,
     )
     if bundle is None:
-        return TimeStepResult(status="failed", attempts=attempts, rejection_reasons=reasons)
+        return ReceiptResult(committed=False, attempts=attempts, rejection_reasons=reasons)
     new_state, new_history, new_memories, pending = _accepted_documents(
         state,
         history,
         memories,
         bundle,
-        None,
-        current_time,
+        experience,
+        now,
         expression_kind="ambient" if allow_ambient else None,
     )
     if allow_ambient and bundle.expression:
         assert pending is not None
     else:
         assert pending is None
+    next_passage = activity.passage_index + 1
+    total = int(new_state["reading"]["total_passages"])
+    new_state["reading"]["next_passage"] = next_passage
+    new_state["reading"]["finished"] = next_passage >= total
+    new_state["pending_activity"] = None
+    recent = [item for item in new_state.get("recent_activity_ids", []) if isinstance(item, str)]
+    new_state["recent_activity_ids"] = [*recent, activity.id][-RECENT_EVENT_LIMIT:]
     files.commit(new_state, new_history, new_memories)
-    return TimeStepResult(status="advanced", attempts=attempts)
+    return ReceiptResult(committed=True, pending_expression=pending, attempts=attempts)
 
 
 async def _run_cli(args: argparse.Namespace) -> None:

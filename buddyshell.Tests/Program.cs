@@ -14,8 +14,8 @@ internal static class Program
         var tests = new (string Name, Action Run)[]
         {
             ("body step is the only wire contract", BodyStepIsOnlyContract),
-            ("missing state stays on safe baseline", MissingStateUsesSafeBaseline),
-            ("touch is transient and baseline returns", TouchReturnsToBaseline),
+            ("read completion emits a physical receipt", ReadCompletionEmitsReceipt),
+            ("touch interrupts read without a completed receipt", TouchInterruptsRead),
             ("chat think completes without a presentation queue", ChatCompletesWithoutQueue),
             ("API key is DPAPI protected", ApiKeyIsProtected),
         };
@@ -42,15 +42,23 @@ internal static class Program
         var json = JsonSerializer.Serialize(new BodyStepRequest
         {
             ShownId = "expr-1",
+            ActivityReceipt = new BodyActivityReceipt
+            {
+                ActivityId = "read-1",
+                Status = "completed",
+            },
             Presence = new BodyPresence { Present = true, Fullscreen = false },
             Event = new BodyEvent { EventId = "chat-1", Type = "chat", Content = "在吗" },
         });
         Contains(json, "shown_id");
         Contains(json, "presence");
+        Contains(json, "activity_receipt");
         Contains(json, "event_id");
-        var response = JsonSerializer.Serialize(new BodyStepResponse { MindStatus = "unavailable" });
+        var response = JsonSerializer.Serialize(new BodyStepResponse
+            { MindStatus = "unavailable", ActivityConfirmed = true });
         Contains(response, "mind_status");
         Contains(response, "unavailable");
+        Contains(response, "activity_confirmed");
     }
 
     private static void ApiKeyIsProtected()
@@ -74,18 +82,37 @@ internal static class Program
         }
     }
 
-    private static void MissingStateUsesSafeBaseline()
+    private static void ReadCompletionEmitsReceipt()
     {
         using var fixture = new Fixture();
-        fixture.Controller.UpdateBaseline(new BaselineSnapshot(false, "sleep"));
+        ActivityFinishedEventArgs? receipt = null;
+        fixture.Controller.ActivityFinished += (_, args) => receipt = args;
+        fixture.Controller.Submit(new AnimationRequest(
+            AnimationIntent.Read,
+            AnimationSource.State,
+            "read-1",
+            AnimationPriority.Activity));
+        Equal("activity.read.normal", fixture.Controller.Snapshot.PlanId);
+        fixture.Advance(30);
+        Equal("read-1", receipt?.ActivityId);
+        Equal(true, receipt?.Completed);
         Equal("idle.default.normal", fixture.Controller.Snapshot.BaselinePlanId);
+        Equal(AnimationExecutionKind.Baseline, fixture.Controller.Snapshot.Execution);
     }
 
-    private static void TouchReturnsToBaseline()
+    private static void TouchInterruptsRead()
     {
         using var fixture = new Fixture();
-        fixture.Advance(10);
+        ActivityFinishedEventArgs? receipt = null;
+        fixture.Controller.ActivityFinished += (_, args) => receipt = args;
+        fixture.Controller.Submit(new AnimationRequest(
+            AnimationIntent.Read,
+            AnimationSource.State,
+            "read-interrupted",
+            AnimationPriority.Activity));
         fixture.Renderer.RaiseTouchStarted(TouchZone.Head, "touch-1");
+        Equal("read-interrupted", receipt?.ActivityId);
+        Equal(false, receipt?.Completed);
         Equal("touch.head.normal", fixture.Controller.Snapshot.PlanId);
         fixture.Advance(30);
         Equal(AnimationExecutionKind.Baseline, fixture.Controller.Snapshot.Execution);
@@ -158,10 +185,7 @@ internal static class Program
             var definitions = new (string Id, AnimationIntent Intent, bool Baseline, bool Pending)[]
             {
                 ("idle.default.normal", AnimationIntent.Idle, true, false),
-                ("sleep.normal", AnimationIntent.Sleep, true, false),
-                ("idle.read.normal", AnimationIntent.Read, true, false),
-                ("idle.write.normal", AnimationIntent.Write, true, false),
-                ("idle.gaze.normal", AnimationIntent.Gaze, true, false),
+                ("activity.read.normal", AnimationIntent.Read, false, false),
                 ("think.normal", AnimationIntent.Think, false, true),
                 ("touch.head.normal", AnimationIntent.TouchHeadReflex, false, false),
                 ("touch.body.happy", AnimationIntent.TouchBodyReflex, false, false),

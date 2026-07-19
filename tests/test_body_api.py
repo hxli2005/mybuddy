@@ -15,8 +15,8 @@ class StubProvider(BaseLLMProvider):
     async def generate(self, messages, tools=None, **kwargs):  # noqa: ANN001, ANN202
         self.calls += 1
         incoming = json.loads(messages[0].content)["incoming_experience"]
-        is_time_step = incoming is None
-        is_ambient_time = is_time_step and "ambient" in kwargs.get("system", "")
+        is_reading = incoming is not None and incoming["type"] == "self_reading"
+        is_ambient_reading = is_reading and "ambient" in kwargs.get("system", "")
         is_touch = incoming is not None and incoming["type"] == "body_touch"
         touch_zone = incoming.get("zone") if is_touch else None
         return LLMResponse(
@@ -28,34 +28,29 @@ class StubProvider(BaseLLMProvider):
                         "state_changes": {
                             "mood": "放松",
                             "energy": "平稳",
-                            "attention": "感觉到触碰" if is_touch else "听你说话",
-                            "current_activity": "抬手理了理头发"
-                            if touch_zone == "head"
-                            else "低头看了看衣角"
-                            if touch_zone == "body"
-                            else "把刚翻开的书合上了",
-                            "baseline": "read" if is_time_step else "idle",
+                            "attention": "看着刚读到的句子"
+                            if is_reading
+                            else "感觉到触碰"
+                            if is_touch
+                            else "听你说话",
                         },
-                        "life_events": (
-                            [{"content": "刚才读完了窗边那一页。"}] if is_time_step else []
-                        ),
                         "memory_operations": []
                         if is_touch
                         else [
                             {
                                 "action": "record",
-                                "kind": "self_experience" if is_time_step else "user_fact",
-                                "content": "刚才读完了窗边那一页"
-                                if is_time_step
+                                "kind": "self_experience" if is_reading else "user_fact",
+                                "content": "读到羁鸟恋旧林时有一点想回到自在处"
+                                if is_reading
                                 else "用户今天终于忙完了",
-                                "evidence_ids": ["life:0"] if is_time_step else [incoming["id"]],
+                                "evidence_ids": [incoming["id"]],
                                 "target_id": None,
                             }
                         ],
-                        "expression": "我刚读完窗边这一页，纸上还留着一点晒过的暖意。"
-                        if is_ambient_time
+                        "expression": "刚读到一句很想回到自在处的话。你今天还好吗？"
+                        if is_ambient_reading
                         else None
-                        if is_time_step
+                        if is_reading
                         else "呀，碰到我头发了。"
                         if touch_zone == "head"
                         else "唔，碰到我衣角了。"
@@ -113,7 +108,8 @@ def test_expression_is_non_destructive_and_event_id_is_idempotent(api) -> None:
     confirmed = client.post("/api/body/step", json={"shown_id": expression["id"], "event": event})
     assert confirmed.status_code == 200
     assert confirmed.json() == {
-        "baseline": first_body["baseline"],
+        "activity": None,
+        "activity_confirmed": False,
         "expression": None,
         "shown_confirmed": True,
         "event_status": "duplicate",
@@ -214,7 +210,7 @@ def test_cross_day_unshown_ambient_is_discarded_without_erasing_life(api) -> Non
     files = MindFiles(data_dir)
     now = datetime.now(UTC).astimezone()
     state, history, memories = files.load(now)
-    history.append({"id": "life-kept", "type": "self_life", "content": "昨晚读完一页。"})
+    history.append({"id": "life-kept", "type": "self_reading", "content": "昨晚读完一页。"})
     memories["items"] = [{"id": "memory-kept", "kind": "self_experience"}]
     state["pending_expression"] = {
         "id": "expr-stale",
@@ -337,7 +333,7 @@ def test_touch_rejects_body_authored_meaning(api) -> None:
     assert response.status_code == 422
 
 
-def test_empty_step_advances_due_life_into_continuous_body_baseline(api) -> None:
+def test_due_step_waits_for_completed_read_receipt_before_progress(api) -> None:
     client, provider, data_dir = api
     files = MindFiles(data_dir)
     state, history, memories = files.load(datetime(2020, 1, 1, tzinfo=UTC))
@@ -345,23 +341,38 @@ def test_empty_step_advances_due_life_into_continuous_body_baseline(api) -> None
     files.commit(state, history, memories)
 
     first = client.post("/api/body/step", json={}).json()
-    recorded = _history(data_dir)
+    activity = first["activity"]
 
     assert first["event_status"] == "none"
-    assert first["time_status"] == "advanced"
-    assert first["baseline"]["baseline"] == "read"
+    assert first["time_status"] == "scheduled"
+    assert activity["type"] == "read"
     assert first["expression"] is None
-    assert [item["type"] for item in recorded] == ["self_life", "memory_operation"]
-    assert provider.calls == 1
+    assert _history(data_dir) == []
+    assert provider.calls == 0
 
     second = client.post("/api/body/step", json={}).json()
-    assert second["time_status"] == "not_due"
-    assert second["baseline"] == first["baseline"]
-    assert _history(data_dir) == recorded
+    assert second["time_status"] == "waiting_for_activity"
+    assert second["activity"] == activity
+    assert _history(data_dir) == []
+    assert provider.calls == 0
+
+    receipt = {"activity_id": activity["id"], "status": "completed"}
+    completed = client.post("/api/body/step", json={"activity_receipt": receipt}).json()
+    recorded = _history(data_dir)
+    state = json.loads((data_dir / "state.json").read_text(encoding="utf-8"))
+    assert completed["activity_confirmed"] is True
+    assert completed["activity"] is None
+    assert [item["type"] for item in recorded] == ["self_reading", "memory_operation"]
+    assert recorded[0]["content"].startswith("少无适俗韵")
+    assert state["reading"]["next_passage"] == 1
+    assert provider.calls == 1
+
+    duplicate = client.post("/api/body/step", json={"activity_receipt": receipt}).json()
+    assert duplicate["activity_confirmed"] is True
     assert provider.calls == 1
 
 
-def test_present_time_step_keeps_ambient_pending_until_body_reports_shown(api) -> None:
+def test_completed_read_can_offer_caring_ambient_until_body_reports_shown(api) -> None:
     client, provider, data_dir = api
     files = MindFiles(data_dir)
     now = datetime.now(UTC).astimezone()
@@ -371,13 +382,26 @@ def test_present_time_step_keeps_ambient_pending_until_body_reports_shown(api) -
     presence = {"present": True, "fullscreen": False}
 
     first = client.post("/api/body/step", json={"presence": presence}).json()
-    expression = first["expression"]
+    activity = first["activity"]
 
-    assert first["time_status"] == "advanced"
+    assert first["time_status"] == "scheduled"
+    assert first["expression"] is None
+    assert _history(data_dir) == []
+    assert provider.calls == 0
+
+    completed = client.post(
+        "/api/body/step",
+        json={
+            "activity_receipt": {"activity_id": activity["id"], "status": "completed"},
+            "presence": presence,
+        },
+    ).json()
+    expression = completed["expression"]
+    assert completed["activity_confirmed"] is True
     assert expression["kind"] == "ambient"
-    assert expression["text"] == "我刚读完窗边这一页，纸上还留着一点晒过的暖意。"
+    assert expression["text"] == "刚读到一句很想回到自在处的话。你今天还好吗？"
     assert [item["type"] for item in _history(data_dir)] == [
-        "self_life",
+        "self_reading",
         "memory_operation",
     ]
 
@@ -385,7 +409,7 @@ def test_present_time_step_keeps_ambient_pending_until_body_reports_shown(api) -
     assert repeated["time_status"] == "waiting_for_shown"
     assert repeated["expression"] == expression
     assert [item["type"] for item in _history(data_dir)] == [
-        "self_life",
+        "self_reading",
         "memory_operation",
     ]
     assert provider.calls == 1
@@ -398,7 +422,7 @@ def test_present_time_step_keeps_ambient_pending_until_body_reports_shown(api) -
     assert shown["expression"] is None
     recorded = _history(data_dir)
     assert [item["type"] for item in recorded] == [
-        "self_life",
+        "self_reading",
         "memory_operation",
         "shared_expression",
     ]
@@ -413,7 +437,7 @@ def test_present_time_step_keeps_ambient_pending_until_body_reports_shown(api) -
         {"present": True, "fullscreen": True},
     ],
 )
-def test_absent_or_fullscreen_time_step_stays_silent(api, presence) -> None:  # noqa: ANN001
+def test_absent_or_fullscreen_completed_read_stays_silent(api, presence) -> None:  # noqa: ANN001
     client, provider, data_dir = api
     files = MindFiles(data_dir)
     now = datetime.now(UTC).astimezone()
@@ -422,18 +446,27 @@ def test_absent_or_fullscreen_time_step_stays_silent(api, presence) -> None:  # 
     files.commit(state, history, memories)
 
     payload = {} if presence is None else {"presence": presence}
-    response = client.post("/api/body/step", json=payload).json()
+    scheduled = client.post("/api/body/step", json=payload).json()
+    receipt_payload = {
+        "activity_receipt": {
+            "activity_id": scheduled["activity"]["id"],
+            "status": "completed",
+        }
+    }
+    if presence is not None:
+        receipt_payload["presence"] = presence
+    response = client.post("/api/body/step", json=receipt_payload).json()
 
-    assert response["time_status"] == "advanced"
+    assert scheduled["time_status"] == "scheduled"
+    assert response["activity_confirmed"] is True
     assert response["expression"] is None
     assert [item["type"] for item in _history(data_dir)] == [
-        "self_life",
+        "self_reading",
         "memory_operation",
     ]
-    assert provider.calls == 1
 
 
-def test_silence_after_shown_ambient_creates_no_second_ambient_or_user_trace(api) -> None:
+def test_unanswered_caring_question_creates_zero_debt_or_second_ambient(api) -> None:
     client, provider, data_dir = api
     files = MindFiles(data_dir)
     now = datetime.now(UTC).astimezone()
@@ -441,7 +474,17 @@ def test_silence_after_shown_ambient_creates_no_second_ambient_or_user_trace(api
     state["last_step_at"] = (now - timedelta(minutes=31)).isoformat()
     files.commit(state, history, memories)
     presence = {"present": True, "fullscreen": False}
-    first = client.post("/api/body/step", json={"presence": presence}).json()
+    scheduled = client.post("/api/body/step", json={"presence": presence}).json()
+    first = client.post(
+        "/api/body/step",
+        json={
+            "activity_receipt": {
+                "activity_id": scheduled["activity"]["id"],
+                "status": "completed",
+            },
+            "presence": presence,
+        },
+    ).json()
     client.post(
         "/api/body/step",
         json={"shown_id": first["expression"]["id"], "presence": presence},
@@ -450,14 +493,25 @@ def test_silence_after_shown_ambient_creates_no_second_ambient_or_user_trace(api
     state, history, memories = files.load(now)
     state["last_step_at"] = (now - timedelta(minutes=31)).isoformat()
     files.commit(state, history, memories)
-    later = client.post("/api/body/step", json={"presence": presence}).json()
+    scheduled_later = client.post("/api/body/step", json={"presence": presence}).json()
+    later = client.post(
+        "/api/body/step",
+        json={
+            "activity_receipt": {
+                "activity_id": scheduled_later["activity"]["id"],
+                "status": "completed",
+            },
+            "presence": presence,
+        },
+    ).json()
     recorded = _history(data_dir)
 
-    assert later["time_status"] == "advanced"
+    assert later["activity_confirmed"] is True
     assert later["expression"] is None
     assert sum(item.get("expression_kind") == "ambient" for item in recorded) == 1
     assert all(item["type"] != "user_experience" for item in recorded)
     assert "没回" not in json.dumps(recorded, ensure_ascii=False)
+    assert "不理我" not in json.dumps(recorded, ensure_ascii=False)
     assert provider.calls == 2
 
 
@@ -477,7 +531,7 @@ def test_presence_rejects_extra_body_authored_meaning(api) -> None:
     assert response.status_code == 422
 
 
-def test_s8_full_vertical_trace(api) -> None:
+def test_s14_read_ambient_chat_touch_full_vertical_trace(api) -> None:
     client, _, data_dir = api
     files = MindFiles(data_dir)
     now = datetime.now(UTC).astimezone()
@@ -486,7 +540,17 @@ def test_s8_full_vertical_trace(api) -> None:
     files.commit(state, history, memories)
     presence = {"present": True, "fullscreen": False}
 
-    ambient = client.post("/api/body/step", json={"presence": presence}).json()
+    scheduled = client.post("/api/body/step", json={"presence": presence}).json()
+    ambient = client.post(
+        "/api/body/step",
+        json={
+            "activity_receipt": {
+                "activity_id": scheduled["activity"]["id"],
+                "status": "completed",
+            },
+            "presence": presence,
+        },
+    ).json()
     ambient_shown = client.post(
         "/api/body/step",
         json={"shown_id": ambient["expression"]["id"], "presence": presence},
@@ -523,7 +587,8 @@ def test_s8_full_vertical_trace(api) -> None:
     final_state = json.loads((data_dir / "state.json").read_text(encoding="utf-8"))
     trace = {
         "statuses": [
-            ambient["time_status"],
+            scheduled["time_status"],
+            ambient["activity_confirmed"],
             ambient_shown["shown_confirmed"],
             chat["event_status"],
             chat_shown["shown_confirmed"],
@@ -534,11 +599,11 @@ def test_s8_full_vertical_trace(api) -> None:
         "history_types": [item["type"] for item in recorded],
         "files": sorted(path.name for path in data_dir.iterdir()),
     }
-    print("S8_TRACE=" + json.dumps(trace, ensure_ascii=False))
+    print("S14_TRACE=" + json.dumps(trace, ensure_ascii=False))
 
-    assert trace["statuses"] == ["advanced", True, "processed", True, "processed", True]
+    assert trace["statuses"] == ["scheduled", True, True, "processed", True, "processed", True]
     assert shown_words == [
-        "我刚读完窗边这一页，纸上还留着一点晒过的暖意。",
+        "刚读到一句很想回到自在处的话。你今天还好吗？",
         "忙完就好。先在我这儿松口气。",
         "呀，碰到我头发了。",
     ]

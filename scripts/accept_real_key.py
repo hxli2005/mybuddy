@@ -48,13 +48,34 @@ def main() -> None:
     else:
         payload = {}
     first = _post(args.url, payload)
+    scheduled = None
+    if args.scenario in {"quiet", "ambient"} and isinstance(first.get("activity"), dict):
+        scheduled = first
+        receipt_payload = {
+            "activity_receipt": {
+                "activity_id": first["activity"]["id"],
+                "status": "completed",
+            }
+        }
+        if args.scenario == "ambient":
+            receipt_payload["presence"] = payload["presence"]
+        first = _post(args.url, receipt_payload)
     expression = first.get("expression")
     shown = None
     if isinstance(expression, dict) and expression.get("id"):
-        shown = _post(args.url, {"shown_id": expression["id"]})
+        shown_payload = {"shown_id": expression["id"]}
+        if args.scenario == "ambient":
+            shown_payload["presence"] = payload["presence"]
+        shown = _post(args.url, shown_payload)
     print(
         json.dumps(
-            {"scenario": args.scenario, "sent": payload, "step": first, "shown": shown},
+            {
+                "scenario": args.scenario,
+                "sent": payload,
+                "scheduled": scheduled,
+                "step": first,
+                "shown": shown,
+            },
             ensure_ascii=False,
         )
     )

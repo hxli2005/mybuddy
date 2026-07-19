@@ -21,6 +21,7 @@ def main() -> None:
     web.add_argument("--config", default="config.yaml")
     web.add_argument("--data-dir", default="data/mini")
     web.add_argument("--port", type=int, default=8000)
+    web.add_argument("--reading-file")
     web.add_argument("--parent-pid", type=int)
     args = parser.parse_args()
 
@@ -33,7 +34,8 @@ def main() -> None:
     from mybuddy.body_api import create_body_app
 
     with _single_writer(Path(args.data_dir)):
-        app = create_body_app(args.config, args.data_dir)
+        options = {"reading_path": args.reading_file} if args.reading_file else {}
+        app = create_body_app(args.config, args.data_dir, **options)
         server = uvicorn.Server(
             uvicorn.Config(app, host="127.0.0.1", port=args.port, log_level="info")
         )

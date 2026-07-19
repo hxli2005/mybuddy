@@ -19,9 +19,15 @@ public interface IAnimationController : IDisposable, ITouchSource
     UIElement View { get; }
     AnimationSnapshot Snapshot { get; }
     event EventHandler<AnimationFaultEventArgs>? Faulted;
-    void UpdateBaseline(BaselineSnapshot snapshot);
+    event EventHandler<ActivityFinishedEventArgs>? ActivityFinished;
     void Submit(AnimationRequest request);
     void Complete(string correlationId, AnimationOutcome outcome);
+}
+
+public sealed class ActivityFinishedEventArgs(string activityId, bool completed) : EventArgs
+{
+    public string ActivityId { get; } = activityId;
+    public bool Completed { get; } = completed;
 }
 
 public sealed class AnimationFaultEventArgs(Exception? exception, bool recovered) : EventArgs

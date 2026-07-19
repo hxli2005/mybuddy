@@ -7,8 +7,7 @@ public sealed partial class AnimationManifest
 {
     private static readonly string[] RequiredPlanIds =
     [
-        "idle.default.normal", "sleep.normal", "idle.read.normal", "idle.write.normal",
-        "idle.gaze.normal", "think.normal", "touch.head.normal", "touch.body.happy",
+        "idle.default.normal", "activity.read.normal", "think.normal", "touch.head.normal", "touch.body.happy",
         "speech.neutral", "speech.happy",
     ];
     private readonly Dictionary<string, AnimationPlan> _plans;
@@ -41,18 +40,9 @@ public sealed partial class AnimationManifest
         return manifest;
     }
 
-    public AnimationPlan ResolveBaseline(BaselineSnapshot snapshot) =>
-        (snapshot.StateAvailable ? snapshot.Baseline : "idle").Trim().ToLowerInvariant() switch
-        {
-            "sleep" => Get("sleep.normal"),
-            "read" => Get("idle.read.normal"),
-            "write" => Get("idle.write.normal"),
-            "gaze" => Get("idle.gaze.normal"),
-            _ => Get("idle.default.normal"),
-        };
-
     public AnimationPlan Resolve(AnimationRequest request) => Get(request.Intent switch
     {
+        AnimationIntent.Read => "activity.read.normal",
         AnimationIntent.Think => "think.normal",
         AnimationIntent.TouchHeadReflex => "touch.head.normal",
         AnimationIntent.TouchBodyReflex => "touch.body.happy",
@@ -95,10 +85,7 @@ public sealed partial class AnimationManifest
         public IReadOnlyList<AnimationPlan> Build() =>
         [
             Baseline("idle.default.normal", AnimationIntent.Idle, null, "Default/Nomal/1", null),
-            Baseline("sleep.normal", AnimationIntent.Sleep, "Sleep/A_Nomal", "Sleep/B_Nomal", "Sleep/C_Nomal"),
-            Baseline("idle.read.normal", AnimationIntent.Read, "WORK/Study/A_Nomal", "WORK/Study/B_1_Nomal", "WORK/Study/C_Nomal"),
-            Baseline("idle.write.normal", AnimationIntent.Write, "WORK/Calligraphy/Nomal/A", "WORK/Calligraphy/Nomal/B", "WORK/Calligraphy/Nomal/C"),
-            Baseline("idle.gaze.normal", AnimationIntent.Gaze, "IDEL/aside/Nomal/A", "IDEL/aside/Nomal/B", "IDEL/aside/Nomal/C"),
+            Transient("activity.read.normal", AnimationIntent.Read, "WORK/Study/A_Nomal", "WORK/Study/B_1_Nomal", "WORK/Study/C_Nomal"),
             Pending("think.normal", AnimationIntent.Think, "Think/Nomal/A", "Think/Nomal/B", "Think/Nomal/C"),
             Transient("touch.head.normal", AnimationIntent.TouchHeadReflex, "Touch_Head/A_Nomal", "Touch_Head/B_Nomal", "Touch_Head/C_Nomal"),
             Transient("touch.body.happy", AnimationIntent.TouchBodyReflex, "Touch_Body/A_Happy/tb1", "Touch_Body/B_Happy/tb1", "Touch_Body/C_Happy/tb1"),

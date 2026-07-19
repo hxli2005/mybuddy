@@ -41,6 +41,8 @@ public sealed class EngineHost : IDisposable
         start.ArgumentList.Add(mindDirectory);
         start.ArgumentList.Add("--port");
         start.ArgumentList.Add("8000");
+        start.ArgumentList.Add("--reading-file");
+        start.ArgumentList.Add(Path.Combine(AppContext.BaseDirectory, "小布读本.txt"));
         start.ArgumentList.Add("--parent-pid");
         start.ArgumentList.Add(Environment.ProcessId.ToString());
         start.Environment["MYBUDDY_API_KEY"] = SettingsStore.ReadApiKey(settings);

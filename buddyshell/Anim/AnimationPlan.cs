@@ -3,7 +3,7 @@ namespace BuddyShell.Anim;
 public enum AnimationPhaseKind { Entry, Body, Exit }
 public enum AnimationExecutionKind { Baseline, Transient, Pending }
 public enum AnimationSource { State, Touch, Chat, System }
-public enum AnimationPriority { Baseline = 20, Think = 60, Response = 70, Touch = 90 }
+public enum AnimationPriority { Activity = 20, Think = 60, Response = 70, Touch = 90 }
 
 public sealed record LayerPlacement(
     double Width,
@@ -70,8 +70,6 @@ public sealed record CompositedFrame(
         Layers.OrderBy(layer => layer.ZIndex).Select(layer =>
             $"{layer.Name}:{layer.SourcePath}:{layer.Placement}:{layer.Rotation:F3}:{layer.Opacity:F3}:{layer.Visible}"));
 }
-
-public sealed record BaselineSnapshot(bool StateAvailable, string Baseline);
 
 public sealed record AnimationRequest(
     AnimationIntent Intent,

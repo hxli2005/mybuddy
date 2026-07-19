@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
 
@@ -12,14 +12,16 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from mybuddy.config import load_config
 from mybuddy.llm import BaseLLMProvider, make_provider
 from mybuddy.mind import (
+    READING_PATH,
     RECENT_EVENT_LIMIT,
     MindFiles,
+    PendingActivity,
     PendingExpression,
     advance_time,
+    complete_reading,
+    interrupt_reading,
     mind_step,
 )
-
-TIME_RETRY_INTERVAL = timedelta(minutes=5)
 
 
 class BodyEvent(BaseModel):
@@ -53,20 +55,36 @@ class BodyPresence(BaseModel):
     fullscreen: bool
 
 
+class BodyActivityReceipt(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    activity_id: str = Field(min_length=1, max_length=160)
+    status: Literal["completed", "interrupted"]
+
+
+class BodyActivity(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    type: Literal["read"]
+
+
 class BodyStepRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     shown_id: str | None = Field(default=None, min_length=1, max_length=160)
+    activity_receipt: BodyActivityReceipt | None = None
     event: BodyEvent | None = None
     presence: BodyPresence | None = None
 
 
 class BodyStepResponse(BaseModel):
-    baseline: dict[str, str]
+    activity: BodyActivity | None
     expression: PendingExpression | None
     shown_confirmed: bool
+    activity_confirmed: bool
     event_status: Literal["none", "processed", "duplicate", "waiting_for_shown"]
-    time_status: Literal["not_due", "advanced", "failed", "waiting_for_shown"]
+    time_status: Literal["not_due", "scheduled", "waiting_for_activity", "waiting_for_shown"]
     mind_status: Literal["not_run", "accepted", "rejected", "unavailable"]
 
 
@@ -77,29 +95,34 @@ class BodyBridge:
         self.provider = provider
         self.files = files
         self._write_lock = asyncio.Lock()
-        self._next_time_attempt_at: datetime | None = None
 
     async def step(self, request: BodyStepRequest) -> BodyStepResponse:
         async with self._write_lock:
             now = datetime.now(UTC).astimezone()
             shown_confirmed = self._confirm_shown(request.shown_id, now)
+            activity_confirmed, receipt_mind_status = await self._confirm_activity(
+                request.activity_receipt, request.presence, now
+            )
             self._discard_stale_ambient(now)
             event_status, mind_status = await self._process_event(request.event, now)
-            time_status, time_mind_status = (
-                await self._advance_time(now, request.presence)
-                if request.event is None
-                else ("not_due", "not_run")
+            time_status = (
+                self._advance_time(now)
+                if request.event is None and request.activity_receipt is None
+                else "not_due"
             )
             if mind_status == "not_run":
-                mind_status = time_mind_status
+                mind_status = receipt_mind_status
             state, _, _ = self.files.load(now)
             pending = state.get("pending_expression")
+            pending_activity = state.get("pending_activity")
+            activity = (
+                PendingActivity.model_validate(pending_activity) if pending_activity else None
+            )
             return BodyStepResponse(
-                baseline={
-                    str(key): str(value) for key, value in dict(state.get("condition", {})).items()
-                },
+                activity=BodyActivity(id=activity.id, type=activity.type) if activity else None,
                 expression=PendingExpression.model_validate(pending) if pending else None,
                 shown_confirmed=shown_confirmed,
+                activity_confirmed=activity_confirmed,
                 event_status=event_status,
                 time_status=time_status,
                 mind_status=mind_status,
@@ -126,6 +149,32 @@ class BodyBridge:
         state["pending_expression"] = None
         self.files.commit(state, history, memories)
         return True
+
+    async def _confirm_activity(
+        self,
+        receipt: BodyActivityReceipt | None,
+        presence: BodyPresence | None,
+        now: datetime,
+    ) -> tuple[bool, Literal["not_run", "accepted", "rejected", "unavailable"]]:
+        if receipt is None:
+            return False, "not_run"
+        state, _, _ = self.files.load(now)
+        recent = [item for item in state.get("recent_activity_ids", []) if isinstance(item, str)]
+        if receipt.activity_id in recent:
+            return True, "not_run"
+        if receipt.status == "interrupted":
+            confirmed = interrupt_reading(receipt.activity_id, files=self.files, now=now)
+            return confirmed, "not_run"
+        result = await complete_reading(
+            receipt.activity_id,
+            provider=self.provider,
+            files=self.files,
+            now=now,
+            allow_ambient=self._ambient_allowed(presence, now),
+        )
+        if result.committed:
+            return True, "accepted"
+        return False, _failure_status(result.rejection_reasons)
 
     def _discard_stale_ambient(self, now: datetime) -> bool:
         state, history, memories = self.files.load(now)
@@ -186,32 +235,15 @@ class BodyBridge:
         mind_status = "accepted" if result.committed else _failure_status(result.rejection_reasons)
         return "processed", mind_status
 
-    async def _advance_time(
-        self, now: datetime, presence: BodyPresence | None
-    ) -> tuple[
-        Literal["not_due", "advanced", "failed", "waiting_for_shown"],
-        Literal["not_run", "accepted", "rejected", "unavailable"],
-    ]:
+    def _advance_time(
+        self, now: datetime
+    ) -> Literal["not_due", "scheduled", "waiting_for_activity", "waiting_for_shown"]:
         state, _, _ = self.files.load(now)
         if state.get("pending_expression") is not None:
-            return "waiting_for_shown", "not_run"
-        if self._next_time_attempt_at is not None and now < self._next_time_attempt_at:
-            return "not_due", "not_run"
-        result = await advance_time(
-            provider=self.provider,
-            files=self.files,
-            now=now,
-            allow_ambient=self._ambient_allowed(presence, now),
-        )
-        if result.status == "failed":
-            self._next_time_attempt_at = now + TIME_RETRY_INTERVAL
-        else:
-            self._next_time_attempt_at = None
-        if result.status == "advanced":
-            return result.status, "accepted"
-        if result.status == "failed":
-            return result.status, _failure_status(result.rejection_reasons)
-        return result.status, "not_run"
+            return "waiting_for_shown"
+        if state.get("pending_activity") is not None:
+            return "waiting_for_activity"
+        return advance_time(files=self.files, now=now).status
 
     def _ambient_allowed(self, presence: BodyPresence | None, now: datetime) -> bool:
         if presence is None or not presence.present or presence.fullscreen:
@@ -244,6 +276,7 @@ def create_body_app(
     data_dir: str | Path = "data/mini",
     *,
     provider: BaseLLMProvider | None = None,
+    reading_path: str | Path = READING_PATH,
 ):
     """创建只暴露身体 step 的应用；provider 参数只用于测试和本地验收。"""
     try:
@@ -257,7 +290,7 @@ def create_body_app(
             raise RuntimeError("当前模型配置缺少 api_key")
         provider = make_provider(cfg.llm)
 
-    bridge = BodyBridge(provider=provider, files=MindFiles(data_dir))
+    bridge = BodyBridge(provider=provider, files=MindFiles(data_dir, reading_path))
     app = FastAPI(title="MyBuddy body bridge", docs_url=None, redoc_url=None, openapi_url=None)
     app.state.body_bridge = bridge
 

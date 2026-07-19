@@ -18,7 +18,8 @@ public partial class MainWindow : Window
     private StateLoop? _stateLoop;
     private Presence? _presence;
     private Tray? _tray;
-    private Dictionary<string, string>? _bodyBaseline;
+    private BodyActivityReceipt? _activityReceipt;
+    private string? _activeActivityId;
     private string? _pendingChatEventId;
     private string? _pendingChatText;
     private bool _chatSending;
@@ -77,11 +78,11 @@ public partial class MainWindow : Window
                 AnimationManifest.CreateDefault(root),
                 new FramePlayerHost(root));
             _animationController.TouchDetected += OnTouchDetected;
+            _animationController.ActivityFinished += OnActivityFinished;
             _animationController.Faulted += (_, args) => SetConnectionState(
                 args.Recovered ? "动画渲染已恢复" : $"动画渲染失败：{args.Exception?.Message}",
                 args.Recovered ? ConnectionState.Connected : ConnectionState.Error);
             AnimationHostSlot.Content = _animationController.View;
-            UpdateAnimationBaseline();
 
             _engine = EngineHost.Start(_settings);
             _client = new BridgeClient(_settings);
@@ -89,12 +90,11 @@ public partial class MainWindow : Window
             _stateLoop = new StateLoop(
                 _client,
                 () => _settings.LastShownId,
+                () => _activityReceipt,
                 () => _presence.Snapshot());
             _stateLoop.Updated += OnBodyUpdated;
             _stateLoop.Failed += (_, exception) => Dispatcher.Invoke(() =>
             {
-                _bodyBaseline = null;
-                UpdateAnimationBaseline();
                 SetConnectionState(exception.Message, ConnectionState.Warning);
             });
             _tray = new Tray();
@@ -115,7 +115,7 @@ public partial class MainWindow : Window
         var displayed = false;
         Dispatcher.Invoke(() =>
         {
-            UpdateBodyBaseline(response);
+            ApplyActivity(response);
             if (response.Expression is not null &&
                 !string.Equals(response.Expression.Id, _settings.LastShownId, StringComparison.Ordinal))
             {
@@ -140,7 +140,7 @@ public partial class MainWindow : Window
         {
             var response = await StepAsync(bodyEvent);
             if (response.EventStatus is not ("processed" or "duplicate")) return;
-            UpdateBodyBaseline(response);
+            ApplyActivity(response);
             if (response.Expression is not null)
             {
                 ShowBodyExpression(response.Expression);
@@ -185,7 +185,7 @@ public partial class MainWindow : Window
             var response = await StepAsync(bodyEvent);
             if (response.EventStatus is not ("processed" or "duplicate"))
                 throw new BridgeRequestException($"身体桥未接收聊天事件：{response.EventStatus}");
-            UpdateBodyBaseline(response);
+            ApplyActivity(response);
             Chat.AcceptSent(text);
             _pendingChatText = null;
             _pendingChatEventId = null;
@@ -213,6 +213,7 @@ public partial class MainWindow : Window
         var response = await _client!.StepBodyAsync(new BodyStepRequest
         {
             ShownId = _settings.LastShownId,
+            ActivityReceipt = _activityReceipt,
             Presence = _presence?.Snapshot(),
             Event = bodyEvent,
         });
@@ -222,6 +223,7 @@ public partial class MainWindow : Window
             response = await _client.StepBodyAsync(new BodyStepRequest
             {
                 ShownId = _settings.LastShownId,
+                ActivityReceipt = _activityReceipt,
                 Presence = _presence?.Snapshot(),
                 Event = bodyEvent,
             });
@@ -248,9 +250,10 @@ public partial class MainWindow : Window
             var response = await _client!.StepBodyAsync(new BodyStepRequest
             {
                 ShownId = _settings.LastShownId,
+                ActivityReceipt = _activityReceipt,
                 Presence = _presence?.Snapshot(),
             });
-            UpdateBodyBaseline(response);
+            ApplyActivity(response);
             return response.ShownConfirmed;
         }
         catch (BridgeRequestException exception)
@@ -261,10 +264,35 @@ public partial class MainWindow : Window
         }
     }
 
-    private void UpdateBodyBaseline(BodyStepResponse response)
+    private void ApplyActivity(BodyStepResponse response)
     {
-        _bodyBaseline = response.Baseline;
-        UpdateAnimationBaseline();
+        if (response.ActivityConfirmed && _activityReceipt is not null)
+        {
+            _activityReceipt = null;
+            _activeActivityId = null;
+        }
+        if (response.Activity is not { } activity ||
+            string.Equals(activity.Id, _activeActivityId, StringComparison.Ordinal) ||
+            string.Equals(activity.Id, _activityReceipt?.ActivityId, StringComparison.Ordinal))
+            return;
+        if (!string.Equals(activity.Type, "read", StringComparison.Ordinal)) return;
+        _activeActivityId = activity.Id;
+        _animationController?.Submit(new AnimationRequest(
+            AnimationIntent.Read,
+            AnimationSource.State,
+            activity.Id,
+            AnimationPriority.Activity));
+    }
+
+    private async void OnActivityFinished(object? sender, ActivityFinishedEventArgs args)
+    {
+        if (!string.Equals(args.ActivityId, _activeActivityId, StringComparison.Ordinal)) return;
+        _activityReceipt = new BodyActivityReceipt
+        {
+            ActivityId = args.ActivityId,
+            Status = args.Completed ? "completed" : "interrupted",
+        };
+        if (_stateLoop is not null) await _stateLoop.PollAsync();
     }
 
     private void SetMindConnectionState(BodyStepResponse response)
@@ -284,12 +312,6 @@ public partial class MainWindow : Window
                 SetConnectionState("心智桥在线", ConnectionState.Connected);
                 break;
         }
-    }
-
-    private void UpdateAnimationBaseline()
-    {
-        var baseline = _bodyBaseline?.GetValueOrDefault("baseline", "idle") ?? "idle";
-        _animationController?.UpdateBaseline(new BaselineSnapshot(_bodyBaseline is not null, baseline));
     }
 
     private void ShowSettings()
@@ -319,7 +341,11 @@ public partial class MainWindow : Window
 
     private void DisposeServices()
     {
-        if (_animationController is not null) _animationController.TouchDetected -= OnTouchDetected;
+        if (_animationController is not null)
+        {
+            _animationController.TouchDetected -= OnTouchDetected;
+            _animationController.ActivityFinished -= OnActivityFinished;
+        }
         _stateLoop?.Dispose();
         _tray?.Dispose();
         _client?.Dispose();

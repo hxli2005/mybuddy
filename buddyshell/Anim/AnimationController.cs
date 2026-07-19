@@ -31,7 +31,7 @@ public sealed class AnimationController : IAnimationController, IAnimationDiagno
         _manifest = manifest;
         _renderer = renderer;
         _clock = clock ?? new SystemAnimationClock();
-        _desiredBaseline = manifest.ResolveBaseline(new BaselineSnapshot(false, "idle"));
+        _desiredBaseline = manifest.Get("idle.default.normal");
         _renderer.TouchStarted += OnTouchStarted;
         _renderer.TouchDetected += OnTouchDetected;
         StartBaseline();
@@ -49,6 +49,7 @@ public sealed class AnimationController : IAnimationController, IAnimationDiagno
     public UIElement View => _renderer.View;
     public event EventHandler<TouchDetectedEventArgs>? TouchDetected;
     public event EventHandler<AnimationFaultEventArgs>? Faulted;
+    public event EventHandler<ActivityFinishedEventArgs>? ActivityFinished;
 
     public AnimationSnapshot Snapshot => new(
         _generation,
@@ -68,15 +69,6 @@ public sealed class AnimationController : IAnimationController, IAnimationDiagno
     public TouchZone ClassifyTouch(double y, double height) =>
         (_renderer as IAnimationDiagnostics)?.ClassifyTouch(y, height)
         ?? (y <= height * 0.45 ? TouchZone.Head : TouchZone.Body);
-
-    public void UpdateBaseline(BaselineSnapshot snapshot) => OnDispatcher(() =>
-    {
-        if (_disposed) return;
-        var target = _manifest.ResolveBaseline(snapshot);
-        if (target.Id == _desiredBaseline.Id) return;
-        _desiredBaseline = target;
-        if (_execution == AnimationExecutionKind.Baseline) StartBaseline();
-    });
 
     public void Submit(AnimationRequest request) => OnDispatcher(() =>
     {
@@ -140,6 +132,12 @@ public sealed class AnimationController : IAnimationController, IAnimationDiagno
 
     private void StartRequest(AnimationRequest request)
     {
+        if (_execution == AnimationExecutionKind.Transient &&
+            _request?.Source == AnimationSource.State &&
+            _request.CorrelationId != request.CorrelationId)
+            ActivityFinished?.Invoke(
+                this, new ActivityFinishedEventArgs(_request.CorrelationId, completed: false));
+
         _plan = _manifest.Resolve(request);
         _request = request;
         _execution = request.Intent == AnimationIntent.Think
@@ -185,15 +183,24 @@ public sealed class AnimationController : IAnimationController, IAnimationDiagno
 
     private void ResumePersistentView()
     {
+        var completedActivity = _execution == AnimationExecutionKind.Transient &&
+            _request?.Source == AnimationSource.State
+            ? _request.CorrelationId
+            : null;
         if (_pendingThink is { } pending)
         {
             _plan = _manifest.Resolve(pending);
             _request = pending;
             _execution = AnimationExecutionKind.Pending;
             StartPhase(_thinkBodyEntered ? _plan.Body : _plan.Entry ?? _plan.Body);
-            return;
         }
-        StartBaseline();
+        else
+        {
+            StartBaseline();
+        }
+        if (completedActivity is not null)
+            ActivityFinished?.Invoke(
+                this, new ActivityFinishedEventArgs(completedActivity, completed: true));
     }
 
     private void OnTouchStarted(object? sender, TouchDetectedEventArgs args) => Submit(

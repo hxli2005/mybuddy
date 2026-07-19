@@ -4,9 +4,6 @@ public enum AnimationIntent
 {
     Idle,
     Read,
-    Write,
-    Gaze,
-    Sleep,
     Think,
     TouchHeadReflex,
     TouchBodyReflex,

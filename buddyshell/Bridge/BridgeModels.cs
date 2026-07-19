@@ -18,6 +18,9 @@ public sealed class BodyStepRequest
     [JsonPropertyName("shown_id")]
     public string? ShownId { get; set; }
 
+    [JsonPropertyName("activity_receipt")]
+    public BodyActivityReceipt? ActivityReceipt { get; set; }
+
     [JsonPropertyName("event")]
     public BodyEvent? Event { get; set; }
 
@@ -47,16 +50,37 @@ public sealed class BodyEvent
     public string? Content { get; set; }
 }
 
+public sealed class BodyActivityReceipt
+{
+    [JsonPropertyName("activity_id")]
+    public string ActivityId { get; set; } = "";
+
+    [JsonPropertyName("status")]
+    public string Status { get; set; } = "completed";
+}
+
+public sealed class BodyActivity
+{
+    [JsonPropertyName("id")]
+    public string Id { get; set; } = "";
+
+    [JsonPropertyName("type")]
+    public string Type { get; set; } = "read";
+}
+
 public sealed class BodyStepResponse
 {
-    [JsonPropertyName("baseline")]
-    public Dictionary<string, string> Baseline { get; set; } = [];
+    [JsonPropertyName("activity")]
+    public BodyActivity? Activity { get; set; }
 
     [JsonPropertyName("expression")]
     public PendingBodyExpression? Expression { get; set; }
 
     [JsonPropertyName("shown_confirmed")]
     public bool ShownConfirmed { get; set; }
+
+    [JsonPropertyName("activity_confirmed")]
+    public bool ActivityConfirmed { get; set; }
 
     [JsonPropertyName("event_status")]
     public string EventStatus { get; set; } = "none";

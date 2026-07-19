@@ -30,6 +30,7 @@ packages = ["mybuddy"]
 
 [tool.hatch.build.targets.wheel.force-include]
 "mybuddy/personality.json" = "mybuddy/personality.json"
+"mybuddy/reading.txt" = "mybuddy/reading.txt"
 
 [tool.ruff]
 line-length = 100

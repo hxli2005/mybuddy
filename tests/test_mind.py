@@ -13,7 +13,9 @@ from mybuddy.mind import (
     MindFiles,
     _replace_texts,
     advance_time,
+    complete_reading,
     mind_step,
+    validate_no_solicitation,
 )
 from scripts.accept_real_key import DEFAULT_TEXT, encode_payload
 
@@ -24,10 +26,7 @@ def _valid_bundle(expression: str = "我在这儿，先陪你坐一会儿。") -
             "mood": "安静地关心",
             "energy": "平稳",
             "attention": "在听",
-            "current_activity": "把手边的杯子放下了",
-            "baseline": "idle",
         },
-        "life_events": [],
         "memory_operations": [
             {
                 "action": "record",
@@ -74,17 +73,14 @@ def _time_bundle(expression=None) -> dict:  # noqa: ANN001
         "state_changes": {
             "mood": "安静",
             "energy": "平稳",
-            "attention": "看着书页",
-            "current_activity": "在窗边读刚翻到的一页",
-            "baseline": "read",
+            "attention": "看着刚读到的句子",
         },
-        "life_events": [{"content": "坐到窗边，读完了刚翻到的一页。"}],
         "memory_operations": [
             {
                 "action": "record",
                 "kind": "self_experience",
-                "content": "今天在窗边读了一页书",
-                "evidence_ids": ["life:0"],
+                "content": "读到羁鸟恋旧林时感到一种想回到自在处的牵引",
+                "evidence_ids": ["INCOMING"],
                 "target_id": None,
             }
         ],
@@ -147,6 +143,25 @@ def test_candidate_schema_requires_memory_payload_and_expression() -> None:
     operation = schema["$defs"]["MemoryOperation"]
     assert {"content", "evidence_ids"} <= set(operation["required"])
     assert "expression" in schema["required"]
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "你今天还好吗？",
+        "这会儿是不是有点累？",
+        "刚才那一下疼不疼？",
+        "要不要先安静一会儿？",
+        "心里还堵着吗？",
+        "今天过得顺不顺？",
+        "你那边还撑得住吗？",
+        "现在有没有好一点？",
+    ],
+)
+def test_caring_questions_are_allowed_without_reply_debt(question: str) -> None:
+    bundle = CandidateBundle.model_validate(_valid_bundle(question))
+
+    assert validate_no_solicitation(bundle) == []
 
 
 @pytest.mark.asyncio
@@ -332,14 +347,7 @@ async def test_s8_real_fabricated_touch_bundle_is_rejected_with_structural_reaso
             "mood": "平静",
             "energy": "平稳",
             "attention": "在你身上",
-            "current_activity": "感受你的触碰",
-            "baseline": "idle",
         },
-        "life_events": [
-            {"content": "感觉到你轻轻捏了捏我的脸颊，皮肤有微微的触感"},
-            {"content": "听见窗外有鸟叫了一声"},
-            {"content": "手指在键盘上停了一会儿"},
-        ],
         "memory_operations": [
             {
                 "action": "record",
@@ -370,8 +378,7 @@ async def test_s8_real_fabricated_touch_bundle_is_rejected_with_structural_reaso
     assert history == []
     _assert_seed_only(memories)
     assert state["pending_expression"] is None
-    assert "直接经历不能生成生活事件" in "\n".join(reasons)
-    assert "life_events[0].content 断言用户触碰了她" in "\n".join(reasons)
+    assert "引用了未知证据 ['life:0']" in "\n".join(reasons)
     assert "memory_operations[0].content 的触碰记忆没有引用 body_touch" in "\n".join(reasons)
     assert "expression 断言用户触碰了她" in "\n".join(reasons)
     assert "推断了用户动机或关系含义 `开玩笑`" in "\n".join(reasons)
@@ -403,10 +410,7 @@ async def test_body_touch_can_be_evidence_for_her_own_touch_experience(tmp_path)
             "mood": "平静",
             "energy": "平稳",
             "attention": "注意到触碰",
-            "current_activity": "感受触碰",
-            "baseline": "idle",
         },
-        "life_events": [],
         "memory_operations": [
             {
                 "action": "record",
@@ -435,9 +439,8 @@ async def test_body_touch_can_be_evidence_for_her_own_touch_experience(tmp_path)
 
 
 @pytest.mark.asyncio
-async def test_own_life_event_cannot_be_second_example_for_user_pattern(tmp_path) -> None:
+async def test_deleted_life_alias_cannot_be_second_example_for_user_pattern(tmp_path) -> None:
     bad = _valid_bundle("我听见了。")
-    bad["life_events"] = [{"content": "刚把摊开的书合上。"}]
     bad["memory_operations"] = [
         {
             "action": "record",
@@ -475,7 +478,7 @@ async def test_four_memory_kinds_record_canonical_evidence_in_one_mind_step(tmp_
             },
             {
                 "id": "life_earlier",
-                "type": "self_life",
+                "type": "self_reading",
                 "content": "在窗边读完一页后收了收自己的桌面。",
                 "occurred_at": (now - timedelta(days=2)).isoformat(),
             },
@@ -763,59 +766,75 @@ async def test_provider_failure_returns_honest_static_catch_without_committing(t
 
 
 @pytest.mark.asyncio
-async def test_due_time_step_commits_own_life_and_baseline_without_expression(tmp_path) -> None:
+async def test_real_txt_progress_waits_for_completed_body_receipt(tmp_path) -> None:
     files = MindFiles(tmp_path)
     start = datetime(2026, 7, 17, 19, 0, tzinfo=UTC)
     files.load(start)
     provider = StubProvider([_time_bundle()])
 
-    result = await advance_time(
-        provider=provider,
-        files=files,
-        now=start + timedelta(minutes=31),
-    )
+    scheduled = advance_time(files=files, now=start + timedelta(minutes=31))
 
-    state, history, memories, failures = _read(files)
-    assert result.status == "advanced"
-    assert state["condition"]["baseline"] == "read"
-    assert state["pending_expression"] is None
-    assert [item["type"] for item in history] == ["self_life", "memory_operation"]
-    assert _learned_items(memories)[0]["evidence_ids"] == [history[0]["id"]]
-    assert failures == []
+    state, history, _, failures = _read(files)
+    activity = state["pending_activity"]
+    assert scheduled.status == "scheduled"
+    assert activity["type"] == "read"
+    assert activity["text"] == "少无适俗韵，性本爱丘山。误落尘网中，一去三十年。"
+    assert state["reading"]["next_passage"] == 0
+    assert history == []
+    assert provider.calls == []
 
-    second = await advance_time(
+    result = await complete_reading(
+        activity["id"],
         provider=provider,
         files=files,
         now=start + timedelta(minutes=32),
+        allow_ambient=False,
     )
+
+    state, history, memories, failures = _read(files)
+    assert result.committed is True
+    assert state["reading"]["next_passage"] == 1
+    assert state["pending_activity"] is None
+    assert state["pending_expression"] is None
+    assert [item["type"] for item in history] == ["self_reading", "memory_operation"]
+    assert history[0]["content"] == activity["text"]
+    assert _learned_items(memories)[0]["evidence_ids"] == [history[0]["id"]]
+    assert failures == []
+
+    second = advance_time(files=files, now=start + timedelta(minutes=33))
     assert second.status == "not_due"
     assert len(provider.calls) == 1
 
 
 @pytest.mark.asyncio
-async def test_time_step_rejects_expression_before_committing_whole_retry(tmp_path) -> None:
+async def test_quiet_reading_rejects_expression_before_atomic_retry(tmp_path) -> None:
     files = MindFiles(tmp_path)
     start = datetime(2026, 7, 17, 19, 0, tzinfo=UTC)
     files.load(start)
     provider = StubProvider([_time_bundle("你在吗？"), _time_bundle()])
+    advance_time(files=files, now=start + timedelta(minutes=31))
+    state, _, _, _ = _read(files)
 
-    result = await advance_time(
+    result = await complete_reading(
+        state["pending_activity"]["id"],
         provider=provider,
         files=files,
-        now=start + timedelta(minutes=31),
+        now=start + timedelta(minutes=32),
+        allow_ambient=False,
     )
 
     state, history, _, failures = _read(files)
-    assert result.status == "advanced"
+    assert result.committed is True
     assert result.attempts == 2
+    assert state["reading"]["next_passage"] == 1
     assert state["pending_expression"] is None
     assert len(history) == 2
     assert failures[0]["candidate_raw"]
-    assert "时间推进不能夹带" in failures[0]["reasons"][0]
+    assert "安静阅读不能夹带" in failures[0]["reasons"][0]
 
 
 @pytest.mark.asyncio
-async def test_present_time_step_can_offer_ambient_without_reading_unanswered_expressions(
+async def test_completed_reading_can_offer_caring_question_without_unanswered_context(
     tmp_path,
 ) -> None:
     files = MindFiles(tmp_path)
@@ -832,23 +851,26 @@ async def test_present_time_step_can_offer_ambient_without_reading_unanswered_ex
         }
     )
     files.commit(state, history, memories)
-    provider = StubProvider([_time_bundle("窗边这一页刚好读完了。")])
+    provider = StubProvider([_time_bundle("这两句让我停了一下。你今天还好吗？")])
+    advance_time(files=files, now=start + timedelta(minutes=31))
+    state, _, _, _ = _read(files)
 
-    result = await advance_time(
+    result = await complete_reading(
+        state["pending_activity"]["id"],
         provider=provider,
         files=files,
-        now=start + timedelta(minutes=31),
+        now=start + timedelta(minutes=32),
         allow_ambient=True,
     )
 
     state, recorded, _, failures = _read(files)
     prompt = json.loads(provider.calls[0][0].content)
-    assert result.status == "advanced"
+    assert result.committed is True
     assert state["pending_expression"]["kind"] == "ambient"
-    assert state["pending_expression"]["text"] == "窗边这一页刚好读完了。"
+    assert state["pending_expression"]["text"] == "这两句让我停了一下。你今天还好吗？"
     assert [item["type"] for item in recorded] == [
         "shared_expression",
-        "self_life",
+        "self_reading",
         "memory_operation",
     ]
     assert prompt["selected_history"] == []
@@ -859,7 +881,6 @@ async def test_present_time_step_can_offer_ambient_without_reading_unanswered_ex
 async def test_invalid_structured_tool_arguments_are_saved_in_full(tmp_path) -> None:
     invalid = {
         "state_changes": '{"mood":"平静"}',
-        "life_events": [],
         "memory_operations": [],
         "expression": "我在",
     }
