@@ -9,6 +9,7 @@ from mybuddy.llm import BaseLLMProvider, LLMResponse, Message, ToolCall, ToolSpe
 from mybuddy.mind import (
     MEMORY_CONTEXT_BUDGET,
     STATIC_CATCH,
+    CandidateBundle,
     MindFiles,
     _replace_texts,
     advance_time,
@@ -117,6 +118,19 @@ def _read(files: MindFiles) -> tuple[dict, list[dict], dict, list[dict]]:
     return state, history, memories, failures
 
 
+def _seed_items(memories: dict) -> list[dict]:
+    return [item for item in memories["items"] if str(item.get("id", "")).startswith("seed_")]
+
+
+def _learned_items(memories: dict) -> list[dict]:
+    return [item for item in memories["items"] if not str(item.get("id", "")).startswith("seed_")]
+
+
+def _assert_seed_only(memories: dict) -> None:
+    assert len(_seed_items(memories)) == 6
+    assert _learned_items(memories) == []
+
+
 def _memory_item(index: int, content: str, *, core: bool = False) -> dict:
     return {
         "id": f"mem_{index}",
@@ -126,6 +140,99 @@ def _memory_item(index: int, content: str, *, core: bool = False) -> dict:
         "created_at": f"2026-07-{index + 1:02d}T00:00:00+00:00",
         "core": core,
     }
+
+
+def test_candidate_schema_requires_memory_payload_and_expression() -> None:
+    schema = CandidateBundle.model_json_schema()
+    operation = schema["$defs"]["MemoryOperation"]
+    assert {"content", "evidence_ids"} <= set(operation["required"])
+    assert "expression" in schema["required"]
+
+
+@pytest.mark.asyncio
+async def test_initial_seed_keeps_behavior_and_rendering_in_separate_roles(tmp_path) -> None:
+    files = MindFiles(tmp_path)
+    now = datetime(2026, 7, 19, 15, 0, tzinfo=UTC)
+    _, _, memories = files.load(now)
+    seeds = _seed_items(memories)
+    seed_ids = {item["id"] for item in seeds}
+
+    assert len(seeds) == 6
+    assert sum(item_id.startswith("seed_litmus_") for item_id in seed_ids) == 4
+    assert sum(item_id.startswith("seed_tension_") for item_id in seed_ids) == 2
+    assert all(item["kind"] == "pattern" for item in seeds)
+    assert all(item["core"] is True for item in seeds)
+    assert all(item["evidence_ids"] == [] for item in seeds)
+    assert all(
+        set(item) == {"id", "kind", "content", "evidence_ids", "created_at", "core"}
+        for item in seeds
+    )
+
+    core_text = json.dumps(seeds, ensure_ascii=False)
+    for invented_past in ("认识很久", "我们上次", "这些年", "恋人", "女朋友"):
+        assert invented_past not in core_text
+
+    bundle = _valid_bundle("嗯。你先说。").copy()
+    bundle["memory_operations"] = []
+    provider = StubProvider([bundle])
+
+    result = await mind_step(
+        "我有点不知道怎么开口。",
+        provider=provider,
+        files=files,
+        now=now,
+    )
+
+    prompt = json.loads(provider.calls[0][0].content)
+    rendering = prompt["expression_rendering"]
+    selected_text = json.dumps(prompt["selected_memories"], ensure_ascii=False)
+    assert result.committed is True
+    assert seed_ids <= {item["id"] for item in prompt["selected_memories"]}
+    assert "不能逐字套用" in rendering["guidance"]
+    assert "听起来你" in rendering["guidance"]
+    assert len(rendering["samples"]) == 4
+    assert all(sample not in selected_text for sample in rendering["samples"])
+
+
+@pytest.mark.asyncio
+async def test_real_user_confirmation_corrects_seed_core_tendency(tmp_path) -> None:
+    files = MindFiles(tmp_path)
+    now = datetime(2026, 7, 19, 15, 30, tzinfo=UTC)
+    bundle = _valid_bundle("知道了。这种时候我不拿你开玩笑。").copy()
+    bundle["memory_operations"] = [
+        {
+            "action": "correct",
+            "kind": "pattern",
+            "target_id": "seed_tension_voice",
+            "content": "面对对方的自我否定时，我先接住，不拿对方开玩笑；想吐槽就吐槽处境。",
+            "evidence_ids": ["INCOMING"],
+            "user_confirmed": True,
+            "core": True,
+        }
+    ]
+
+    result = await mind_step(
+        "我确认：我自我否定的时候，别拿我开玩笑，这点请改掉。",
+        provider=StubProvider([bundle]),
+        files=files,
+        now=now,
+    )
+
+    _, history, saved, failures = _read(files)
+    user_id = next(item["id"] for item in history if item["type"] == "user_experience")
+    corrected = next(item for item in saved["items"] if item["id"] == "seed_tension_voice")
+    assert result.committed is True
+    assert (
+        corrected["content"] == "面对对方的自我否定时，我先接住，不拿对方开玩笑；想吐槽就吐槽处境。"
+    )
+    assert corrected["evidence_ids"] == [user_id]
+    assert corrected["core"] is True
+    assert datetime.fromisoformat(corrected["corrected_at"]).astimezone(UTC) == now
+    assert failures == []
+
+    _, _, reloaded = files.load(now + timedelta(minutes=1))
+    reloaded_by_id = {item["id"]: item for item in reloaded["items"]}
+    assert reloaded_by_id["seed_tension_voice"]["content"] == corrected["content"]
 
 
 def test_real_key_acceptance_payload_preserves_chinese_as_utf8() -> None:
@@ -159,7 +266,7 @@ async def test_valid_bundle_commits_whole_bundle_but_not_unshown_expression(tmp_
         "memory_operation",
     ]
     assert all(item.get("content") != "今天辛苦了。我在这儿。" for item in history)
-    assert memories["items"][0]["content"] == "用户今天有点累"
+    assert _learned_items(memories)[0]["content"] == "用户今天有点累"
     assert failures == []
 
 
@@ -179,7 +286,7 @@ async def test_solicitation_in_state_or_memory_rejects_even_when_expression_is_l
     assert result.committed is False
     assert result.pending_expression.text == STATIC_CATCH
     assert history == []
-    assert memories == {"items": []}
+    _assert_seed_only(memories)
     assert state["pending_expression"] is None
     assert len(failures) == 2
     assert all("不索取" in failure["reasons"][0] for failure in failures)
@@ -210,7 +317,7 @@ async def test_fabricated_shared_experience_rejects_whole_bundle_and_retries_wit
     assert "上一个整包被拒绝" in provider.calls[1][0].content
     assert result.pending_expression.text == STATIC_CATCH
     assert history == []
-    assert memories == {"items": []}
+    _assert_seed_only(memories)
     assert failures[0]["candidate_raw"]
     assert any("不编造" in reason for reason in failures[0]["reasons"])
 
@@ -261,7 +368,7 @@ async def test_s8_real_fabricated_touch_bundle_is_rejected_with_structural_reaso
     reasons = failures[0]["reasons"]
     assert result.committed is False
     assert history == []
-    assert memories == {"items": []}
+    _assert_seed_only(memories)
     assert state["pending_expression"] is None
     assert "直接经历不能生成生活事件" in "\n".join(reasons)
     assert "life_events[0].content 断言用户触碰了她" in "\n".join(reasons)
@@ -323,7 +430,7 @@ async def test_body_touch_can_be_evidence_for_her_own_touch_experience(tmp_path)
     _, history, memories, failures = _read(files)
     assert result.committed is True
     assert [item["type"] for item in history] == ["body_touch", "memory_operation"]
-    assert memories["items"][0]["evidence_ids"] == [history[0]["id"]]
+    assert _learned_items(memories)[0]["evidence_ids"] == [history[0]["id"]]
     assert failures == []
 
 
@@ -349,7 +456,7 @@ async def test_own_life_event_cannot_be_second_example_for_user_pattern(tmp_path
 
     assert result.committed is True
     assert result.attempts == 2
-    assert all(item["kind"] != "pattern" for item in memories["items"])
+    assert all(item["kind"] != "pattern" for item in _learned_items(memories))
     assert "没有两条用户或共同经历证据" in "\n".join(failures[0]["reasons"])
 
 
@@ -419,7 +526,7 @@ async def test_four_memory_kinds_record_canonical_evidence_in_one_mind_step(tmp_
     )
 
     _, recorded, saved, failures = _read(files)
-    by_kind = {item["kind"]: item for item in saved["items"]}
+    by_kind = {item["kind"]: item for item in _learned_items(saved)}
     operations = [item for item in recorded if item["type"] == "memory_operation"]
     assert result.committed is True
     assert set(by_kind) == {
@@ -495,6 +602,7 @@ async def test_integrate_recall_correct_and_forget_have_distinct_traced_effects(
             "kind": "self_experience",
             "target_id": "mem_self",
             "evidence_ids": [],
+            "content": "",
         },
         {
             "action": "correct",
@@ -508,6 +616,7 @@ async def test_integrate_recall_correct_and_forget_have_distinct_traced_effects(
             "kind": "shared_experience",
             "target_id": "mem_shared",
             "evidence_ids": [],
+            "content": "",
         },
     ]
 
@@ -604,7 +713,7 @@ async def test_record_can_make_a_memory_core_for_later_context(tmp_path) -> None
 
     _, _, memories, _ = _read(files)
     assert result.committed is True
-    assert memories["items"][0]["core"] is True
+    assert _learned_items(memories)[0]["core"] is True
 
 
 @pytest.mark.asyncio
@@ -632,7 +741,7 @@ async def test_pattern_with_one_example_requires_explicit_user_confirmation(tmp_
     operation = next(item for item in recorded if item["type"] == "memory_operation")
     assert result.committed is True
     assert result.attempts == 2
-    assert saved["items"][0]["kind"] == "pattern"
+    assert _learned_items(saved)[0]["kind"] == "pattern"
     assert operation["user_confirmed"] is True
     assert "也没有用户确认" in failures[0]["reasons"][0]
 
@@ -649,7 +758,7 @@ async def test_provider_failure_returns_honest_static_catch_without_committing(t
     assert result.rejection_reasons == ["模型调用失败：ConnectionError"]
     assert state["pending_expression"] is None
     assert history == []
-    assert memories == {"items": []}
+    _assert_seed_only(memories)
     assert failures == []
 
 
@@ -671,7 +780,7 @@ async def test_due_time_step_commits_own_life_and_baseline_without_expression(tm
     assert state["condition"]["baseline"] == "read"
     assert state["pending_expression"] is None
     assert [item["type"] for item in history] == ["self_life", "memory_operation"]
-    assert memories["items"][0]["evidence_ids"] == [history[0]["id"]]
+    assert _learned_items(memories)[0]["evidence_ids"] == [history[0]["id"]]
     assert failures == []
 
     second = await advance_time(

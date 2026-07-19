@@ -28,6 +28,9 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["mybuddy"]
 
+[tool.hatch.build.targets.wheel.force-include]
+"mybuddy/personality.json" = "mybuddy/personality.json"
+
 [tool.ruff]
 line-length = 100
 target-version = "py312"

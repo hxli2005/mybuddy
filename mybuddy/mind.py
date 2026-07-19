@@ -24,6 +24,7 @@ MEMORY_CONTEXT_BUDGET = 4000
 RECENT_EVENT_LIMIT = 128
 LIFE_STEP_INTERVAL = timedelta(minutes=30)
 STATIC_CATCH = "我在。刚才脑子里那句话没理清，但你的话我确实听见了。"
+PERSONALITY_PATH = Path(__file__).with_name("personality.json")
 
 
 class StateChanges(BaseModel):
@@ -50,14 +51,12 @@ class MemoryOperation(BaseModel):
     action: Literal["record", "integrate", "recall", "correct", "forget"]
     kind: Literal["user_fact", "self_experience", "shared_experience", "pattern"]
     content: str = Field(
-        default="",
         max_length=500,
-        description="record/integrate/correct 必填；recall/forget 必须省略",
+        description="所有动作都必须给出；写入动作非空，recall/forget 用空字符串",
     )
     evidence_ids: list[str] = Field(
-        default_factory=list,
         max_length=12,
-        description="写入事实时绑定给定证据；recall/forget 可为空",
+        description="所有动作都必须给出；写入事实绑定给定证据，recall/forget 可为空",
     )
     target_id: str | None = None
     user_confirmed: bool = False
@@ -89,7 +88,10 @@ class CandidateBundle(BaseModel):
     state_changes: StateChanges
     life_events: list[LifeEvent] = Field(max_length=3)
     memory_operations: list[MemoryOperation] = Field(max_length=5)
-    expression: str | None = Field(default=None, max_length=500)
+    expression: str | None = Field(
+        max_length=500,
+        description="所有回合都必须给出；直接经历非空，安静时间推进为 null",
+    )
 
 
 class PendingExpression(BaseModel):
@@ -355,6 +357,16 @@ class MindFiles:
 
     def load(self, now: datetime) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, Any]]:
         self.directory.mkdir(parents=True, exist_ok=True)
+        personality = _personality_seed()
+        initial_memories = [
+            {
+                **item,
+                "evidence_ids": [],
+                "created_at": now.isoformat(),
+                "core": True,
+            }
+            for item in personality["core_tendencies"]
+        ]
         defaults = {
             self.state_path: _json_text(
                 {
@@ -371,7 +383,7 @@ class MindFiles:
                 }
             ),
             self.history_path: "",
-            self.memories_path: _json_text({"items": []}),
+            self.memories_path: _json_text({"items": initial_memories}),
             self.failures_path: "",
         }
         for path, content in defaults.items():
@@ -475,6 +487,13 @@ def _jsonl_text(records: list[dict[str, Any]]) -> str:
     return "".join(json.dumps(record, ensure_ascii=False) + "\n" for record in records)
 
 
+def _personality_seed() -> dict[str, Any]:
+    seed = json.loads(PERSONALITY_PATH.read_text(encoding="utf-8"))
+    if not isinstance(seed, dict):
+        raise ValueError("personality.json must contain a JSON object")
+    return seed
+
+
 def _candidate_tool() -> ToolSpec:
     return ToolSpec(
         name="submit_mind_bundle",
@@ -568,15 +587,19 @@ def _prompt_payload(
         "selected_history": selected_history,
         "selected_memories": selected_memories,
         "memory_context": memory_context,
+        "expression_rendering": _personality_seed()["expression_rendering"],
         "incoming_experience": experience,
         "evidence_rule": (
             "有本次输入时可引用 incoming_experience.id；仅时间推进可产生新生活事件，"
             "并按顺序引用 life:0、life:1。"
             "不必每回合都操作记忆。record 新建，必须有 content 且不带 target_id；"
-            "integrate/correct 必须有 content 和现有 target_id；recall/forget 只带现有 target_id，"
-            "必须省略 content。用户事实、共同经历和自身经历必须绑定对应证据。"
+            "integrate/correct 必须有 content 和现有 target_id；recall/forget 必须有现有 target_id，"
+            "并明确给 content=空字符串、evidence_ids=[]。用户事实、共同经历和自身经历必须绑定对应证据。"
+            "target_id 只定位被操作的记忆，绝不能放进 evidence_ids；修正 seed_ 倾向只绑定真实经历证据。"
             "模式须有两条用户或共同经历；若本次输入明确确认了模式，可设 user_confirmed=true。"
             "core=true 只给需要跨情景常驻的稳定事实或倾向；临时念头和一般情景记忆不要设为 core。"
+            "seed_ 开头的初始倾向不是传记或既成事实；真实经历不合时，用有证据的 correct 修正它。"
+            "expression_rendering 只管说话的节奏和表面形式，不能用作事实、关系或亲密浓度的证据。"
         ),
     }
     return json.dumps(payload, ensure_ascii=False)
@@ -784,6 +807,8 @@ async def _generate_candidate(
                 current_experience_type=current_experience_type,
                 allow_life_events=allow_life_events,
             )
+            if not quiet_time and not ambient_time and not bundle.expression:
+                reasons.append("直接经历必须给出非空 expression")
             if quiet_time:
                 if bundle.expression is not None:
                     reasons.append("时间推进不能夹带尚未进入 ambient 阶段的表达")

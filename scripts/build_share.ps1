@@ -34,6 +34,7 @@ if ($LASTEXITCODE -ne 0) { throw "BuddyShell publish 失败。" }
 $engineDist = Join-Path $work "engine-dist"
 & uv run --extra api --extra share pyinstaller --noconfirm --clean --onedir --console `
     --name MyBuddyEngine --paths $projectRoot `
+    --add-data "$(Join-Path $projectRoot 'mybuddy\personality.json');mybuddy" `
     --distpath $engineDist --workpath (Join-Path $work "pyi-work") `
     --specpath (Join-Path $work "pyi-spec") (Join-Path $projectRoot "scripts\engine_entry.py")
 if ($LASTEXITCODE -ne 0) { throw "MyBuddyEngine PyInstaller 打包失败。" }
