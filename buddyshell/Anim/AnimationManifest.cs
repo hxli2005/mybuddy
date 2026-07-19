@@ -7,8 +7,8 @@ public sealed partial class AnimationManifest
 {
     private static readonly string[] RequiredPlanIds =
     [
-        "idle.default.normal", "activity.read.normal", "think.normal", "touch.head.normal", "touch.body.happy",
-        "speech.neutral", "speech.happy",
+        "idle.default.normal", "activity.read.normal", "activity.walk.left.normal", "activity.walk.right.normal",
+        "think.normal", "touch.head.normal", "touch.body.happy", "speech.neutral", "speech.happy",
     ];
     private readonly Dictionary<string, AnimationPlan> _plans;
 
@@ -43,6 +43,8 @@ public sealed partial class AnimationManifest
     public AnimationPlan Resolve(AnimationRequest request) => Get(request.Intent switch
     {
         AnimationIntent.Read => "activity.read.normal",
+        AnimationIntent.WalkLeft => "activity.walk.left.normal",
+        AnimationIntent.WalkRight => "activity.walk.right.normal",
         AnimationIntent.Think => "think.normal",
         AnimationIntent.TouchHeadReflex => "touch.head.normal",
         AnimationIntent.TouchBodyReflex => "touch.body.happy",
@@ -86,6 +88,8 @@ public sealed partial class AnimationManifest
         [
             Baseline("idle.default.normal", AnimationIntent.Idle, null, "Default/Nomal/1", null),
             Transient("activity.read.normal", AnimationIntent.Read, "WORK/Study/A_Nomal", "WORK/Study/B_1_Nomal", "WORK/Study/C_Nomal"),
+            Transient("activity.walk.left.normal", AnimationIntent.WalkLeft, "MOVE/walk.left/A_Nomal", "MOVE/walk.left/B_Nomal", "MOVE/walk.left/C_Nomal"),
+            Transient("activity.walk.right.normal", AnimationIntent.WalkRight, "MOVE/walk.right/A_Nomal", "MOVE/walk.right/B_Nomal", "MOVE/walk.right/C_Nomal"),
             Pending("think.normal", AnimationIntent.Think, "Think/Nomal/A", "Think/Nomal/B", "Think/Nomal/C"),
             Transient("touch.head.normal", AnimationIntent.TouchHeadReflex, "Touch_Head/A_Nomal", "Touch_Head/B_Nomal", "Touch_Head/C_Nomal"),
             Transient("touch.body.happy", AnimationIntent.TouchBodyReflex, "Touch_Body/A_Happy/tb1", "Touch_Body/B_Happy/tb1", "Touch_Body/C_Happy/tb1"),

@@ -123,8 +123,18 @@ public sealed class AnimationController : IAnimationController, IAnimationDiagno
         }
         catch (Exception exception)
         {
+            var failedActivity = _execution == AnimationExecutionKind.Transient &&
+                _request?.Source == AnimationSource.State
+                ? _request.CorrelationId
+                : null;
             if (!_faulted) Faulted?.Invoke(this, new AnimationFaultEventArgs(exception, false));
             _faulted = true;
+            if (failedActivity is not null)
+            {
+                ResetToBaselineWithoutRender();
+                ActivityFinished?.Invoke(
+                    this, new ActivityFinishedEventArgs(failedActivity, "failed", "animation_fault"));
+            }
             return;
         }
         if (AnimationTimeline.IsComplete(_phase, elapsed)) AdvancePhase();
@@ -136,7 +146,10 @@ public sealed class AnimationController : IAnimationController, IAnimationDiagno
             _request?.Source == AnimationSource.State &&
             _request.CorrelationId != request.CorrelationId)
             ActivityFinished?.Invoke(
-                this, new ActivityFinishedEventArgs(_request.CorrelationId, completed: false));
+                this, new ActivityFinishedEventArgs(
+                    _request.CorrelationId,
+                    "interrupted",
+                    InterruptionReason(request.Source)));
 
         _plan = _manifest.Resolve(request);
         _request = request;
@@ -153,6 +166,24 @@ public sealed class AnimationController : IAnimationController, IAnimationDiagno
         _execution = AnimationExecutionKind.Baseline;
         StartPhase(_plan.Entry ?? _plan.Body);
     }
+
+    private void ResetToBaselineWithoutRender()
+    {
+        _plan = _desiredBaseline;
+        _request = null;
+        _execution = AnimationExecutionKind.Baseline;
+        _phase = _plan.Entry ?? _plan.Body;
+        _phaseStartedAt = _clock.ElapsedMilliseconds;
+        _generation += 1;
+        _lastSignature = null;
+    }
+
+    private static string InterruptionReason(AnimationSource source) => source switch
+    {
+        AnimationSource.Touch => "touch",
+        AnimationSource.Chat => "chat",
+        _ => "activity_replaced",
+    };
 
     private void StartPhase(AnimationPhasePlan phase)
     {
@@ -200,7 +231,7 @@ public sealed class AnimationController : IAnimationController, IAnimationDiagno
         }
         if (completedActivity is not null)
             ActivityFinished?.Invoke(
-                this, new ActivityFinishedEventArgs(completedActivity, completed: true));
+                this, new ActivityFinishedEventArgs(completedActivity, "completed", "animation_finished"));
     }
 
     private void OnTouchStarted(object? sender, TouchDetectedEventArgs args) => Submit(

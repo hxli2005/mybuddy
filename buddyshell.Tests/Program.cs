@@ -1,3 +1,4 @@
+using BuddyShell;
 using BuddyShell.Anim;
 using BuddyShell.Bridge;
 using System.IO;
@@ -16,6 +17,9 @@ internal static class Program
             ("body step is the only wire contract", BodyStepIsOnlyContract),
             ("read completion emits a physical receipt", ReadCompletionEmitsReceipt),
             ("touch interrupts read without a completed receipt", TouchInterruptsRead),
+            ("walk displacement stays inside work area", WalkDisplacementStaysInsideWorkArea),
+            ("walk completion emits a physical receipt", WalkCompletionEmitsReceipt),
+            ("animation fault never becomes completed life", AnimationFaultNeverCompletesActivity),
             ("chat think completes without a presentation queue", ChatCompletesWithoutQueue),
             ("API key is DPAPI protected", ApiKeyIsProtected),
         };
@@ -55,7 +59,7 @@ internal static class Program
         Contains(json, "activity_receipt");
         Contains(json, "event_id");
         var response = JsonSerializer.Serialize(new BodyStepResponse
-            { MindStatus = "unavailable", ActivityConfirmed = true });
+        { MindStatus = "unavailable", ActivityConfirmed = true });
         Contains(response, "mind_status");
         Contains(response, "unavailable");
         Contains(response, "activity_confirmed");
@@ -98,6 +102,8 @@ internal static class Program
         Equal(true, receipt?.Completed);
         Equal("idle.default.normal", fixture.Controller.Snapshot.BaselinePlanId);
         Equal(AnimationExecutionKind.Baseline, fixture.Controller.Snapshot.Execution);
+        Equal("completed", receipt?.Status);
+        Equal("animation_finished", receipt?.Reason);
     }
 
     private static void TouchInterruptsRead()
@@ -115,8 +121,66 @@ internal static class Program
         Equal(false, receipt?.Completed);
         Equal("touch.head.normal", fixture.Controller.Snapshot.PlanId);
         fixture.Advance(30);
+        Equal("interrupted", receipt?.Status);
+        Equal("touch", receipt?.Reason);
         Equal(AnimationExecutionKind.Baseline, fixture.Controller.Snapshot.Execution);
         Equal("idle.default.normal", fixture.Controller.Snapshot.PlanId);
+    }
+
+    private static void WalkDisplacementStaysInsideWorkArea()
+    {
+        var area = new Rect(0, 0, 800, 600);
+        var right = new WalkAttempt("walk-right", 0, 80, 200, 240, area);
+        Equal(AnimationIntent.WalkRight, right.Intent);
+        right.Advance(2000);
+        Equal(160.0, right.Left);
+        Equal(true, right.Contains(right.Left, right.Top));
+
+        var left = new WalkAttempt("walk-left", 560, 80, 200, 240, area);
+        Equal(AnimationIntent.WalkLeft, left.Intent);
+        left.Advance(10000);
+        Equal(0.0, left.Left);
+        Equal(true, left.Contains(left.Left, left.Top));
+        var json = JsonSerializer.Serialize(left.Capture(left.Left, left.Top));
+        Contains(json, "start_left");
+        Contains(json, "work_right");
+    }
+
+    private static void WalkCompletionEmitsReceipt()
+    {
+        using var fixture = new Fixture();
+        ActivityFinishedEventArgs? receipt = null;
+        fixture.Controller.ActivityFinished += (_, args) => receipt = args;
+        fixture.Controller.Submit(new AnimationRequest(
+            AnimationIntent.WalkRight,
+            AnimationSource.State,
+            "walk-1",
+            AnimationPriority.Activity));
+        Equal("activity.walk.right.normal", fixture.Controller.Snapshot.PlanId);
+        fixture.Advance(30);
+        Equal("walk-1", receipt?.ActivityId);
+        Equal("completed", receipt?.Status);
+        Equal("animation_finished", receipt?.Reason);
+        Equal(AnimationExecutionKind.Baseline, fixture.Controller.Snapshot.Execution);
+    }
+
+    private static void AnimationFaultNeverCompletesActivity()
+    {
+        using var fixture = new Fixture();
+        ActivityFinishedEventArgs? receipt = null;
+        fixture.Controller.ActivityFinished += (_, args) => receipt = args;
+        fixture.Renderer.ThrowNextRender = true;
+        fixture.Controller.Submit(new AnimationRequest(
+            AnimationIntent.WalkLeft,
+            AnimationSource.State,
+            "walk-fault",
+            AnimationPriority.Activity));
+
+        Equal("walk-fault", receipt?.ActivityId);
+        Equal("failed", receipt?.Status);
+        Equal("animation_fault", receipt?.Reason);
+        Equal(false, receipt?.Completed);
+        Equal(AnimationExecutionKind.Baseline, fixture.Controller.Snapshot.Execution);
     }
 
     private static void ChatCompletesWithoutQueue()
@@ -186,6 +250,8 @@ internal static class Program
             {
                 ("idle.default.normal", AnimationIntent.Idle, true, false),
                 ("activity.read.normal", AnimationIntent.Read, false, false),
+                ("activity.walk.left.normal", AnimationIntent.WalkLeft, false, false),
+                ("activity.walk.right.normal", AnimationIntent.WalkRight, false, false),
                 ("think.normal", AnimationIntent.Think, false, true),
                 ("touch.head.normal", AnimationIntent.TouchHeadReflex, false, false),
                 ("touch.body.happy", AnimationIntent.TouchBodyReflex, false, false),
@@ -221,9 +287,15 @@ internal static class Program
     private sealed class RecordingRenderer : IAnimationRenderer
     {
         public UIElement View { get; } = new();
+        public bool ThrowNextRender { get; set; }
         public event EventHandler<TouchDetectedEventArgs>? TouchStarted;
         public event EventHandler<TouchDetectedEventArgs>? TouchDetected { add { } remove { } }
-        public void Render(CompositedFrame frame) { }
+        public void Render(CompositedFrame frame)
+        {
+            if (!ThrowNextRender) return;
+            ThrowNextRender = false;
+            throw new InvalidOperationException("render failed");
+        }
         public void RaiseTouchStarted(TouchZone zone, string correlation) =>
             TouchStarted?.Invoke(this, new TouchDetectedEventArgs(zone, correlation));
         public void Dispose() { }

@@ -1,9 +1,12 @@
 using BuddyShell.Anim;
 using BuddyShell.Bridge;
 using System.IO;
+using System.Diagnostics;
 using System.Windows;
 using System.Windows.Input;
+using System.Windows.Interop;
 using System.Windows.Media;
+using System.Windows.Threading;
 
 namespace BuddyShell;
 
@@ -12,6 +15,9 @@ public enum ConnectionState { Connected, Warning, Error }
 public partial class MainWindow : Window
 {
     private readonly ShellSettings _settings = SettingsStore.Load();
+    private readonly DispatcherTimer _walkTimer = new(DispatcherPriority.Render);
+    private readonly Stopwatch _walkClock = new();
+    private WalkAttempt? _walkAttempt;
     private EngineHost? _engine;
     private IAnimationController? _animationController;
     private BridgeClient? _client;
@@ -29,6 +35,8 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
         Loaded += OnLoaded;
+        _walkTimer.Interval = TimeSpan.FromMilliseconds(16);
+        _walkTimer.Tick += OnWalkTick;
         Closing += (_, _) => SaveWindowPosition();
         Closed += (_, _) => DisposeServices();
         DragBar.MouseLeftButtonDown += (_, args) =>
@@ -275,24 +283,120 @@ public partial class MainWindow : Window
             string.Equals(activity.Id, _activeActivityId, StringComparison.Ordinal) ||
             string.Equals(activity.Id, _activityReceipt?.ActivityId, StringComparison.Ordinal))
             return;
-        if (!string.Equals(activity.Type, "read", StringComparison.Ordinal)) return;
         _activeActivityId = activity.Id;
-        _animationController?.Submit(new AnimationRequest(
-            AnimationIntent.Read,
-            AnimationSource.State,
-            activity.Id,
-            AnimationPriority.Activity));
+        if (string.Equals(activity.Type, "read", StringComparison.Ordinal))
+        {
+            _animationController?.Submit(new AnimationRequest(
+                AnimationIntent.Read,
+                AnimationSource.State,
+                activity.Id,
+                AnimationPriority.Activity));
+            return;
+        }
+        if (string.Equals(activity.Type, "walk", StringComparison.Ordinal))
+        {
+            StartWalk(activity.Id);
+            return;
+        }
+        _activeActivityId = null;
+    }
+
+    private void StartWalk(string activityId)
+    {
+        try
+        {
+            _walkAttempt = new WalkAttempt(
+                activityId,
+                Left,
+                Top,
+                ActualWidth,
+                ActualHeight,
+                CurrentWorkArea());
+            Left = _walkAttempt.Left;
+            Top = _walkAttempt.Top;
+            _walkClock.Restart();
+            _walkTimer.Start();
+            _animationController?.Submit(new AnimationRequest(
+                _walkAttempt.Intent,
+                AnimationSource.State,
+                activityId,
+                AnimationPriority.Activity));
+        }
+        catch (Exception exception)
+        {
+            FailWalk(activityId, exception);
+        }
+    }
+
+    private void OnWalkTick(object? sender, EventArgs args)
+    {
+        if (_walkAttempt is null) return;
+        try
+        {
+            _walkAttempt.Advance(_walkClock.ElapsedMilliseconds);
+            Left = _walkAttempt.Left;
+            Top = _walkAttempt.Top;
+        }
+        catch (Exception exception)
+        {
+            FailWalk(_walkAttempt.ActivityId, exception);
+        }
+    }
+
+    private async void FailWalk(string activityId, Exception exception)
+    {
+        _walkTimer.Stop();
+        _walkClock.Stop();
+        _walkAttempt = null;
+        _activeActivityId = null;
+        _activityReceipt = new BodyActivityReceipt
+        {
+            ActivityId = activityId,
+            Status = "failed",
+            Reason = "window_fault",
+        };
+        SetConnectionState($"窗口移动失败：{exception.Message}", ConnectionState.Warning);
+        if (_stateLoop is not null) await _stateLoop.PollAsync();
     }
 
     private async void OnActivityFinished(object? sender, ActivityFinishedEventArgs args)
     {
         if (!string.Equals(args.ActivityId, _activeActivityId, StringComparison.Ordinal)) return;
+        BodyWalkMotion? motion = null;
+        if (_walkAttempt?.ActivityId == args.ActivityId)
+        {
+            _walkAttempt.Advance(_walkClock.ElapsedMilliseconds);
+            Left = _walkAttempt.Left;
+            Top = _walkAttempt.Top;
+            _walkTimer.Stop();
+            _walkClock.Stop();
+            if (_walkAttempt.Contains(Left, Top)) motion = _walkAttempt.Capture(Left, Top);
+            else
+            {
+                args = new ActivityFinishedEventArgs(args.ActivityId, "failed", "window_fault");
+            }
+            _walkAttempt = null;
+            SaveWindowPosition();
+        }
         _activityReceipt = new BodyActivityReceipt
         {
             ActivityId = args.ActivityId,
-            Status = args.Completed ? "completed" : "interrupted",
+            Status = args.Status,
+            Reason = args.Reason,
+            Motion = motion,
         };
         if (_stateLoop is not null) await _stateLoop.PollAsync();
+    }
+
+    private Rect CurrentWorkArea()
+    {
+        var handle = new WindowInteropHelper(this).Handle;
+        var pixels = System.Windows.Forms.Screen.FromHandle(handle).WorkingArea;
+        var transform = PresentationSource.FromVisual(this)?.CompositionTarget?.TransformFromDevice
+            ?? Matrix.Identity;
+        var topLeft = transform.Transform(new Point(pixels.Left, pixels.Top));
+        var bottomRight = transform.Transform(new Point(pixels.Right, pixels.Bottom));
+        return new Rect(topLeft, bottomRight);
     }
 
     private void SetMindConnectionState(BodyStepResponse response)
@@ -347,6 +451,9 @@ public partial class MainWindow : Window
             _animationController.ActivityFinished -= OnActivityFinished;
         }
         _stateLoop?.Dispose();
+        _walkTimer.Stop();
+        _walkTimer.Tick -= OnWalkTick;
+        _walkClock.Stop();
         _tray?.Dispose();
         _client?.Dispose();
         _animationController?.Dispose();

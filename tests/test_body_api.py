@@ -87,6 +87,31 @@ def _history(data_dir):  # noqa: ANN001, ANN202
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
 
 
+def _walk_motion(start_left: float = 100, end_left: float = 220) -> dict:
+    return {
+        "start_left": start_left,
+        "start_top": 80,
+        "end_left": end_left,
+        "end_top": 80,
+        "window_width": 200,
+        "window_height": 240,
+        "work_left": 0,
+        "work_top": 0,
+        "work_right": 800,
+        "work_bottom": 600,
+    }
+
+
+def _schedule_walk(client, data_dir):  # noqa: ANN001, ANN202
+    files = MindFiles(data_dir)
+    now = datetime.now(UTC).astimezone()
+    state, history, memories = files.load(now)
+    state["next_activity"] = "walk"
+    state["last_step_at"] = (now - timedelta(minutes=31)).isoformat()
+    files.commit(state, history, memories)
+    return client.post("/api/body/step", json={}).json()
+
+
 def test_expression_is_non_destructive_and_event_id_is_idempotent(api) -> None:
     client, provider, data_dir = api
     event = {"event_id": "chat-001", "type": "chat", "content": "今天终于忙完了。"}
@@ -494,12 +519,15 @@ def test_unanswered_caring_question_creates_zero_debt_or_second_ambient(api) -> 
     state["last_step_at"] = (now - timedelta(minutes=31)).isoformat()
     files.commit(state, history, memories)
     scheduled_later = client.post("/api/body/step", json={"presence": presence}).json()
+    assert scheduled_later["activity"]["type"] == "walk"
     later = client.post(
         "/api/body/step",
         json={
             "activity_receipt": {
                 "activity_id": scheduled_later["activity"]["id"],
                 "status": "completed",
+                "reason": "animation_finished",
+                "motion": _walk_motion(),
             },
             "presence": presence,
         },
@@ -512,7 +540,7 @@ def test_unanswered_caring_question_creates_zero_debt_or_second_ambient(api) -> 
     assert all(item["type"] != "user_experience" for item in recorded)
     assert "没回" not in json.dumps(recorded, ensure_ascii=False)
     assert "不理我" not in json.dumps(recorded, ensure_ascii=False)
-    assert provider.calls == 2
+    assert provider.calls == 1
 
 
 def test_presence_rejects_extra_body_authored_meaning(api) -> None:
@@ -614,3 +642,99 @@ def test_s14_read_ambient_chat_touch_full_vertical_trace(api) -> None:
         "state.json",
     ]
     assert final_state["pending_expression"] is None
+
+
+def test_completed_walk_records_only_verified_physical_life(api) -> None:
+    client, provider, data_dir = api
+    scheduled = _schedule_walk(client, data_dir)
+    activity = scheduled["activity"]
+    receipt = {
+        "activity_id": activity["id"],
+        "status": "completed",
+        "reason": "animation_finished",
+        "motion": _walk_motion(),
+    }
+
+    completed = client.post("/api/body/step", json={"activity_receipt": receipt}).json()
+    state = json.loads((data_dir / "state.json").read_text(encoding="utf-8"))
+    recorded = _history(data_dir)
+
+    assert activity["type"] == "walk"
+    assert completed["activity_confirmed"] is True
+    assert completed["activity"] is None
+    assert [item["type"] for item in recorded] == ["self_walk"]
+    assert recorded[0]["motion"] == _walk_motion()
+    assert state["next_activity"] == "read"
+    assert state["pending_expression"] is None
+    assert provider.calls == 0
+
+    duplicate = client.post("/api/body/step", json={"activity_receipt": receipt}).json()
+    assert duplicate["activity_confirmed"] is True
+    assert _history(data_dir) == recorded
+    assert provider.calls == 0
+
+
+@pytest.mark.parametrize(
+    ("status", "reason", "motion"),
+    [
+        ("interrupted", "touch", _walk_motion(end_left=140)),
+        ("failed", "animation_fault", None),
+    ],
+)
+def test_interrupted_or_failed_walk_closes_attempt_without_becoming_life(
+    api,
+    status,
+    reason,
+    motion,  # noqa: ANN001
+) -> None:
+    client, provider, data_dir = api
+    scheduled = _schedule_walk(client, data_dir)
+    memories_before = (data_dir / "memories.json").read_bytes()
+    receipt = {
+        "activity_id": scheduled["activity"]["id"],
+        "status": status,
+        "reason": reason,
+    }
+    if motion is not None:
+        receipt["motion"] = motion
+
+    response = client.post("/api/body/step", json={"activity_receipt": receipt}).json()
+    state = json.loads((data_dir / "state.json").read_text(encoding="utf-8"))
+
+    assert response["activity_confirmed"] is True
+    assert response["activity"] is None
+    assert state["pending_activity"] is None
+    assert _history(data_dir) == []
+    assert (data_dir / "memories.json").read_bytes() == memories_before
+    assert provider.calls == 0
+
+
+@pytest.mark.parametrize(
+    "motion",
+    [
+        _walk_motion(end_left=700),
+        _walk_motion(end_left=100),
+        {**_walk_motion(), "meaning": "因为用户没回所以走远一点"},
+    ],
+)
+def test_walk_receipt_rejects_out_of_bounds_zero_or_authored_meaning(api, motion) -> None:  # noqa: ANN001
+    client, provider, data_dir = api
+    scheduled = _schedule_walk(client, data_dir)
+
+    response = client.post(
+        "/api/body/step",
+        json={
+            "activity_receipt": {
+                "activity_id": scheduled["activity"]["id"],
+                "status": "completed",
+                "reason": "animation_finished",
+                "motion": motion,
+            }
+        },
+    )
+    state = json.loads((data_dir / "state.json").read_text(encoding="utf-8"))
+
+    assert response.status_code == 422
+    assert state["pending_activity"]["id"] == scheduled["activity"]["id"]
+    assert _history(data_dir) == []
+    assert provider.calls == 0

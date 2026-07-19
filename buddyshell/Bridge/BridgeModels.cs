@@ -57,6 +57,37 @@ public sealed class BodyActivityReceipt
 
     [JsonPropertyName("status")]
     public string Status { get; set; } = "completed";
+    [JsonPropertyName("reason")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Reason { get; set; }
+
+    [JsonPropertyName("motion")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public BodyWalkMotion? Motion { get; set; }
+}
+
+public sealed class BodyWalkMotion
+{
+    [JsonPropertyName("start_left")]
+    public double StartLeft { get; set; }
+    [JsonPropertyName("start_top")]
+    public double StartTop { get; set; }
+    [JsonPropertyName("end_left")]
+    public double EndLeft { get; set; }
+    [JsonPropertyName("end_top")]
+    public double EndTop { get; set; }
+    [JsonPropertyName("window_width")]
+    public double WindowWidth { get; set; }
+    [JsonPropertyName("window_height")]
+    public double WindowHeight { get; set; }
+    [JsonPropertyName("work_left")]
+    public double WorkLeft { get; set; }
+    [JsonPropertyName("work_top")]
+    public double WorkTop { get; set; }
+    [JsonPropertyName("work_right")]
+    public double WorkRight { get; set; }
+    [JsonPropertyName("work_bottom")]
+    public double WorkBottom { get; set; }
 }
 
 public sealed class BodyActivity

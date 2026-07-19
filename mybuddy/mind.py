@@ -90,11 +90,53 @@ class PendingActivity(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     id: str
+
+
+class PendingReadActivity(PendingActivity):
     type: Literal["read"] = "read"
     source: str
     title: str
     passage_index: int
     text: str
+
+
+class PendingWalkActivity(PendingActivity):
+    type: Literal["walk"] = "walk"
+
+
+class WalkEvidence(BaseModel):
+    """身体实际位移的封闭证据；边界表示窗口左上角可到达的工作区。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    start_left: float
+    start_top: float
+    end_left: float
+    end_top: float
+    window_width: float = Field(gt=0)
+    window_height: float = Field(gt=0)
+    work_left: float
+    work_top: float
+    work_right: float
+    work_bottom: float
+
+    @model_validator(mode="after")
+    def positions_stay_inside_work_area(self) -> WalkEvidence:
+        max_left = self.work_right - self.window_width
+        max_top = self.work_bottom - self.window_height
+        if max_left < self.work_left or max_top < self.work_top:
+            raise ValueError("窗口尺寸大于工作区")
+        epsilon = 0.5
+        for label, left, top in (
+            ("start", self.start_left, self.start_top),
+            ("end", self.end_left, self.end_top),
+        ):
+            if not (
+                self.work_left - epsilon <= left <= max_left + epsilon
+                and self.work_top - epsilon <= top <= max_top + epsilon
+            ):
+                raise ValueError(f"{label} position is outside the work area")
+        return self
 
 
 class PendingExpression(BaseModel):
@@ -200,10 +242,11 @@ def validate_no_fabrication(
                 )
         if writes_claim and operation.kind == "self_experience":
             if not any(
-                evidence_types.get(item) in {"self_reading", "body_touch"} for item in supplied
+                evidence_types.get(item) in {"self_reading", "self_walk", "body_touch"}
+                for item in supplied
             ):
                 reasons.append(
-                    f"不编造：memory_operations[{index}] 的自身经历没有真实阅读或身体触碰证据"
+                    f"不编造：memory_operations[{index}] 的自身经历没有真实阅读、行走或身体触碰证据"
                 )
         if writes_claim and operation.kind == "pattern":
             examples = {
@@ -401,6 +444,7 @@ class MindFiles:
                         "total_passages": len(reading["passages"]),
                         "finished": False,
                     },
+                    "next_activity": "read",
                     "pending_activity": None,
                     "pending_expression": None,
                 }
@@ -432,6 +476,7 @@ class MindFiles:
         )
         if source_changed:
             progress = {"next_passage": 0}
+            state["next_activity"] = "read"
             state["pending_activity"] = None
         next_passage = min(max(int(progress.get("next_passage", 0)), 0), len(reading["passages"]))
         state["reading"] = {
@@ -441,6 +486,8 @@ class MindFiles:
             "total_passages": len(reading["passages"]),
             "finished": next_passage >= len(reading["passages"]),
         }
+        if state.get("next_activity") not in {"read", "walk"}:
+            state["next_activity"] = "read"
         state.setdefault("pending_activity", None)
         if state != original_state:
             _replace_texts({self.state_path: _json_text(state)})
@@ -921,10 +968,10 @@ async def mind_step(
 
 
 def advance_time(*, files: MindFiles, now: datetime | None = None) -> TimeStepResult:
-    """到点只发出一次具体 read 活动；没有身体完成收据就没有阅读经历。"""
+    """到点发出一个 read 或 walk；没有身体收据就没有她的生活事实。"""
     current_time = (now or datetime.now(UTC)).astimezone()
     state, history, memories = files.load(current_time)
-    if state.get("pending_activity") is not None or state["reading"]["finished"]:
+    if state.get("pending_activity") is not None:
         return TimeStepResult(status="not_due")
     try:
         last_step = datetime.fromisoformat(str(state["last_step_at"]))
@@ -936,21 +983,25 @@ def advance_time(*, files: MindFiles, now: datetime | None = None) -> TimeStepRe
     if elapsed < LIFE_STEP_INTERVAL:
         return TimeStepResult(status="not_due")
 
-    source = _reading_source(files.reading_path)
-    passage_index = int(state["reading"]["next_passage"])
-    state["pending_activity"] = PendingActivity(
-        id=f"activity_{uuid.uuid4().hex}",
-        source=source["source"],
-        title=source["title"],
-        passage_index=passage_index,
-        text=source["passages"][passage_index],
-    ).model_dump()
+    next_activity = state.get("next_activity")
+    if next_activity == "read" and not state["reading"]["finished"]:
+        source = _reading_source(files.reading_path)
+        passage_index = int(state["reading"]["next_passage"])
+        state["pending_activity"] = PendingReadActivity(
+            id=f"read_{uuid.uuid4().hex}",
+            source=source["source"],
+            title=source["title"],
+            passage_index=passage_index,
+            text=source["passages"][passage_index],
+        ).model_dump()
+    else:
+        state["pending_activity"] = PendingWalkActivity(id=f"walk_{uuid.uuid4().hex}").model_dump()
     files.commit(state, history, memories)
     return TimeStepResult(status="scheduled")
 
 
-def interrupt_reading(activity_id: str, *, files: MindFiles, now: datetime) -> bool:
-    """中断只关闭这次物理尝试；不写经历、感受、记忆或用户债务。"""
+def discard_activity(activity_id: str, *, files: MindFiles, now: datetime) -> bool:
+    """中断或技术故障只关闭物理尝试，不写人生、记忆或用户债务。"""
     state, history, memories = files.load(now)
     recent = [item for item in state.get("recent_activity_ids", []) if isinstance(item, str)]
     if activity_id in recent:
@@ -978,7 +1029,7 @@ async def complete_reading(
     pending_value = state.get("pending_activity")
     if not isinstance(pending_value, dict) or pending_value.get("id") != activity_id:
         return ReceiptResult(committed=False, attempts=0, rejection_reasons=["阅读活动不存在"])
-    activity = PendingActivity.model_validate(pending_value)
+    activity = PendingReadActivity.model_validate(pending_value)
     experience = {
         "id": activity.id,
         "type": "self_reading",
@@ -1037,11 +1088,44 @@ async def complete_reading(
     total = int(new_state["reading"]["total_passages"])
     new_state["reading"]["next_passage"] = next_passage
     new_state["reading"]["finished"] = next_passage >= total
+    new_state["next_activity"] = "walk"
     new_state["pending_activity"] = None
     recent = [item for item in new_state.get("recent_activity_ids", []) if isinstance(item, str)]
     new_state["recent_activity_ids"] = [*recent, activity.id][-RECENT_EVENT_LIMIT:]
     files.commit(new_state, new_history, new_memories)
     return ReceiptResult(committed=True, pending_expression=pending, attempts=attempts)
+
+
+def complete_walk(
+    activity_id: str,
+    evidence: WalkEvidence,
+    *,
+    files: MindFiles,
+    now: datetime,
+) -> bool:
+    """只有身体证明窗口确实在工作区内走动，才追加一条自己的生活事实。"""
+    state, history, memories = files.load(now)
+    recent = [item for item in state.get("recent_activity_ids", []) if isinstance(item, str)]
+    if activity_id in recent:
+        return True
+    pending = state.get("pending_activity")
+    if not isinstance(pending, dict) or pending.get("id") != activity_id:
+        return False
+    activity = PendingWalkActivity.model_validate(pending)
+    history.append(
+        {
+            "id": activity.id,
+            "type": "self_walk",
+            "motion": evidence.model_dump(),
+            "occurred_at": now.isoformat(),
+        }
+    )
+    state["next_activity"] = "read"
+    state["pending_activity"] = None
+    state["last_step_at"] = now.isoformat()
+    state["recent_activity_ids"] = [*recent, activity.id][-RECENT_EVENT_LIMIT:]
+    files.commit(state, history, memories)
+    return True
 
 
 async def _run_cli(args: argparse.Namespace) -> None:

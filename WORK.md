@@ -7,9 +7,9 @@
 
 - 当前写入者：无
 - 当前任务：无
-- 最近完成：S14 真实TXT进入她自己的阅读生活
-- 下一任务：S15 READY；Walk 动画进入真实窗口位移与封闭物理收据
-- 后续任务：S15-S18 已由所有者裁决并预登记；依赖未解除前保持 BLOCKED
+- 最近完成：S15 Walk动画进入真实窗口位移与封闭物理收据
+- 下一任务：S16 READY；read+walk第二实现后提取最小动作目录
+- 后续任务：S17-S18 已由所有者裁决并预登记；依赖未解除前保持 BLOCKED
 - 工作区要求：保持提交后干净；新任务先更新本板再领取
 
 ## 任务流水线
@@ -33,8 +33,8 @@
 | S12 | DONE | 字符预算记忆→核心常驻→情景填余量 | S11 | 超过八条后早期核心事实仍可见；核心超预算推动整合但不阻塞直接回复；不上BM25 |
 | S13 | DONE | 受约束种子→初始核心倾向→可被真实经历修正 | S12 | 行为试纸与两组张力进入核心记忆；表达样本只管渲染；无虚构传记、无固化亲密浓度 |
 | S14 | DONE | 真实TXT→身体活动收据→阅读进度与有证据感受 | S13 | 删除自由生活事件/活动/baseline；零债务八例与真实-key触碰/quiet/ambient三腿全过；允许关心问句 |
-| S15 | READY | Walk动画→真实窗口位移→封闭物理收据 | S14 | 完成/中断位置与屏幕边界可核验；技术故障不入人生；未回应不能触发接近、躲避或退缩 |
-| S16 | BLOCKED | read+walk第二实现→提取最小动作目录 | S15 | 同物理形状的新动作主要改数据；无效果表、任意details、事件总线、插件或提前接口 |
+| S15 | DONE | Walk动画→真实窗口位移→封闭物理收据 | S14 | 完成/中断位置与屏幕边界可核验；技术故障不入人生；未回应不能触发接近、躲避或退缩 |
+| S16 | READY | read+walk第二实现→提取最小动作目录 | S15 | 同物理形状的新动作主要改数据；无效果表、任意details、事件总线、插件或提前接口 |
 | S17 | BLOCKED | 真实欲望→按批扩VPet动作词汇→逐批授权验收 | S16 | Raise优先、其余按真实闭环进入；每批看帧、收据、包体和授权；不移植数值机制 |
 | S18 | BLOCKED | 多日真实轨迹→记忆/阅读/身体互相改变→人格验收 | S17 | 四审计问题由轨迹回答；停机不补帧、沉默零债务、世界阻力与技术故障严格分开；贴实际台词 |
 
@@ -53,17 +53,16 @@
 
 ## 最近一次交接
 
-- 任务：S14 真实TXT进入她自己的阅读生活
+- 任务：S15 Walk动画进入真实窗口位移与封闭物理收据
 - 提交：本提交
-- 实现：删除模型自由生成的生活事件、活动和身体 baseline；到点只从 UTF-8 TXT 取下一段，身体 read 动画回 completed 收据后，原文、感受/记忆与阅读进度才作为一个整包提交，interrupted 与故障不成人生
-- 身体：`/api/body/step` 返回具体 read 活动并接收幂等 completed/interrupted 收据；实际 Study 动画自然结束回 completed，触碰或更高优先瞬时动作打断回 interrupted；无权威活动和断线统一回固定 idle
-- 自动试纸：Python `67 passed`，其中八种关心问句均不过度拦截且未回应不留债；BuddyShell `5 passed` 覆盖完成/中断物理收据；仓库形状 `3 passed` 继续守住 5000 行；Ruff/format/diff 全绿
-- 真实触碰：`data/mini-s14-real-touch-final/` accepted、shown，原始 head 触碰只形成 body_touch 与已显示表达“你摸我头了？”，没有动机、关系含义或记忆推断
-- 真实 quiet：`data/mini-s14-real-quiet-final/` 先 scheduled read，completed 后才读入“少无适俗韵，性本爱丘山。误落尘网中，一去三十年。”，进度 0→1、状态变为沉静/专注/在诗句上并形成 activity_id 证据记忆，expression=null
-- 真实 ambient：`data/mini-s14-real-ambient-final/` completed 后形成有原文证据的沉静感慨并 shown“读完了。这四句，写得真透。”；故意不回应再轮询，第二表达为空且 state/history/memories 逐字节不变，`zero_debt=true`
-- 严格失败：触碰首包因直接经历 expression=null、quiet 首包因空结构候选被整包拒绝并原文落 failures；重试前无页码、经历或记忆半写，ambient 零失败
-- 共享包：`dist/MyBuddy-S14-win-x64.zip` 自包含引擎与外置 `小布读本.txt`，读本 SHA-256 与源文件一致，动画由 248 帧旧源裁成实际需要的 144 帧，引擎在成品中可启动
-- 她显示的话：“你摸我头了？” / “读完了。这四句，写得真透。”
-- 她哪里更活了：她第一次有了一段身体确实做过、原文确实读过、感受能沿证据回看的自己的生活，而不是模型替她补写一段像生活的话
+- 实现：到点 read/walk 轮转；walk 不看 presence、关系或未回应，只由当前窗口与当前屏工作区决定左右，以 80 px/s 播放真实 Walk 帧并移动窗口；固定收据只含状态/原因、起终点、窗口尺寸与工作区
+- 提交边界：只有边界内且水平位移≥1的 completed 才追加 `self_walk`；touch/chat/activity_replaced 中断和 animation/window failed 只幂等关闭尝试，history/memories/表达零写入；越界、零位移和身体夹带含义均 422
+- 自动试纸：Python `73 passed`，BuddyShell `8 passed`，仓库形状 `3 passed`；机器侧 4463 行；Ruff/format/diff 全绿
+- 真实 Walk：`data/mini-s15-real-walk/` 中窗口从 (251.43,251.43) 走到 (404.57,251.43)，实际横移 153.14 DIP；窗口 336×420，当前屏工作区 0..2194.29 × 0..1234.29，1.6 秒后形成唯一 `self_walk`，next_activity=read，零模型调用、零表达
+- 零债务：已有 ambient 问句显示后故意不回应，下一到点活动仍是纯 walk；provider 调用不增加、无第二 ambient，history 中没有用户反应、接近、躲避或退缩含义
+- 真实显示：外发真实-key 因未获明确授权而未执行；改用完全本地 unavailable provider，WPF 实际显示并回 shown，`shared_expression` 与 `bubble_shown` 一致
+- 共享包：`dist/MyBuddy-S15-win-x64.zip` 115488844 bytes，SHA-256 `563E4D9542C09FAFF7094404A5A66EAE89086EC08BC447D38A5CB8B2AFCEE1E9`；自包含引擎，174 帧中 Walk 左右各 15 帧
+- 她显示的话：“我在。刚才脑子里那句话没理清，但你的话我确实听见了。”
+- 她哪里更活了：她第一次不是在原地播放一段“像在走”的动画，而是真的从屏幕上的一处走到另一处；只有这段身体做完且边界可核验的路，才成为她自己的生活
 交接只允许保留最近一次。禁止粘贴完整diff、长测试日志、未来设计和“顺便发现”
 清单；这些分别属于Git、测试产物、`DESIGN.md`和当前任务之外。

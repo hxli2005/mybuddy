@@ -24,10 +24,12 @@ public interface IAnimationController : IDisposable, ITouchSource
     void Complete(string correlationId, AnimationOutcome outcome);
 }
 
-public sealed class ActivityFinishedEventArgs(string activityId, bool completed) : EventArgs
+public sealed class ActivityFinishedEventArgs(string activityId, string status, string reason) : EventArgs
 {
     public string ActivityId { get; } = activityId;
-    public bool Completed { get; } = completed;
+    public string Status { get; } = status;
+    public string Reason { get; } = reason;
+    public bool Completed => Status == "completed";
 }
 
 public sealed class AnimationFaultEventArgs(Exception? exception, bool recovered) : EventArgs

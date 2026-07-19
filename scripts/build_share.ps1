@@ -44,6 +44,8 @@ Copy-Item -LiteralPath (Join-Path $engineDist "MyBuddyEngine") -Destination (Joi
 $assetFolders = @(
     "Default/Nomal/1",
     "WORK/Study/A_Nomal", "WORK/Study/B_1_Nomal", "WORK/Study/C_Nomal",
+    "MOVE/walk.left/A_Nomal", "MOVE/walk.left/B_Nomal", "MOVE/walk.left/C_Nomal",
+    "MOVE/walk.right/A_Nomal", "MOVE/walk.right/B_Nomal", "MOVE/walk.right/C_Nomal",
     "Think/Nomal/A", "Think/Nomal/B", "Think/Nomal/C",
     "Touch_Head/A_Nomal", "Touch_Head/B_Nomal", "Touch_Head/C_Nomal",
     "Touch_Body/A_Happy/tb1", "Touch_Body/B_Happy/tb1", "Touch_Body/C_Happy/tb1",
@@ -59,7 +61,7 @@ foreach ($relative in $assetFolders) {
     Copy-Item -LiteralPath $source -Destination $destination -Recurse
 }
 $pngCount = @(Get-ChildItem -LiteralPath $assetRoot -Recurse -File -Filter *.png).Count
-if ($pngCount -ne 144) { throw "内置动画应为 144 帧，实际为 $pngCount。" }
+if ($pngCount -ne 174) { throw "内置动画应为 174 帧，实际为 $pngCount。" }
 
 Copy-Item -LiteralPath (Join-Path $projectRoot "distribution\config.default.yaml") -Destination $stage
 Copy-Item -LiteralPath (Join-Path $projectRoot "mybuddy\reading.txt") -Destination (Join-Path $stage "小布读本.txt")
@@ -74,7 +76,7 @@ $leaks = Get-ChildItem -LiteralPath $stage -Recurse -File | Where-Object {
 } | Select-String -Pattern "sk-or-v1-|sk-ant-|api_key:\s+(?!\$\{MYBUDDY_API_KEY\})\S+"
 if ($leaks) { throw "分发目录疑似含有真实 key：$($leaks.Path -join ', ')" }
 
-$archive = Join-Path $outputRoot "MyBuddy-S14-win-x64.zip"
+$archive = Join-Path $outputRoot "MyBuddy-S15-win-x64.zip"
 if (Test-Path -LiteralPath $archive) { Remove-Item -LiteralPath $archive -Force }
 Compress-Archive -LiteralPath $stage -DestinationPath $archive -CompressionLevel Optimal
 Write-Host "SHARE_BUILD_OK archive=$archive png=$pngCount"

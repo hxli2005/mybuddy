@@ -15,11 +15,12 @@ from mybuddy.mind import (
     READING_PATH,
     RECENT_EVENT_LIMIT,
     MindFiles,
-    PendingActivity,
     PendingExpression,
+    WalkEvidence,
     advance_time,
     complete_reading,
-    interrupt_reading,
+    complete_walk,
+    discard_activity,
     mind_step,
 )
 
@@ -59,14 +60,42 @@ class BodyActivityReceipt(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     activity_id: str = Field(min_length=1, max_length=160)
-    status: Literal["completed", "interrupted"]
+    status: Literal["completed", "interrupted", "failed"]
+    reason: (
+        Literal[
+            "animation_finished",
+            "touch",
+            "chat",
+            "activity_replaced",
+            "animation_fault",
+            "window_fault",
+        ]
+        | None
+    ) = None
+    motion: WalkEvidence | None = None
+
+    @model_validator(mode="after")
+    def completed_motion_must_be_a_horizontal_walk(self) -> BodyActivityReceipt:
+        allowed_reasons = {
+            "completed": {None, "animation_finished"},
+            "interrupted": {"touch", "chat", "activity_replaced"},
+            "failed": {"animation_fault", "window_fault"},
+        }
+        if self.reason not in allowed_reasons[self.status]:
+            raise ValueError(f"{self.status} receipt has incompatible reason")
+        if self.status == "completed" and self.motion is not None:
+            horizontal = abs(self.motion.end_left - self.motion.start_left)
+            vertical = abs(self.motion.end_top - self.motion.start_top)
+            if horizontal < 1 or vertical > 0.5:
+                raise ValueError("completed walk must move horizontally inside one work area")
+        return self
 
 
 class BodyActivity(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     id: str
-    type: Literal["read"]
+    type: Literal["read", "walk"]
 
 
 class BodyStepRequest(BaseModel):
@@ -116,10 +145,14 @@ class BodyBridge:
             pending = state.get("pending_expression")
             pending_activity = state.get("pending_activity")
             activity = (
-                PendingActivity.model_validate(pending_activity) if pending_activity else None
+                BodyActivity.model_validate(
+                    {"id": pending_activity["id"], "type": pending_activity["type"]}
+                )
+                if isinstance(pending_activity, dict)
+                else None
             )
             return BodyStepResponse(
-                activity=BodyActivity(id=activity.id, type=activity.type) if activity else None,
+                activity=activity,
                 expression=PendingExpression.model_validate(pending) if pending else None,
                 shown_confirmed=shown_confirmed,
                 activity_confirmed=activity_confirmed,
@@ -162,9 +195,25 @@ class BodyBridge:
         recent = [item for item in state.get("recent_activity_ids", []) if isinstance(item, str)]
         if receipt.activity_id in recent:
             return True, "not_run"
-        if receipt.status == "interrupted":
-            confirmed = interrupt_reading(receipt.activity_id, files=self.files, now=now)
+        pending = state.get("pending_activity")
+        if not isinstance(pending, dict) or pending.get("id") != receipt.activity_id:
+            return False, "not_run"
+        activity_type = pending.get("type")
+        if receipt.status != "completed":
+            confirmed = discard_activity(receipt.activity_id, files=self.files, now=now)
             return confirmed, "not_run"
+        if activity_type == "walk":
+            if receipt.motion is None:
+                return False, "rejected"
+            confirmed = complete_walk(
+                receipt.activity_id,
+                receipt.motion,
+                files=self.files,
+                now=now,
+            )
+            return confirmed, "not_run" if confirmed else "rejected"
+        if activity_type != "read" or receipt.motion is not None:
+            return False, "rejected"
         result = await complete_reading(
             receipt.activity_id,
             provider=self.provider,
