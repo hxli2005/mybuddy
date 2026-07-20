@@ -12,8 +12,8 @@ from pydantic import BaseModel, Field
 
 
 class LLMConfig(BaseModel):
-    provider: Literal["anthropic", "openai", "openrouter", "deepseek"] = "anthropic"
-    model: str = "claude-sonnet-4-5"
+    provider: Literal["openrouter", "deepseek"] = "openrouter"
+    model: str = "deepseek/deepseek-v3.2"
     api_key: str = ""
     base_url: str | None = None
     max_tokens: int = 4096

@@ -1,7 +1,6 @@
-"""OpenAI-compatible Provider。
+"""DeepSeek 与 OpenRouter 共用的 Chat Completions Provider。
 
-用于 OpenAI、OpenRouter、DeepSeek 等兼容 Chat Completions API 的服务。
-OpenRouter 只需要把 base_url 设为 https://openrouter.ai/api/v1。
+两者都使用 OpenAI SDK 的兼容接口，只由固定 base URL 区分。
 """
 
 from __future__ import annotations
@@ -74,6 +73,10 @@ class OpenAICompatibleProvider(BaseLLMProvider):
                 )
                 await asyncio.sleep(delay)
         raise RuntimeError("openai-compatible request failed") from last_error
+
+
+def make_provider(cfg: LLMConfig) -> BaseLLMProvider:
+    return OpenAICompatibleProvider(cfg)
 
 
 def _base_url_for(cfg: LLMConfig) -> str | None:

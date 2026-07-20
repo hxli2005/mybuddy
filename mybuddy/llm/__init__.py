@@ -8,12 +8,10 @@ from .base import (
     ToolCall,
     ToolSpec,
 )
-from .claude import ClaudeProvider, make_provider
-from .openai_compatible import OpenAICompatibleProvider
+from .openai_compatible import OpenAICompatibleProvider, make_provider
 
 __all__ = [
     "BaseLLMProvider",
-    "ClaudeProvider",
     "LLMResponse",
     "Message",
     "Role",

@@ -3,8 +3,9 @@ from __future__ import annotations
 import pytest
 
 from mybuddy.config import LLMConfig
-from mybuddy.llm import Message, Role, ToolCall
+from mybuddy.llm import Message, Role, ToolCall, make_provider
 from mybuddy.llm.openai_compatible import (
+    DEEPSEEK_BASE_URL,
     OPENROUTER_BASE_URL,
     OpenAICompatibleProvider,
     _base_url_for,
@@ -17,6 +18,13 @@ def test_openrouter_default_base_url() -> None:
     cfg = LLMConfig(provider="openrouter", api_key="x")
 
     assert _base_url_for(cfg) == OPENROUTER_BASE_URL
+
+
+def test_deepseek_default_base_url_and_provider_factory() -> None:
+    cfg = LLMConfig(provider="deepseek", model="deepseek-chat", api_key="x")
+
+    assert _base_url_for(cfg) == DEEPSEEK_BASE_URL
+    assert isinstance(make_provider(cfg), OpenAICompatibleProvider)
 
 
 def test_openai_message_serialization_with_tools() -> None:

@@ -7,7 +7,7 @@
 
 - 当前写入者：无
 - 当前任务：无
-- 最近完成：S18.4 持续阅读
+- 最近完成：S18.5 收缩模型供应商
 - 下一任务：S18 BLOCKED；等待所有者以最终身体形态开始真实多日基线
 - 后续任务：无
 - 工作区要求：保持提交后干净；新任务先更新本板再领取
@@ -41,7 +41,8 @@
 | S18.2 | DONE | 拖到屏幕边缘→静默栖息→靠近探头→主动展开 | S18.1 | 左右栖边/重启恢复/全屏缩回；不弹ambient、不挡桌面、不写四文件；真实窗口留证 |
 | S18.3 | DONE | 直接心智包选动作→同响应身体呈现→收据入史 | S18.2 | 宣称开始/继续 read/walk 必须显式选择且立即呈现；技术失败仍不入人生 |
 | S18.4 | DONE | read进入→Study B持续循环→到时C退出/打断收据 | S18.3 | 正文时长内不回idle；正常结束才推进段落，提前打断不冒充读完 |
-| S18 | BLOCKED | 多日真实轨迹→记忆/阅读/身体互相改变→人格验收 | S18.4 | 四审计问题由轨迹回答；停机不补帧、沉默零债务、世界阻力与技术故障严格分开；贴实际台词 |
+| S18.5 | DONE | 删除 Claude→只保留 DeepSeek/OpenRouter→发布配置可运行 | S18.4 | 无 Anthropic 依赖或残留；两种 provider 选择与回归通过；机器侧留出余量 |
+| S18 | BLOCKED | 多日真实轨迹→记忆/阅读/身体互相改变→人格验收 | S18.5 | 四审计问题由轨迹回答；停机不补帧、沉默零债务、世界阻力与技术故障严格分开；贴实际台词 |
 
 已裁决的后续任务可以 BLOCKED 预登记；解除依赖时只把紧邻下一项改为 READY，
 不得并行激活。只读评审不占ACTIVE名额，
@@ -58,17 +59,15 @@
 
 ## 最近一次交接
 
-- 任务：S18.4 持续阅读
+- 任务：S18.5 收缩模型供应商
 - 提交：本提交
-- 真实断点：10:04:28 实际显示“好，继续读第二段。”并进入 Study；约一秒后回 idle，10:04:33 已发 completed、推进 reading_next=2。根因是 stationary read 的 Body 被建成非循环相位，一轮 A→B→C 就算读完。
-- 闭环：PendingReadActivity 增加封闭 duration_ms；由真实正文按 max(15秒, 字符数×250ms) 计算。身体桥只转发该物理字段；旧 pending 缺字段时安全采用15秒。
-- 动画：stationary 动作固定 A进入、B循环；正文时长到达才走C并发 completed。触碰/聊天/提起提前替换仍发 interrupted，桥只关闭尝试，不推进段落、不写阅读人生。walk仍是有限位移动作。
-- 删机器：AnimationPriority 从未参与控制器决策，AnimationOutcome 的 IsError/Reason 从未读取；本刀同步删除，持续阅读进入后机器侧为4999行。
-- 真实运行：新版心智 PID 30384、BuddyShell PID 34084 已连8001。三次真实请求的候选因字段格式、预写读后感或“说读却未选read”被拒，身体实际显示静态接住且没有强塞验收动作；持续时长由身体状态机12项运行测试钉住。
-- 回归：Python 84 passed，BuddyShell 12 passed，Ruff/dotnet format/diff 全绿，Release零警告；read测试在30ms仍为 Body(loop)，100ms到时后才退出并收据。
-- 产物：dist/MyBuddy-win-x64.zip，125.8 MiB、294帧，授权文件仍在。
-- 她哪里更活了：读书从一秒钟的姿势闪现变成有进入、有持续、有结束的活动；被打断也不会冒充已经读完。
-- 下一步：S18仍BLOCKED，等待所有者用最终身体做真实多日基线；四审计问题必须由轨迹回答，不能由本交接代答。
+- 删除：移除 Claude/Anthropic 实现、依赖、锁文件条目和专属测试；配置只接受 deepseek/openrouter，共用一套 Chat Completions provider。
+- 配置：源码默认 OpenRouter deepseek/deepseek-v3.2；开发示例用 DeepSeek deepseek-chat，分发默认仍为 OpenRouter。
+- 真实运行：OpenRouter 真实-key 四腿验收通过，实际显示“嗯，回来了。我刚才在看陶渊明的《归园田居》，读到"少无适俗韵，性本爱丘山"那里。”“碰到我了。刚才脑子没转过来，但这一下我感觉到了。”“诶？怎么突然把我提起来了……又放下了。”“羁鸟恋旧林，池鱼思故渊……这比喻真贴切。刚才忙完了？”
+- 轨迹：user_experience/shared_expression/body_touch/body_raise/self_reading/self_walk 全部出现；3 条失败候选保留原文与拒因，证据在 data/provider-prune-acceptance。
+- 回归：Python 82 passed，Ruff/diff 全绿；Claude/Anthropic 源码、测试、依赖及配置残留为0；机器侧从4999降至4812行，释放187行。
+- 她哪里更活了：这刀没有虚增人格功能；她仍能在更小、更清楚的模型连接面上完整聊天、感到触碰、经历提起、读书和行走。
+- 下一步：S18仍BLOCKED，等待所有者用最终身体做真实多日基线；四审计问题必须由轨迹回答。
 
 交接只允许保留最近一次。禁止粘贴完整diff、长测试日志、未来设计和“顺便发现”
 清单；这些分别属于Git、测试产物、DESIGN.md和当前任务之外。
