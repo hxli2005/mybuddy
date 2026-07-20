@@ -381,14 +381,23 @@ def _claim_texts(
         yield "expression", bundle.expression, None
 
 
-def validate_activity_truth(bundle: CandidateBundle, active_activity: str | None) -> list[str]:
-    if active_activity == "read":
-        return []
-    premature_read = re.search(
-        r"正[^，。！？\n]{0,8}(?:读|翻)|正看到[「“\"]|刚(?:读|翻)到|还没读完|我念给你听",
-        bundle.expression or "",
+def validate_activity_truth(
+    bundle: CandidateBundle,
+    active_activity: str | None,
+    evidence_types: dict[str, str],
+) -> list[str]:
+    expression = bundle.expression or ""
+    reasons: list[str] = []
+    ongoing_read = re.search(
+        r"正[^，。！？\n]{0,8}(?:读|翻)|正看到[「“\"]|还没读完|我念给你听",
+        expression,
     )
-    return ["不编造：没有正在进行的 read，却声称已经在读"] if premature_read else []
+    if ongoing_read and active_activity != "read":
+        reasons.append("不编造：没有正在进行的 read，却声称已经在读")
+    completed_read = re.search(r"刚(?:读|翻)到", expression)
+    if completed_read and "self_reading" not in evidence_types.values():
+        reasons.append("不编造：没有真实 self_reading 证据，却声称刚读到")
+    return reasons
 
 
 def validate_no_total_score(bundle: CandidateBundle) -> list[str]:
@@ -999,7 +1008,7 @@ async def _generate_candidate(
                 user_confirmation_ids=user_confirmation_ids,
                 current_experience_type=current_experience_type,
             )
-            reasons.extend(validate_activity_truth(bundle, active_activity))
+            reasons.extend(validate_activity_truth(bundle, active_activity, evidence_types))
             if bundle.action_choice is not None and bundle.action_choice not in allowed_actions:
                 reasons.append(f"动作不可用：{bundle.action_choice}")
             if not quiet_time and not ambient_time and not bundle.expression:

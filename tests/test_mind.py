@@ -15,6 +15,7 @@ from mybuddy.mind import (
     advance_time,
     complete_reading,
     mind_step,
+    validate_activity_truth,
     validate_no_solicitation,
 )
 from scripts.accept_real_key import DEFAULT_TEXT, encode_payload
@@ -199,6 +200,45 @@ async def test_premature_read_claim_retries_before_it_becomes_history(tmp_path) 
         "没有正在进行的 read，却声称已经在读" in reason
         for reason in failures[0]["reasons"]
     )
+
+
+@pytest.mark.asyncio
+async def test_completed_read_claim_still_requires_reading_evidence(tmp_path) -> None:
+    files = MindFiles(tmp_path)
+    bad = _valid_bundle("刚读到陶渊明写归园田居。")
+    good = _valid_bundle("我没有读过，不能拿没发生的事回答你。")
+    provider = StubProvider([bad, good])
+
+    result = await mind_step(
+        "你刚刚读了什么书？",
+        provider=provider,
+        files=files,
+        now=datetime(2026, 7, 20, 10, 0, tzinfo=UTC),
+    )
+
+    state, _, _, failures = _read(files)
+    assert result.committed is True
+    assert result.attempts == 2
+    assert state["pending_expression"]["text"] == good["expression"]
+    assert any(
+        "没有真实 self_reading 证据，却声称刚读到" in reason for reason in failures[0]["reasons"]
+    )
+
+
+def test_completed_reading_evidence_does_not_prove_current_activity() -> None:
+    bundle = CandidateBundle.model_validate(_valid_bundle("我正好在翻陶渊明。"))
+
+    reasons = validate_activity_truth(bundle, None, {"read_1": "self_reading"})
+
+    assert "不编造：没有正在进行的 read，却声称已经在读" in reasons
+
+
+def test_active_read_does_not_prove_a_completed_reading() -> None:
+    bundle = CandidateBundle.model_validate(_valid_bundle("刚读到陶渊明写归园田居。"))
+
+    reasons = validate_activity_truth(bundle, "read", {})
+
+    assert "不编造：没有真实 self_reading 证据，却声称刚读到" in reasons
 
 
 @pytest.mark.asyncio
@@ -1104,6 +1144,49 @@ async def test_real_txt_progress_waits_for_completed_body_receipt(tmp_path) -> N
     second = advance_time(files=files, now=start + timedelta(minutes=33))
     assert second.status == "not_due"
     assert len(provider.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_completed_reading_can_answer_what_was_just_read(tmp_path) -> None:
+    files = MindFiles(tmp_path)
+    start = datetime(2026, 7, 20, 20, 44, tzinfo=UTC)
+    files.load(start)
+    answer = {
+        "action_choice": None,
+        "state_changes": {"mood": "安静", "energy": "平稳", "attention": "诗句里"},
+        "memory_operations": [],
+        "expression": "刚读到陶渊明《归园田居·其一》：少无适俗韵，性本爱丘山。",
+    }
+    provider = StubProvider([_time_bundle(), answer])
+    advance_time(files=files, now=start + timedelta(minutes=31))
+    state, _, _, _ = _read(files)
+
+    completed = await complete_reading(
+        state["pending_activity"]["id"],
+        provider=provider,
+        files=files,
+        now=start + timedelta(minutes=32),
+        allow_ambient=False,
+    )
+    state, history, _, _ = _read(files)
+    assert completed.committed is True
+    assert state["pending_activity"] is None
+    assert any(item["type"] == "self_reading" for item in history)
+
+    result = await mind_step(
+        "你刚刚读了什么书？",
+        provider=provider,
+        files=files,
+        now=start + timedelta(minutes=32, seconds=20),
+    )
+
+    state, _, _, failures = _read(files)
+    direct_prompt = json.loads(provider.calls[1][0].content)
+    assert result.committed is True
+    assert result.attempts == 1
+    assert state["pending_expression"]["text"] == answer["expression"]
+    assert any(item["type"] == "self_reading" for item in direct_prompt["selected_history"])
+    assert failures == []
 
 
 @pytest.mark.asyncio
