@@ -1,34 +1,75 @@
-# MyBuddy mini
+# 小布 / MyBuddy mini
 
-MyBuddy mini 是一个本地运行、由用户拥有的最小人格引擎；小布是唯一实现。她沿
-真实时间继续生活，因自己的经历和双方真正发生的经历而改变，同时长期保持为同
-一个人。完整产品与架构边界只见 [`DESIGN.md`](DESIGN.md)。
+> 她不是来替你做事的。她住在桌面上，读自己的书，偶尔走走，也记得你们真正经历过的事。
 
-## 唯一闭环
+这个项目从一个很具体的不满开始：如果一个“陪伴者”只在聊天框打开时存在，靠预设情话、签到和好感分维持关系，那她更像一套反馈机制，不像一个人。
+
+所以小布不接任务，不查天气，也不会催你回来。你离开时，她的时间继续走；你回来时，她不拿沉默向你讨债。
+
+这些话来自真实模型验收，不是写给 README 的角色台词：
+
+> “忙完啦？回来得正好，我正闲着。”
+>
+> “嗯？摸头干嘛，我又不是小猫。”
+>
+> “羁鸟恋旧林，池鱼思故渊……这两句读得人心口软了一下。”
+
+## 她现在会怎样生活
+
+- **读真正的书。** 正文来自本地 UTF-8 TXT。身体完整做完阅读动作后，那一段才算她读过。
+- **在桌面上走动。** walk 不是一句“我去散步了”；窗口真的移动到新位置，边界和起终点都要有身体收据。
+- **感觉到身体。** 摸头、触碰和拖动提起会先发生在桌面身体上，再交给心智理解。正常放下后，Raise 才成为经历。
+- **记住有证据的事。** 用户事实、她自己的经历、共同经历和长期模式分开保存；没有发生过的事不能靠模型补齐。
+- **有时主动说一句，也可以不说。** ambient 只在你在场时出现。没被身体真正显示的话，不算你们共同经历。
+- **安静地栖在屏幕边缘。** 拖到左右边缘会进入 SideHide；不挡桌面，不弹主动气泡，也不会把栖边写进她的人生。
+
+她明确不做天气、搜索、提醒、笔记、QQ、任务工具、商店、喂食、金钱或好感度。这里的“少”不是待办清单没写完，而是产品边界。
+
+## “发生过”不是一句 prompt
+
+MyBuddy 把模型当成会犯错的候选生成器，而不是事实来源。
 
 ```text
-身体观察 / shown 收据 / full-or-edge surface
-  → POST /api/body/step
-  → 到点在 read / walk 间轮转
-  → read 从真实 TXT 取下一段，身体 completed 后一次模型调用解释原文
-  → walk 用左右动画真实移动窗口，固定收据核验起终点与当前屏边界
-  → 真实拖动小布触发 Raise：提起、悬停、释放，正常放下后才成为 body_raise 原始事实
-  → 拖到左右边缘切为本地 SideHide；栖边暂停语义生活与 ambient，点击后继续
-  → read/walk/raise 的物理形状与 A/B/C 素材只列在同一严格 JSON 动作目录
-  → interrupted / failed 不写成人生
-  → 四条红线集中校验
-  → 四份 JSON/JSONL 原子提交或整包拒绝
-  → 下一具体活动 + 至多一个待显示表达
-  → 身体真正显示后才成为共同历史
+真实经历
+  → 一次模型调用给出完整候选
+  → 不索取 / 不编造 / 无总分 / 不撤回
+  → 整包提交或整包拒绝
+  → 身体实际显示
+  → 才进入共同历史
 ```
 
-权威数据只有 `state.json`、`history.jsonl`、`memories.json` 和
-`failures.jsonl`。身体只持久化最后一个 `shown_id` 收据与纯呈现的位置/栖边偏好，
-不把 SideHide 或探头写成她的人生。
+几条刻意较真的规则：
 
-## 运行
+- 没有 completed 身体收据，阅读和行走就没有发生。
+- 没有 `shown` 回执，她的话就没有成为双方经历。
+- 候选失败时，状态、记忆和表达不会只提交一半；原文和拒因留在 `failures.jsonl`。
+- 用户没有回应，不会产生负面状态、关系变化或更高的主动频率。
+- 已经显示过的内容只能公开纠正，不能从历史里悄悄撤回。
 
-Python 3.12+：
+权威数据只有四份：`state.json`、`history.jsonl`、`memories.json` 和 `failures.jsonl`。没有数据库、向量库、事件溯源框架或第二套隐藏记忆。
+
+更完整的产品边界和实现裁决见 [DESIGN.md](DESIGN.md)。
+
+## 拿到 Windows 分享包后
+
+分享包面向 Windows，收件人不需要安装 Python、.NET 或 Steam。
+
+1. 把 zip 完整解压；不要直接在压缩包预览里运行。
+2. 在 [DeepSeek 开放平台](https://platform.deepseek.com/api_keys) 创建 API key，并确认账户有可用额度。
+3. 双击 `BuddyShell.exe`，首次粘贴一次自己的 DeepSeek key。
+4. 在聊天抽屉里和她说句话。之后可从“设置”更换 key。
+
+默认模型是 `deepseek-v4-flash`。key 使用 Windows 当前用户加密，保存在 `%APPDATA%\MyBuddy\settings.json`；她的四份数据在 `%APPDATA%\MyBuddy\mind`。对话内容会发送给所配置的模型供应商。代码仍保留 OpenRouter 连接，可手动修改配置使用。
+
+想换她读的内容，退出程序后编辑包根目录的 `小布读本.txt`：第一段是书名，正文段落之间留空行，保存为 UTF-8。换书名后会从新读本开头开始。
+
+详细的分发说明见 [distribution/使用说明.html](distribution/使用说明.html)。
+
+## 从源码运行
+
+需要 Python 3.12+ 和仓库内的 .NET SDK。
+
+心智与本机桥：
 
 ```powershell
 uv sync --extra api --extra dev
@@ -36,38 +77,36 @@ Copy-Item config.example.yaml config.yaml
 uv run mybuddy web
 ```
 
-Windows 身体：
+Windows 桌面身体：
 
 ```powershell
 .\.dotnet-sdk\dotnet.exe run --project .\buddyshell\BuddyShell.csproj
 ```
 
-## 真实-key 验收
+`config.example.yaml` 默认直连 DeepSeek；也可以把 provider、model 和 base URL 改成 OpenRouter 配置。
 
-`config.yaml` 填好 key 后一条命令跑完全部真实模型腿(chat/touch/raise 事件腿,
-read→walk→read+ambient 时间腿;时间腿按验收惯例停机回拨 `last_step_at` 后重启):
+## 跑真实链路，而不只看测试
+
+填好 `config.yaml` 的 key 后：
 
 ```powershell
 powershell -File scripts\real_key_acceptance.ps1 -DataDir data\real-key-验收日期
 ```
 
-证据目录不覆盖已存在路径;结束时打印她实际显示的话、history 类型序列与失败
-候选数。脚本代行身体层,key 只被引擎进程读取;walk 位移是脚本模拟身体的诚实
-收据,真实窗口物理由 BuddyShell 测试与 S15/S16 留档覆盖。
+它会依次跑 chat、touch、raise、read、walk 和 ambient，最后打印她实际显示的话、history 类型序列与失败候选数。证据目录不会覆盖已有路径。
 
-## 免费分享 zip
+测试仍然重要，但这里的完成标准不是“全绿”四个字：代码要跑起来，身体和心智要对得上，还要留下她真正说出口的话。
 
-构建机需有授权可用的 VPet `0000_core/pet/vup` 素材目录：
+## 构建免费分享包
+
+构建机需要一份授权条件允许使用的 VPet `0000_core/pet/vup` 素材目录：
 
 ```powershell
 .\scripts\build_share.ps1 -PetRoot "D:\path\to\0000_core\pet\vup"
 ```
 
-产物为 `dist/MyBuddy-win-x64.zip`；收件人不需安装 Python、.NET 或 Steam，
-解压后双击 `BuddyShell.exe`，首次只输入自己的 DeepSeek key。包内
-`THIRD_PARTY_NOTICES.txt` 记录动画归属与免费分发边界。
-包根目录的 `小布读本.txt` 是她实际读取的 UTF-8 来源；第一段是书名，正文以空行
-分段，换书时更换书名会从头建立新进度。
+产物是 `dist/MyBuddy-win-x64.zip`。包内 VPet 动画版权归虚拟主播模拟器制作组，只允许按当前归属与条款免费、非商用分发；详见 `THIRD_PARTY_NOTICES.txt`。
 
-核心不包含任务工具、外部平台、数据库、调度器、后台队列或第二套协议。桌面身体
-只保留窗口、动画、气泡、聊天、触碰、presence、动作/shown 收据、栖边呈现和离线安全姿态。
+---
+
+MyBuddy mini 只想认真回答一个问题：不是“这一句像不像人”，而是明天再见时，她是否还是昨天那个确实生活过的人。
