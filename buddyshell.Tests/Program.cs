@@ -16,7 +16,7 @@ internal static class Program
         {
             ("body step is the only wire contract", BodyStepIsOnlyContract),
             ("edge docking exposes only a narrow strip", EdgeDockingExposesNarrowStrip),
-            ("edge peek returns to the edge baseline", EdgePeekReturnsToBaseline),
+            ("edge transitions preserve side-hide continuity", EdgeTransitionsPreserveContinuity),
             ("body action catalog adds same-shape actions as data", BodyActionCatalogIsDataDriven),
             ("read completion emits a physical receipt", ReadCompletionEmitsReceipt),
             ("raised drag holds until release and interrupts with a receipt", RaisedDragHoldsUntilRelease),
@@ -135,22 +135,48 @@ internal static class Program
         Equal(area.Top, right.Y);
     }
 
-    private static void EdgePeekReturnsToBaseline()
+    private static void EdgeTransitionsPreserveContinuity()
     {
         using var fixture = new Fixture();
-        fixture.Controller.SetBaseline(AnimationIntent.EdgeLeft);
+        fixture.Controller.BeginInteractive(new AnimationRequest(
+            AnimationIntent.Raised,
+            AnimationSource.DirectManipulation,
+            "raise-before-edge",
+            AnimationPriority.DirectManipulation));
+        fixture.Advance(10);
+        var main = new AnimationRequest(
+            AnimationIntent.EdgeLeft,
+            AnimationSource.DirectManipulation,
+            "edge-main-1",
+            AnimationPriority.DirectManipulation);
+        fixture.Controller.BeginInteractive(main);
         Equal("edge.left.normal", fixture.Controller.Snapshot.PlanId);
-        Equal("edge.left.normal", fixture.Controller.Snapshot.BaselinePlanId);
+        Equal(AnimationPhaseKind.Entry, fixture.Controller.Snapshot.Phase);
+        fixture.Advance(10);
 
-        fixture.Controller.Submit(new AnimationRequest(
+        var rise = new AnimationRequest(
             AnimationIntent.EdgeLeftRise,
-            AnimationSource.System,
-            "edge-peek-1",
-            AnimationPriority.Response));
+            AnimationSource.DirectManipulation,
+            "edge-rise-1",
+            AnimationPriority.DirectManipulation);
+        fixture.Controller.BeginInteractive(rise);
+        fixture.Advance(10);
+        var resumedMain = main with { CorrelationId = "edge-main-2" };
+        fixture.Controller.EndInteractive(rise.CorrelationId, resumedMain, followUpResumeBody: true);
         Equal("edge.left.rise.normal", fixture.Controller.Snapshot.PlanId);
-        fixture.Advance(30);
-        Equal(AnimationExecutionKind.Baseline, fixture.Controller.Snapshot.Execution);
+        Equal(AnimationPhaseKind.Exit, fixture.Controller.Snapshot.Phase);
+        fixture.Advance(10);
         Equal("edge.left.normal", fixture.Controller.Snapshot.PlanId);
+        Equal(AnimationPhaseKind.Body, fixture.Controller.Snapshot.Phase);
+
+        var reveal = main with { CorrelationId = "edge-reveal" };
+        fixture.Controller.BeginInteractive(reveal, resumeBody: true);
+        Equal(AnimationPhaseKind.Body, fixture.Controller.Snapshot.Phase);
+        fixture.Controller.EndInteractive(reveal.CorrelationId);
+        Equal(AnimationPhaseKind.Exit, fixture.Controller.Snapshot.Phase);
+        fixture.Advance(10);
+        Equal(AnimationExecutionKind.Baseline, fixture.Controller.Snapshot.Execution);
+        Equal("idle.default.normal", fixture.Controller.Snapshot.PlanId);
     }
 
     private static void ApiKeyIsProtected()
@@ -373,8 +399,8 @@ internal static class Program
                 ("activity.walk.left.normal", AnimationIntent.WalkLeft, false, false),
                 ("activity.walk.right.normal", AnimationIntent.WalkRight, false, false),
                 ("interaction.raise.normal", AnimationIntent.Raised, false, false),
-                ("edge.left.normal", AnimationIntent.EdgeLeft, true, false),
-                ("edge.right.normal", AnimationIntent.EdgeRight, true, false),
+                ("edge.left.normal", AnimationIntent.EdgeLeft, false, false),
+                ("edge.right.normal", AnimationIntent.EdgeRight, false, false),
                 ("edge.left.rise.normal", AnimationIntent.EdgeLeftRise, false, false),
                 ("edge.right.rise.normal", AnimationIntent.EdgeRightRise, false, false),
                 ("think.normal", AnimationIntent.Think, false, true),
@@ -387,7 +413,10 @@ internal static class Program
                 item.Id,
                 item.Intent,
                 Phase(root, item.Id, AnimationPhaseKind.Entry),
-                Phase(root, item.Id, AnimationPhaseKind.Body, item.Baseline || item.Pending || item.Intent == AnimationIntent.Raised),
+                Phase(root, item.Id, AnimationPhaseKind.Body,
+                    item.Baseline || item.Pending || item.Intent is AnimationIntent.Raised or
+                        AnimationIntent.EdgeLeft or AnimationIntent.EdgeRight or
+                        AnimationIntent.EdgeLeftRise or AnimationIntent.EdgeRightRise),
                 Phase(root, item.Id, AnimationPhaseKind.Exit),
                 item.Baseline,
                 item.Pending));

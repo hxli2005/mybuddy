@@ -60,7 +60,7 @@ public partial class MainWindow : Window
         MouseLeave += (_, _) =>
         {
             _edgeHoverTimer.Stop();
-            _edgePeeked = false;
+            if (_edgePeeked) ReturnToEdgeMain();
         };
         PreviewMouseLeftButtonDown += (_, args) =>
         {
@@ -210,7 +210,8 @@ public partial class MainWindow : Window
         }
         finally
         {
-            if (eventId is not null) _animationController.EndInteractive(eventId);
+            if (eventId is not null && dockSide is null)
+                _animationController.EndInteractive(eventId);
             SaveWindowPosition();
             _raiseDragging = false;
         }
@@ -540,8 +541,7 @@ public partial class MainWindow : Window
         ChatDrawer.Visibility = Visibility.Collapsed;
         DragBar.Visibility = Visibility.Collapsed;
         PetShadow.Visibility = Visibility.Collapsed;
-        _animationController?.SetBaseline(
-            side == EdgeSide.Left ? AnimationIntent.EdgeLeft : AnimationIntent.EdgeRight);
+        _animationController?.BeginInteractive(EdgeAnimationRequest(side, rise: false));
         _edgePeeked = false;
         _edgeVisibilityTimer.Start();
         UpdateEdgeVisibility();
@@ -564,11 +564,16 @@ public partial class MainWindow : Window
         SpeechBubble.Visibility = Visibility.Visible;
         DragBar.Visibility = Visibility.Visible;
         PetShadow.Visibility = Visibility.Visible;
-        _animationController?.SetBaseline(AnimationIntent.Idle);
         Left = side == EdgeSide.Left
             ? area.Left + 12
             : Math.Max(area.Left, area.Right - ActualWidth - 12);
         Top = Math.Clamp(top, area.Top, Math.Max(area.Top, area.Bottom - ActualHeight));
+        if (_animationController is not null)
+        {
+            var reveal = EdgeAnimationRequest(side, rise: false);
+            _animationController.BeginInteractive(reveal, resumeBody: true);
+            _animationController.EndInteractive(reveal.CorrelationId);
+        }
         _settings.EdgeSide = null;
         _settings.EdgeTopRatio = null;
         SaveWindowPosition();
@@ -583,13 +588,25 @@ public partial class MainWindow : Window
         _edgeHoverTimer.Stop();
         if (_edgeSide is not { } side || !IsMouseOver || _edgeHiddenForFullscreen) return;
         _edgePeeked = true;
-        _animationController?.Submit(new AnimationRequest(
-            side == EdgeSide.Left ? AnimationIntent.EdgeLeftRise : AnimationIntent.EdgeRightRise,
-            AnimationSource.System,
-            $"edge-peek:{Guid.NewGuid():N}",
-            AnimationPriority.Response));
+        _animationController?.BeginInteractive(EdgeAnimationRequest(side, rise: true));
         App.LogMessage($"event=edge_peek side={side.ToString().ToLowerInvariant()}");
     }
+
+    private void ReturnToEdgeMain()
+    {
+        _edgePeeked = false;
+        if (_edgeSide is not { } side || _animationController is not { } controller ||
+            controller.Snapshot.CorrelationId is not { } current) return;
+        controller.EndInteractive(current, EdgeAnimationRequest(side, rise: false), followUpResumeBody: true);
+    }
+
+    private static AnimationRequest EdgeAnimationRequest(EdgeSide side, bool rise) => new(
+        rise
+            ? side == EdgeSide.Left ? AnimationIntent.EdgeLeftRise : AnimationIntent.EdgeRightRise
+            : side == EdgeSide.Left ? AnimationIntent.EdgeLeft : AnimationIntent.EdgeRight,
+        AnimationSource.DirectManipulation,
+        $"edge:{side.ToString().ToLowerInvariant()}:{(rise ? "rise" : "main")}:{Guid.NewGuid():N}",
+        AnimationPriority.DirectManipulation);
 
     private void UpdateEdgeVisibility()
     {
@@ -599,6 +616,7 @@ public partial class MainWindow : Window
         _edgeHiddenForFullscreen = hidden;
         Opacity = hidden ? 0 : 1;
         IsHitTestVisible = !hidden;
+        if (hidden && _edgePeeked) ReturnToEdgeMain();
         App.LogMessage($"event=edge_fullscreen hidden={hidden.ToString().ToLowerInvariant()}");
     }
 

@@ -91,11 +91,11 @@ public sealed partial class AnimationManifest
                 .ToArray();
             return
             [
-                Baseline("idle.default.normal", AnimationIntent.Idle, null, "Default/Nomal/1", null),
-                Baseline("edge.left.normal", AnimationIntent.EdgeLeft, "SideHide_Left_Main/Nomal/A", "SideHide_Left_Main/Nomal/B_1", "SideHide_Left_Main/Nomal/C"),
-                Baseline("edge.right.normal", AnimationIntent.EdgeRight, "SideHide_Right_Main/Nomal/A", "SideHide_Right_Main/Nomal/B_1", "SideHide_Right_Main/Nomal/C"),
-                Transient("edge.left.rise.normal", AnimationIntent.EdgeLeftRise, "SideHide_Left_Rise/Nomal/A", "SideHide_Left_Rise/Nomal/B", "SideHide_Left_Rise/Nomal/C"),
-                Transient("edge.right.rise.normal", AnimationIntent.EdgeRightRise, "SideHide_Right_Rise/Nomal/A", "SideHide_Right_Rise/Nomal/B", "SideHide_Right_Rise/Nomal/C"),
+                Looping("idle.default.normal", AnimationIntent.Idle, null, "Default/Nomal/1", null, baseline: true),
+                Looping("edge.left.normal", AnimationIntent.EdgeLeft, "SideHide_Left_Main/Nomal/A", "SideHide_Left_Main/Nomal/B_1", "SideHide_Left_Main/Nomal/C"),
+                Looping("edge.right.normal", AnimationIntent.EdgeRight, "SideHide_Right_Main/Nomal/A", "SideHide_Right_Main/Nomal/B_1", "SideHide_Right_Main/Nomal/C"),
+                Looping("edge.left.rise.normal", AnimationIntent.EdgeLeftRise, "SideHide_Left_Rise/Nomal/A", "SideHide_Left_Rise/Nomal/B", "SideHide_Left_Rise/Nomal/C"),
+                Looping("edge.right.rise.normal", AnimationIntent.EdgeRightRise, "SideHide_Right_Rise/Nomal/A", "SideHide_Right_Rise/Nomal/B", "SideHide_Right_Rise/Nomal/C"),
                 ..activityPlans,
                 Pending("think.normal", AnimationIntent.Think, "Think/Nomal/A", "Think/Nomal/B", "Think/Nomal/C"),
                 Transient("touch.head.normal", AnimationIntent.TouchHeadReflex, "Touch_Head/A_Nomal", "Touch_Head/B_Nomal", "Touch_Head/C_Nomal"),
@@ -113,8 +113,8 @@ public sealed partial class AnimationManifest
                 Phase(animation.Body, AnimationPhaseKind.Body, shape == BodyActionShape.Interactive)!,
                 Phase(animation.Exit, AnimationPhaseKind.Exit));
 
-        private AnimationPlan Baseline(string id, AnimationIntent intent, string? entry, string body, string? exit) =>
-            new(id, intent, Phase(entry, AnimationPhaseKind.Entry), Phase(body, AnimationPhaseKind.Body, true)!, Phase(exit, AnimationPhaseKind.Exit), true);
+        private AnimationPlan Looping(string id, AnimationIntent intent, string? entry, string body, string? exit, bool baseline = false) =>
+            new(id, intent, Phase(entry, AnimationPhaseKind.Entry), Phase(body, AnimationPhaseKind.Body, true)!, Phase(exit, AnimationPhaseKind.Exit), baseline);
 
         private AnimationPlan Pending(string id, AnimationIntent intent, string entry, string body, string exit) =>
             new(id, intent, Phase(entry, AnimationPhaseKind.Entry), Phase(body, AnimationPhaseKind.Body, true)!, Phase(exit, AnimationPhaseKind.Exit), false, true);

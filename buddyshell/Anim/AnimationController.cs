@@ -15,6 +15,8 @@ public sealed class AnimationController : IAnimationController, IAnimationDiagno
     private AnimationExecutionKind? _execution;
     private AnimationRequest? _request;
     private AnimationRequest? _pendingThink;
+    private AnimationRequest? _interactiveFollowUp;
+    private bool _interactiveFollowUpResumeBody;
     private long _phaseStartedAt;
     private long _generation;
     private string? _lastSignature;
@@ -84,27 +86,24 @@ public sealed class AnimationController : IAnimationController, IAnimationDiagno
         StartRequest(request);
     });
 
-    public void SetBaseline(AnimationIntent intent) => OnDispatcher(() =>
-    {
-        if (_disposed) return;
-        var plan = _manifest.Resolve(new AnimationRequest(
-            intent, AnimationSource.System, $"baseline:{intent}", AnimationPriority.Activity));
-        if (!plan.IsBaseline) throw new InvalidOperationException($"动画不是 baseline：{intent}");
-        _desiredBaseline = plan;
-        if (_execution == AnimationExecutionKind.Baseline) StartBaseline();
-    });
-
-    public void BeginInteractive(AnimationRequest request) => OnDispatcher(() =>
+    public void BeginInteractive(AnimationRequest request, bool resumeBody = false) => OnDispatcher(() =>
     {
         if (_disposed || request.Source != AnimationSource.DirectManipulation) return;
-        StartRequest(request, AnimationExecutionKind.Interactive);
+        _interactiveFollowUp = null;
+        _interactiveFollowUpResumeBody = false;
+        StartRequest(request, AnimationExecutionKind.Interactive, resumeBody);
     });
 
-    public void EndInteractive(string correlationId) => OnDispatcher(() =>
+    public void EndInteractive(
+        string correlationId,
+        AnimationRequest? followUp = null,
+        bool followUpResumeBody = false) => OnDispatcher(() =>
     {
         if (_disposed || _execution != AnimationExecutionKind.Interactive ||
             _request?.CorrelationId != correlationId || _phase?.Kind == AnimationPhaseKind.Exit)
             return;
+        _interactiveFollowUp = followUp;
+        _interactiveFollowUpResumeBody = followUpResumeBody;
         if (_plan?.Exit is { } exit) StartPhase(exit);
         else ResumePersistentView();
     });
@@ -169,7 +168,10 @@ public sealed class AnimationController : IAnimationController, IAnimationDiagno
         if (AnimationTimeline.IsComplete(_phase, elapsed)) AdvancePhase();
     }
 
-    private void StartRequest(AnimationRequest request, AnimationExecutionKind? execution = null)
+    private void StartRequest(
+        AnimationRequest request,
+        AnimationExecutionKind? execution = null,
+        bool resumeBody = false)
     {
         if (_execution == AnimationExecutionKind.Transient &&
             _request?.Source == AnimationSource.State &&
@@ -185,7 +187,7 @@ public sealed class AnimationController : IAnimationController, IAnimationDiagno
         _execution = execution ?? (request.Intent == AnimationIntent.Think
             ? AnimationExecutionKind.Pending
             : AnimationExecutionKind.Transient);
-        StartPhase(_plan.Entry ?? _plan.Body);
+        StartPhase(resumeBody ? _plan.Body : _plan.Entry ?? _plan.Body);
     }
 
     private void StartBaseline()
@@ -248,7 +250,15 @@ public sealed class AnimationController : IAnimationController, IAnimationDiagno
             _request?.Source == AnimationSource.State
             ? _request.CorrelationId
             : null;
-        if (_pendingThink is { } pending)
+        var followUp = _interactiveFollowUp;
+        var followUpResumeBody = _interactiveFollowUpResumeBody;
+        _interactiveFollowUp = null;
+        _interactiveFollowUpResumeBody = false;
+        if (followUp is not null)
+        {
+            StartRequest(followUp, AnimationExecutionKind.Interactive, followUpResumeBody);
+        }
+        else if (_pendingThink is { } pending)
         {
             _plan = _manifest.Resolve(pending);
             _request = pending;
