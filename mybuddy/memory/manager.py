@@ -111,6 +111,14 @@ class MemoryManager:
     def get_recent_messages(self) -> list[Message]:
         return self._short_term.get_all()
 
+    def clear_short_term(self) -> None:
+        """清空短期记忆，重置对话上下文。"""
+        self._short_term.clear()
+
+    def clear_long_term(self) -> int:
+        """清空长期记忆档案卡，返回删除数量。"""
+        return self._ltm.clear_all()
+
     def rehydrate_short_term(self, *, limit: int | None = None) -> int:
         """从 messages 表回灌最近的 user/assistant 消息到短期记忆。
 
@@ -218,7 +226,7 @@ class MemoryManager:
         fields = self._profile.get_all_fields()
         relevant_fields = _relevant_profile_fields(fields, user_input, limit=2)
         if relevant_fields:
-            field_lines = ["## 用户画像"]
+            field_lines = ["## 用户画像(背景参考,回复时不用名字称呼用户)"]
             for k, v in relevant_fields.items():
                 field_lines.append(f"- {k}: {v}")
             parts.append("\n".join(field_lines))

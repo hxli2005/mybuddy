@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from mybuddy.agent import Agent
-from mybuddy.config import Config, PersonaConfig, ensure_dirs, load_config
+from mybuddy.config import Config, ensure_dirs, load_config
 from mybuddy.emotion import EmotionDetector, EmotionTracker
 from mybuddy.learning import (
     FeedbackBus,
@@ -28,22 +28,21 @@ from mybuddy.learning import (
 from mybuddy.llm import Message as LLMMessage
 from mybuddy.llm import Role, make_provider
 from mybuddy.memory import LongTermMemory, MemoryManager, UserProfile
+from mybuddy.safety import CrisisDetector, InputModerator, OutputModerator
 from mybuddy.scheduler import MyBuddyScheduler
 from mybuddy.storage import (
     Reminder,
     UserRecord,
     append_message,
-    delete_user_persona,
     drain_pending,
     ensure_local_user,
     get_user,
     increment_usage,
     init_db,
-    resolve_user_persona,
     session_scope,
-    set_user_persona,
     usage_count_today,
 )
+from mybuddy.therapy import CbtGuide
 from mybuddy.tools import ToolRegistry, setup_memory_tool, setup_skill_tool, use_context
 
 if TYPE_CHECKING:
@@ -76,6 +75,8 @@ class ChatResponse:
     triggered_skills: list[str] = field(default_factory=list)
     search_sources: list[dict[str, str]] = field(default_factory=list)
     pending_messages: list[dict[str, Any]] = field(default_factory=list)
+    cbt_prompt: dict[str, str] | None = None
+    crisis_alert: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -89,6 +90,8 @@ class ChatResponse:
             "triggered_skills": self.triggered_skills,
             "search_sources": self.search_sources,
             "pending_messages": self.pending_messages,
+            "cbt_prompt": self.cbt_prompt,
+            "crisis_alert": self.crisis_alert,
         }
 
 
@@ -104,7 +107,6 @@ class UserRuntime:
     feedback_bus: FeedbackBus
     agent: Agent
     scheduler: MyBuddyScheduler | None = None
-    persona_version: str = "default"
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     last_turn_id: str | None = None
     last_triggered_skills: list[str] = field(default_factory=list)
@@ -197,13 +199,21 @@ class ChatService:
                     session_id=runtime.agent.session_id,
                     items=drain_pending(runtime.engine),
                     add_to_short_term=runtime.agent._memory.add_message,
+                    user_id=user.id,
                 )
                 result = await runtime.agent.run(clean)
+                # 情绪持久化 + 无感化评估评分(与 api.py 单用户路径对齐)
+                if result.emotion is not None:
+                    from mybuddy.mood import MoodTracker
+
+                    MoodTracker(runtime.engine).record_from_emotion(user.id, result.emotion)
+                await _try_assessment_scoring(runtime, user.id, clean)
                 pending_after = _integrate_pending_messages(
                     runtime.engine,
                     session_id=runtime.agent.session_id,
                     items=drain_pending(runtime.engine),
                     add_to_short_term=runtime.agent._memory.add_message,
+                    user_id=user.id,
                 )
             increment_usage(_require_engine(self.engine), user_id=user.id, source=ctx.source)
             runtime.last_turn_id = result.trajectory.turn_id
@@ -219,6 +229,8 @@ class ChatService:
                 triggered_skills=list(result.triggered_skills),
                 search_sources=list(result.search_sources),
                 pending_messages=pending_before + pending_after,
+                cbt_prompt=result.cbt_prompt,
+                crisis_alert=result.crisis_alert,
             )
 
     def get_user_record(self, user_id: int) -> UserRecord | None:
@@ -276,55 +288,6 @@ class ChatService:
             else None,
         }
 
-    def persona_payload(self, ctx: RequestContext) -> dict[str, Any]:
-        self.ensure_started()
-        engine = _require_engine(self.engine)
-        cfg = _require_cfg(self.cfg)
-        user = get_user(engine, ctx.user_id)
-        if user is None:
-            raise RuntimeError(f"用户不存在:user_id={ctx.user_id}")
-        resolved = resolve_user_persona(engine, user_id=user.id, default_persona=cfg.persona)
-        return {
-            "user_id": user.id,
-            "inherits_default": resolved.inherits_default,
-            "version": resolved.version,
-            "persona": resolved.persona.model_dump(),
-        }
-
-    def update_persona_payload(self, ctx: RequestContext, updates: dict[str, Any]) -> dict[str, Any]:
-        self.ensure_started()
-        engine = _require_engine(self.engine)
-        cfg = _require_cfg(self.cfg)
-        user = get_user(engine, ctx.user_id)
-        if user is None:
-            raise RuntimeError(f"用户不存在:user_id={ctx.user_id}")
-        resolved = resolve_user_persona(engine, user_id=user.id, default_persona=cfg.persona)
-        merged = resolved.persona.model_dump()
-        merged.update(updates)
-        persona = PersonaConfig.model_validate(merged)
-        record = set_user_persona(engine, user_id=user.id, persona=persona)
-        return {
-            "user_id": user.id,
-            "inherits_default": False,
-            "version": record.version,
-            "persona": record.persona.model_dump(),
-        }
-
-    def reset_persona_payload(self, ctx: RequestContext) -> dict[str, Any]:
-        self.ensure_started()
-        engine = _require_engine(self.engine)
-        cfg = _require_cfg(self.cfg)
-        user = get_user(engine, ctx.user_id)
-        if user is None:
-            raise RuntimeError(f"用户不存在:user_id={ctx.user_id}")
-        delete_user_persona(engine, user.id)
-        return {
-            "user_id": user.id,
-            "inherits_default": True,
-            "version": "default",
-            "persona": cfg.persona.model_dump(),
-        }
-
     def reset_runtime(self, user_id: int) -> bool:
         runtime = self._runtimes.pop(user_id, None)
         if runtime is None:
@@ -346,21 +309,11 @@ class ChatService:
 
     def _runtime_for(self, user: UserRecord, *, refresh_if_stale: bool = True) -> UserRuntime:
         base_cfg = _require_cfg(self.cfg)
-        master_engine = _require_engine(self.engine)
-        resolved_persona = resolve_user_persona(
-            master_engine,
-            user_id=user.id,
-            default_persona=base_cfg.persona,
-        )
         existing = self._runtimes.get(user.id)
         if existing is not None:
-            if not refresh_if_stale or existing.persona_version == resolved_persona.version:
-                return existing
-            self._runtimes.pop(user.id, None)
-            _shutdown_scheduler(existing.scheduler)
+            return existing
 
         user_cfg = _user_config(base_cfg, user.id)
-        user_cfg.persona = resolved_persona.persona
         ensure_dirs(user_cfg)
         engine = init_db(user_cfg.paths.db_file)
         provider = self._make_provider(user_cfg)
@@ -407,6 +360,11 @@ class ChatService:
             scheduler=scheduler,
             skill_registry=skill_registry,
             skill_curator=SkillCurator(provider, skill_registry, model=user_cfg.llm.small_model),
+            user_id=user.id,
+            crisis_detector=CrisisDetector(provider, user_cfg.llm.small_model),
+            input_moderator=InputModerator(provider, user_cfg.llm.small_model),
+            output_moderator=OutputModerator(),
+            cbt_guide=CbtGuide(),
         )
         runtime = UserRuntime(
             user_id=user.id,
@@ -419,7 +377,6 @@ class ChatService:
             feedback_bus=feedback_bus,
             scheduler=scheduler,
             agent=agent,
-            persona_version=resolved_persona.version,
         )
         self._runtimes[user.id] = runtime
         return runtime
@@ -437,12 +394,42 @@ class ChatService:
 CONVERSATIONAL_PENDING_SOURCES = {"nudge", "dynamic", "greeting"}
 
 
+async def _try_assessment_scoring(runtime: UserRuntime, user_id: int, user_message: str) -> None:
+    """无感化评估:检查是否有待评分维度,尝试自动评分(失败静默)。"""
+    try:
+        from mybuddy.assessment import AssessmentScorer, ConversationalAssessmentTracker
+
+        tracker = ConversationalAssessmentTracker(runtime.engine, user_id)
+        tracker.ensure_dimensions()
+        asked = tracker.get_asked_dimensions()
+        if not asked:
+            return
+        scorer = AssessmentScorer(runtime.provider, runtime.cfg.llm.small_model)
+        pending_phq9 = [d["dimension_index"] for d in asked if d["assessment_type"] == "phq9"]
+        pending_gad7 = [d["dimension_index"] for d in asked if d["assessment_type"] == "gad7"]
+        result = await scorer.try_score(
+            user_message,
+            pending_phq9_indices=pending_phq9 or None,
+            pending_gad7_indices=pending_gad7 or None,
+        )
+        if result:
+            tracker.record_score(
+                result["assessment_type"],
+                result["dimension_index"],
+                result["score"],
+                user_message[:200],
+            )
+    except Exception:
+        logger.exception("assessment scoring failed")
+
+
 def _integrate_pending_messages(
     engine: Engine,
     *,
     session_id: str,
     items: list[dict[str, Any]],
     add_to_short_term: Callable[[LLMMessage], None] | None = None,
+    user_id: int | None = None,
 ) -> list[dict[str, Any]]:
     integrated: list[dict[str, Any]] = []
     for item in items:
@@ -462,6 +449,7 @@ def _integrate_pending_messages(
                     "scheduled_at": enriched.get("scheduled_at"),
                     "pending_meta": enriched.get("meta") or {},
                 },
+                user_id=user_id,
             )
             if add_to_short_term is not None:
                 add_to_short_term(LLMMessage(role=Role.ASSISTANT, content=content))

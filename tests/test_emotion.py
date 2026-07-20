@@ -211,9 +211,11 @@ def test_support_for_negative_anxiety() -> None:
 
 
 def test_support_crisis_mode_has_safety_note() -> None:
+    # 危机检测已上移到 Agent 层(safety/crisis.py),这里验证传入 crisis_level 时的安全模式
     support = build_emotional_support(
         "我不想活了",
         EmotionResult(label="negative", strength=1.0, reason="极端"),
+        crisis_level="high",
     )
 
     assert support.mode == "safety"

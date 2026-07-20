@@ -1,20 +1,6 @@
-export type Persona = {
-  name?: string;
-  style?: string;
-  language?: string;
-  relationship?: string;
-  tone?: string;
-  boundaries?: string;
-  response_habits?: string[];
-  roleplay_style?: Record<string, unknown>;
-  character_life?: Record<string, unknown>;
-  relationship_model?: Record<string, unknown>;
-  address_user?: string;
-};
-
 export type StatusPayload = {
   configured: boolean;
-  persona?: Persona;
+  persona?: Record<string, unknown>;
   model?: string;
   tools?: string[];
   scheduler_jobs?: Array<Record<string, unknown>>;
@@ -40,6 +26,8 @@ export type Emotion = {
   label?: string;
   strength?: number;
   reason?: string;
+  category?: string | null;
+  intensity?: number;
 };
 
 export type EmotionalSupport = {
@@ -61,6 +49,12 @@ export type PendingMessage = {
   meta?: Record<string, unknown>;
 };
 
+export type CbtPrompt = {
+  technique?: string;
+  title?: string;
+  description?: string;
+};
+
 export type ChatResponse = {
   text?: string;
   turn_id?: string;
@@ -72,6 +66,8 @@ export type ChatResponse = {
   triggered_skills?: string[];
   search_sources?: SearchSource[];
   pending_messages?: PendingMessage[];
+  cbt_prompt?: CbtPrompt | null;
+  crisis_alert?: boolean;
 };
 
 export type ChatLogMessage = {
@@ -87,89 +83,80 @@ export type MessagesPayload = {
   messages: ChatLogMessage[];
 };
 
-export type ProfilePayload = {
-  fields: Record<string, string>;
-};
+/* ---- 心理健康新增类型 ---- */
 
-export type MemoryItem = {
-  id: string;
-  content: string;
-  metadata?: Record<string, unknown>;
-  score?: number;
-};
-
-export type MemoryPayload = {
-  archive: MemoryItem[];
-  conversations: Array<Record<string, unknown>>;
-  raw: Array<Record<string, unknown>>;
-};
-
-export type Reminder = {
+export type MoodRecord = {
   id: number;
-  content: string;
-  trigger_at: string;
-  status: string;
+  date: string;
+  score: number | null;
+  notes?: string;
+  category?: string;
+  emotion_data?: Record<string, unknown>;
 };
 
-export type RemindersPayload = {
-  reminders: Reminder[];
-  pending_messages: PendingMessage[];
-};
-
-export type Skill = {
+export type AssessmentDimensionStatus = {
+  dimension_index: number;
   name: string;
-  triggers: string[];
-  confidence: number;
-  success_count: number;
-  fail_count: number;
-  archived: boolean;
+  status: "unasked" | "asked" | "answered" | "scored";
+  score?: number;
+  source_conversation?: string | null;
+  scored_at?: string | null;
 };
 
-export type SkillsPayload = {
-  skills: Skill[];
+export type AssessmentStatusResponse = {
+  phq9: AssessmentDimensionStatus[];
+  gad7: AssessmentDimensionStatus[];
+  phq9_total?: number;
+  gad7_total?: number;
+  phq9_level?: string;
+  gad7_level?: string;
 };
 
-export type Note = {
-  id: number;
-  title: string;
-  content: string;
-  tags: string[];
-  created_at: string;
-  updated_at: string;
+export type CrisisResourcesResponse = {
+  hotlines: Array<{
+    title: string;
+    phone: string;
+    description?: string;
+  }>;
 };
 
-export type NotesPayload = {
-  notes: Note[];
-};
-
-export type ExternalAccount = {
-  provider: string;
-  external_id: string;
-  display_name: string;
-};
-
-export type TestUser = {
-  id: number;
-  display_name: string;
-  status: "active" | "disabled" | string;
-  daily_message_limit: number;
-  usage_today: Record<string, number>;
-  usage_total_today: number;
-  has_custom_persona: boolean;
-  external_accounts: ExternalAccount[];
-};
-
-export type UsersPayload = {
-  users: TestUser[];
-};
-
-export type UserPersonaPayload = {
+export type AuthResponse = {
   user_id: number;
-  inherits_default: boolean;
-  version: string;
-  persona: Persona;
+  username: string;
 };
 
-export type PersonaPayload = {
-  persona: Persona;
+export type UserInfo = {
+  user_id?: number;
+  username?: string;
+  display_name?: string;
+};
+
+export type MoodRecordsResponse = {
+  records: MoodRecord[];
+};
+
+export type MoodTrendsResponse = {
+  daily_averages: Array<{ date: string; avg_score: number }>;
+};
+
+export type MoodStatsResponse = {
+  total_records: number;
+  streak: number;
+  categories: Record<string, number>;
+  avg_score?: number | null;
+  best_day?: string | null;
+  worst_day?: string | null;
+};
+
+export type AssessmentCycle = {
+  id: number;
+  assessment_type: "phq9" | "gad7" | string;
+  total_score: number;
+  severity: string;
+  started_at?: string | null;
+  completed_at?: string | null;
+};
+
+export type AssessmentHistoryResponse = {
+  cycles: AssessmentCycle[];
 };

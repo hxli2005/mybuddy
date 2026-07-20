@@ -25,11 +25,16 @@ logger = logging.getLogger(__name__)
 
 EMOTION_PROMPT = """你是一个情绪识别助手。判断当前用户消息的情绪,严格输出 JSON:
 
-{"label": "positive|neutral|negative", "strength": 0.0-1.0, "reason": "不超过 15 字的判断依据"}
+{"label": "positive|neutral|negative", "strength": 0.0-1.0, "category": "分类", "intensity": 1-5, "reason": "不超过 15 字的判断依据"}
 
 规则:
 - label 必须是三选一
 - strength 表示强度:中性话题给 0.0-0.2,轻度情绪给 0.3-0.5,强烈情绪给 0.6-1.0
+- category 必须是以下 15 选一(最贴近的一个):
+  anxiety(焦虑) sadness(悲伤) anger(愤怒) fatigue(疲惫) loneliness(孤独)
+  stress(压力) guilt(内疚) shame(羞耻) fear(恐惧) disappointment(失望)
+  boredom(无聊) calm(平静) joy(喜悦) gratitude(感激) excitement(兴奋)
+- intensity 是 1-5 的整数:1=非常轻微, 3=中等, 5=非常强烈;中性消息给 1-2
 - 可以参考最近对话上下文理解省略、短句和延续情绪,但当前用户消息权重最高
 - 不要把已经缓和的旧负面情绪强加到当前消息;如果上下文与当前消息冲突,以当前消息为准
 - 不揣测外部信息,不做诊断
@@ -38,6 +43,11 @@ EMOTION_PROMPT = """你是一个情绪识别助手。判断当前用户消息的
 
 
 VALID_LABELS = {"positive", "neutral", "negative"}
+VALID_CATEGORIES = {
+    "anxiety", "sadness", "anger", "fatigue", "loneliness",
+    "stress", "guilt", "shame", "fear", "disappointment",
+    "boredom", "calm", "joy", "gratitude", "excitement",
+}
 AUTH_STATUS_CODES = {401, 403}
 AUTH_ERROR_NAMES = {"authenticationerror", "permissiondeniederror"}
 
@@ -47,13 +57,21 @@ class EmotionResult:
     label: str = "neutral"
     strength: float = 0.0
     reason: str = ""
+    category: str | None = None
+    intensity: int = 3
 
     @property
     def is_negative(self) -> bool:
         return self.label == "negative" and self.strength >= 0.3
 
     def to_dict(self) -> dict:
-        return {"label": self.label, "strength": self.strength, "reason": self.reason}
+        return {
+            "label": self.label,
+            "strength": self.strength,
+            "reason": self.reason,
+            "category": self.category,
+            "intensity": self.intensity,
+        }
 
 
 class EmotionDetector:
@@ -171,7 +189,23 @@ def _parse(text: str) -> EmotionResult:
 
     reason = str(data.get("reason", ""))[:50]
 
-    return EmotionResult(label=label, strength=strength, reason=reason)
+    category = str(data.get("category", "")).lower() or None
+    if category not in VALID_CATEGORIES:
+        category = None
+
+    try:
+        intensity = int(data.get("intensity", 3))
+    except (TypeError, ValueError):
+        intensity = 3
+    intensity = max(1, min(5, intensity))
+
+    return EmotionResult(
+        label=label,
+        strength=strength,
+        reason=reason,
+        category=category,
+        intensity=intensity,
+    )
 
 
 def _is_auth_error(err: Exception) -> bool:

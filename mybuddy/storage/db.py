@@ -6,7 +6,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-from sqlalchemy import Engine, create_engine, event
+from sqlalchemy import Engine, create_engine, event, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from .models import Base
@@ -37,10 +37,27 @@ def make_engine(db_file: str) -> Engine:
 
 
 def init_db(db_file: str) -> Engine:
-    """创建所有表,返回 engine。幂等(create_all)。"""
+    """创建所有表并新增缺失列,返回 engine。幂等。"""
     engine = make_engine(db_file)
     Base.metadata.create_all(engine)
+    _migrate_columns(engine)
     return engine
+
+
+def _migrate_columns(engine: Engine) -> None:
+    """为已有表新增缺失列(仅 SQLite)。"""
+    with engine.connect() as conn:
+        user_cols = {row[1] for row in conn.execute(text("PRAGMA table_info(users)")).fetchall()}
+        if "password_hash" not in user_cols:
+            conn.execute(text("ALTER TABLE users ADD COLUMN password_hash VARCHAR(256)"))
+        if "is_guest" not in user_cols:
+            conn.execute(text("ALTER TABLE users ADD COLUMN is_guest BOOLEAN DEFAULT 0"))
+
+        msg_cols = {row[1] for row in conn.execute(text("PRAGMA table_info(messages)")).fetchall()}
+        if "user_id" not in msg_cols:
+            conn.execute(text("ALTER TABLE messages ADD COLUMN user_id INTEGER"))
+
+        conn.commit()
 
 
 @contextmanager

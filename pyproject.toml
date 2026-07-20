@@ -25,6 +25,9 @@ dependencies = [
     "python-dateutil>=2.9.0",
     # Web search:浏览器指纹 HTTP,绕过 DuckDuckGo 反爬(裸抓取会被 202 挑战页挡)
     "ddgs>=9.0",
+    "bcrypt>=5.0.0",
+    # 本地语音转文字(离线 Whisper,无需外部 API)
+    "openai-whisper>=20240930",
 ]
 
 [project.optional-dependencies]

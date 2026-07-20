@@ -1,12 +1,10 @@
 export const queryKeys = {
   status: ["status"],
-  persona: ["persona"],
-  profile: ["profile"],
   messages: ["messages"],
-  memory: ["memory"],
-  reminders: ["reminders"],
-  skills: ["skills"],
-  notes: ["notes"],
+  mood: ["mood-records"],
+  moodStats: ["mood-stats"],
+  assessment: ["assessment-status"],
+  assessmentHistory: ["assessment-history"],
 } as const;
 
 export type Presence = "calm" | "positive" | "negative";

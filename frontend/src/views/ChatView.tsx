@@ -1,4 +1,4 @@
-import { ArrowUp, Heart, Link2, Sparkles, ThumbsDown, ThumbsUp } from "lucide-react";
+import { ArrowUp, Heart, Link2, Mic, Shield, Sparkles, ThumbsDown, ThumbsUp } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   FormEvent,
@@ -8,9 +8,15 @@ import {
   useRef,
   useState,
 } from "react";
-import { fetchMessages, sendChat, sendFeedback } from "../lib/api";
+import { fetchMessages, sendChat, sendFeedback, transcribeAudio } from "../lib/api";
+import { loadGuestMessages, saveGuestMessages } from "../lib/guestStorage";
+import { useAuth } from "../lib/auth";
 import { Chip, EmptyState, TypingDots } from "../components/ui";
+import { ChatCbtPrompt } from "../components/ChatCbtPrompt";
+import { ChatCrisisBanner } from "../components/ChatCrisisBanner";
+import { GuestBanner } from "../components/GuestBanner";
 import { cn } from "../lib/cn";
+import { useMediaRecorder } from "../lib/useMediaRecorder";
 import { queryKeys } from "../lib/queryKeys";
 import type {
   ChatLogMessage,
@@ -21,6 +27,12 @@ import type {
   SearchSource,
 } from "../types/api";
 
+type CbtPromptData = {
+  technique?: string;
+  title?: string;
+  description?: string;
+};
+
 type ChatMessage = {
   id: string;
   role: "user" | "assistant" | "system";
@@ -30,10 +42,13 @@ type ChatMessage = {
   emotion?: Emotion | null;
   turnId?: string | null;
   proactive?: string | null;
+  cbtPrompt?: CbtPromptData | null;
+  crisisAlert?: boolean;
 };
 
 type ChatViewProps = {
   onChatResult: (response: ChatResponse) => void;
+  onOpenCrisis: () => void;
 };
 
 const quickPrompts = ["陪我说会儿话", "帮我理一理今天", "提醒我晚点复盘", "把这件事记下来"];
@@ -43,8 +58,9 @@ const explicitSearchPattern =
 const timeSensitivePattern =
   /(最新|最近|现在|目前|当前|今天|昨天|刚刚|实时|今年).*(政策|法规|价格|股价|汇率|版本|发布|比赛|赛程|榜单|公司|产品|模型|论文|事件|事故|争议|口碑|趋势)/i;
 
-export function ChatView({ onChatResult }: ChatViewProps) {
+export function ChatView({ onChatResult, onOpenCrisis }: ChatViewProps) {
   const queryClient = useQueryClient();
+  const { isLoggedIn, loading: authLoading } = useAuth();
   const [message, setMessage] = useState("");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [pendingStatus, setPendingStatus] = useState(defaultPendingStatus);
@@ -52,17 +68,77 @@ export function ChatView({ onChatResult }: ChatViewProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
+  const { recording, supported: voiceSupported, start: startVoice, stop: stopVoice } = useMediaRecorder();
+
+  async function onMicClick() {
+    if (recording) {
+      const blob = await stopVoice();
+      try {
+        const text = await transcribeAudio(blob);
+        if (text.trim()) {
+          setMessage((prev) => (prev + " " + text.trim()).trim());
+        }
+      } catch (e) {
+        setMessages((current) => [
+          ...current,
+          { id: makeId("system"), role: "system", text: `语音识别失败：${errText(e)}` },
+        ]);
+      }
+    } else {
+      startVoice();
+    }
+  }
+
+  const showCrisisBanner = messages.some((m) => m.crisisAlert);
+
   const historyQuery = useQuery({ queryKey: queryKeys.messages, queryFn: () => fetchMessages(100) });
+
+  // 访客模式:挂载时从 localStorage 恢复对话(刷新不丢)
+  // authLoading 守卫:等 fetchCurrentUser 完成后再判断是否加载访客消息,
+  // 避免登录用户刷新时短暂 isLoggedIn=false 期间误加载 localStorage 旧对话。
+  useEffect(() => {
+    if (isLoggedIn || authLoading) return;
+    const guest = loadGuestMessages();
+    if (!guest.length) return;
+    setMessages((current) =>
+      current.length
+        ? current
+        : guest.map((m, i) => ({ id: `guest-${i}`, role: m.role, text: m.content })),
+    );
+  }, [isLoggedIn, authLoading]);
+
+  // 访客模式:对话变化时写回 localStorage(上限 50 条)
+  useEffect(() => {
+    if (isLoggedIn) return;
+    const compact = messages
+      .filter((m): m is ChatMessage & { role: "user" | "assistant" } =>
+        m.role === "user" || m.role === "assistant",
+      )
+      .map((m) => ({ role: m.role, content: m.text }));
+    if (compact.length) saveGuestMessages(compact);
+  }, [messages, isLoggedIn]);
 
   useEffect(() => {
     if (!historyQuery.data?.messages.length) return;
     setMessages((current) => (current.length ? current : historyQuery.data.messages.flatMap(historyToChat)));
   }, [historyQuery.data]);
 
+  // 设置里"清除所有数据"成功后,立即清空聊天界面
+  useEffect(() => {
+    function onCleared() {
+      setMessages([]);
+      setFeedbackDone({});
+    }
+    window.addEventListener("mybuddy:data-cleared", onCleared);
+    return () => window.removeEventListener("mybuddy:data-cleared", onCleared);
+  }, []);
+
   const chatMutation = useMutation({
     mutationFn: sendChat,
     onSuccess: (data) => {
       const proactive = (data.pending_messages || []).map(pendingToChat);
+      const cbtPrompt = data.cbt_prompt as CbtPromptData | undefined;
+      const crisisAlert = Boolean(data.crisis_alert);
       setMessages((current) => [
         ...current,
         ...proactive,
@@ -74,6 +150,8 @@ export function ChatView({ onChatResult }: ChatViewProps) {
           support: hasSupport(data.emotional_support) ? data.emotional_support : null,
           emotion: data.emotion || null,
           turnId: data.turn_id || null,
+          cbtPrompt: cbtPrompt || null,
+          crisisAlert,
         },
       ]);
       queryClient.invalidateQueries({ queryKey: queryKeys.messages });
@@ -142,13 +220,17 @@ export function ChatView({ onChatResult }: ChatViewProps) {
 
   return (
     <div className="h-full flex flex-col">
-      <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto">
+      <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden">
         <div
           className={cn(
             "mx-auto w-full max-w-2xl px-4 sm:px-5 py-6 flex flex-col gap-3.5",
             empty && "min-h-full justify-center",
           )}
         >
+          {showCrisisBanner ? (
+            <ChatCrisisBanner onOpenCrisis={onOpenCrisis} />
+          ) : null}
+
           {empty ? (
             <EmptyState
               icon={Sparkles}
@@ -159,9 +241,9 @@ export function ChatView({ onChatResult }: ChatViewProps) {
                   : "随便说一句、一个念头，或者从下面挑一个开头。"
               }
               action={
-                <div className="flex flex-wrap justify-center gap-2 pt-1">
+                <div className="flex flex-wrap sm:justify-center gap-2 pt-1 px-2 -mx-2">
                   {quickPrompts.map((p) => (
-                    <button key={p} type="button" onClick={() => submitMessage(p)}>
+                    <button key={p} type="button" onClick={() => submitMessage(p)} className="shrink-0">
                       <Chip className="cursor-pointer transition-colors hover:border-line-strong hover:bg-surface">
                         {p}
                       </Chip>
@@ -193,8 +275,24 @@ export function ChatView({ onChatResult }: ChatViewProps) {
       </div>
 
       <div className="shrink-0 glass border-t border-line">
-        <form onSubmit={onSubmit} className="mx-auto w-full max-w-2xl px-4 sm:px-5 py-3">
+        {!isLoggedIn ? <GuestBanner /> : null}
+        <form onSubmit={onSubmit} className="composer-area mx-auto w-full max-w-2xl px-4 sm:px-5 py-3">
           <div className="flex items-end gap-2 rounded-3xl bg-surface border border-line shadow-card focus-within:border-accent/40 transition-colors p-1.5 pl-4">
+            {voiceSupported ? (
+              <button
+                type="button"
+                aria-label={recording ? "停止录音" : "语音输入"}
+                onClick={onMicClick}
+                className={cn(
+                  "grid place-items-center h-10 w-10 rounded-full shrink-0 transition-all duration-200 active:scale-95",
+                  recording
+                    ? "bg-red-100 text-red-500 animate-pulse ring-2 ring-red-400"
+                    : "bg-surface-2 text-muted hover:text-ink",
+                )}
+              >
+                <Mic size={19} strokeWidth={2.2} />
+              </button>
+            ) : null}
             <textarea
               ref={textareaRef}
               aria-label="消息"
@@ -219,7 +317,7 @@ export function ChatView({ onChatResult }: ChatViewProps) {
               <ArrowUp size={19} strokeWidth={2.2} />
             </button>
           </div>
-          <p className="text-[11.5px] text-faint text-center mt-2">Enter 发送 · Shift+Enter 换行</p>
+          <p className="pointer-coarse:hidden text-[11.5px] text-faint text-center mt-2">Enter 发送 · Shift+Enter 换行</p>
         </form>
       </div>
     </div>
@@ -267,8 +365,8 @@ function MessageRow({
         className={cn(
           "max-w-[85%] px-4 py-2.5 text-[14.5px] leading-relaxed whitespace-pre-wrap",
           isUser
-            ? "bg-accent text-accent-fg rounded-2xl rounded-br-md shadow-soft"
-            : "bg-surface text-ink border border-line rounded-2xl rounded-bl-md shadow-soft",
+            ? "bg-accent text-accent-fg rounded-2xl rounded-br-md shadow-soft break-words"
+            : "bg-surface text-ink border border-line rounded-2xl rounded-bl-md shadow-soft break-words",
         )}
       >
         {message.text}
@@ -277,6 +375,8 @@ function MessageRow({
       {!isUser && message.sources && message.sources.length > 0 ? (
         <SourceList sources={message.sources} />
       ) : null}
+
+      {!isUser && message.cbtPrompt ? <ChatCbtPrompt data={message.cbtPrompt} /> : null}
 
       {!isUser && message.support ? <SupportReveal support={message.support} /> : null}
 

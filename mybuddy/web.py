@@ -19,6 +19,7 @@ from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 
 from mybuddy.api import AppState, _frontend_index_path, _frontend_not_built_html
+from mybuddy.auth.manager import AuthManager
 
 logger = logging.getLogger(__name__)
 
@@ -121,17 +122,20 @@ class DemoHandler(BaseHTTPRequestHandler):
             if path == "/api/status":
                 self._send_json(self.server.state.status_payload())
                 return
-            if path == "/api/persona":
-                self._send_json(self.server.state.persona_payload())
-                return
             if path == "/api/profile":
                 self._send_json(self.server.state.profile_payload())
                 return
             if path == "/api/messages":
+                user_id = _get_user_id_from_request(self.headers.get("Cookie"))
+                if user_id is None:
+                    self._send_json({"messages": []})
+                    return
                 self._send_json(
                     self.server.state.messages_payload(
                         limit=_first_int(query.get("limit"), default=100),
                         session_id=_first_str(query.get("session_id")),
+                        user_id=user_id,
+                        user_scoped=True,
                     )
                 )
                 return
@@ -150,9 +154,68 @@ class DemoHandler(BaseHTTPRequestHandler):
             if path == "/api/users":
                 self._send_json(self.server.state.users_payload())
                 return
-            user_persona_id = _match_user_persona_route(path)
-            if user_persona_id is not None:
-                self._send_json(self.server.state.user_persona_payload(user_persona_id))
+            if path == "/api/auth/me":
+                user_id = _get_user_id_from_request(self.headers.get("Cookie"))
+                if user_id is None:
+                    self._send_json({})
+                    return
+                user = self.server.state.auth.get_user(user_id) if self.server.state.auth else None
+                self._send_json(user if user is not None else {})
+                return
+            if path == "/api/safety/resources":
+                from mybuddy.safety.constants import HOTLINES
+                self._send_json({"hotlines": HOTLINES})
+                return
+            if path == "/api/mood":
+                user_id = _get_user_id_from_request(self.headers.get("Cookie"))
+                if user_id is None:
+                    self._send_json({"records": [], "daily_averages": []})
+                    return
+                self._send_json(self.server.state.mood_payload(
+                    user_id, limit=_first_int(query.get("limit"), default=30)))
+                return
+            if path == "/api/mood/trends":
+                user_id = _get_user_id_from_request(self.headers.get("Cookie"))
+                if user_id is None:
+                    self._send_json({"daily_averages": []})
+                    return
+                self._send_json(self.server.state.mood_trends_payload(
+                    user_id, days=_first_int(query.get("days"), default=30)))
+                return
+            if path == "/api/mood/stats":
+                user_id = _get_user_id_from_request(self.headers.get("Cookie"))
+                if user_id is None:
+                    self._send_json({"total_records": 0, "streak": 0, "categories": {}})
+                    return
+                self._send_json(self.server.state.mood_stats_payload(user_id))
+                return
+            if path == "/api/assessment/status":
+                user_id = _get_user_id_from_request(self.headers.get("Cookie"))
+                if user_id is None:
+                    self._send_json({"phq9": [], "gad7": []})
+                    return
+                self._send_json(self.server.state.assessment_status_payload(user_id))
+                return
+            if path == "/api/assessment/history":
+                user_id = _get_user_id_from_request(self.headers.get("Cookie"))
+                if user_id is None:
+                    self._send_json({"cycles": []})
+                    return
+                self._send_json(self.server.state.assessment_history_payload(user_id))
+                return
+            if path == "/api/cbt/status":
+                user_id = _get_user_id_from_request(self.headers.get("Cookie"))
+                if user_id is None:
+                    self._send_json({"events": []})
+                    return
+                self._send_json(self.server.state.cbt_status_payload(user_id))
+                return
+            if path == "/api/user/export":
+                user_id = _get_user_id_from_request(self.headers.get("Cookie"))
+                if user_id is None:
+                    self._send_error(HTTPStatus.UNAUTHORIZED, "请先登录")
+                    return
+                self._send_json(self.server.state.export_user_data_payload(user_id))
                 return
             self._send_error(HTTPStatus.NOT_FOUND, "not found")
         except ValueError as e:
@@ -163,7 +226,19 @@ class DemoHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802
         try:
             path = urlparse(self.path).path
+            if path == "/api/transcribe":
+                length = int(self.headers.get("Content-Length", "0") or "0")
+                if length <= 0:
+                    self._send_error(HTTPStatus.BAD_REQUEST, "empty body")
+                    return
+                audio_bytes = self.rfile.read(length)
+                payload = self.server.bg.run(self.server.state.transcribe_payload(audio_bytes))
+                self._send_json(payload)
+                return
             data = self._read_json()
+            if path == "/api/chat/reset":
+                self._send_json(self.server.state.reset_chat_context())
+                return
             if path == "/api/chat":
                 message = str(data.get("message", "")).strip()
                 if not message:
@@ -171,7 +246,77 @@ class DemoHandler(BaseHTTPRequestHandler):
                     return
                 # 投递到常驻 loop:回复返回后,agent 起的后台抽取/复盘 task 仍能跑完
                 # (不像 asyncio.run 那样在请求结束时把它们一起取消)。
-                payload = self.server.bg.run(self.server.state.chat_payload(message))
+                user_id = _get_user_id_from_request(self.headers.get("Cookie"))
+                payload = self.server.bg.run(self.server.state.chat_payload(message, user_id=user_id))
+                self._send_json(payload)
+                return
+            if path == "/api/auth/register":
+                username = str(data.get("username", "")).strip()
+                password = str(data.get("password", ""))
+                if not username or not password:
+                    self._send_error(HTTPStatus.BAD_REQUEST, "username and password required")
+                    return
+                try:
+                    result = self.server.state.auth.register(username, password)
+                    self.send_response(HTTPStatus.OK)
+                    self.send_header("Content-Type", "application/json; charset=utf-8")
+                    self.send_header("Set-Cookie", AuthManager.make_cookie(result["user_id"]))
+                    body = json.dumps({"user_id": result["user_id"], "username": result["username"]}, ensure_ascii=False).encode("utf-8")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                    return
+                except ValueError as e:
+                    self._send_error(HTTPStatus.BAD_REQUEST, str(e))
+                    return
+            if path == "/api/auth/login":
+                username = str(data.get("username", "")).strip()
+                password = str(data.get("password", ""))
+                if not username or not password:
+                    self._send_error(HTTPStatus.BAD_REQUEST, "username and password required")
+                    return
+                try:
+                    result = self.server.state.auth.login(username, password)
+                    self.send_response(HTTPStatus.OK)
+                    self.send_header("Content-Type", "application/json; charset=utf-8")
+                    self.send_header("Set-Cookie", AuthManager.make_cookie(result["user_id"]))
+                    body = json.dumps({"user_id": result["user_id"], "username": result["username"]}, ensure_ascii=False).encode("utf-8")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                    return
+                except ValueError as e:
+                    self._send_error(HTTPStatus.UNAUTHORIZED, str(e))
+                    return
+            if path == "/api/auth/logout":
+                self.send_response(HTTPStatus.OK)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Set-Cookie", AuthManager.clear_cookie())
+                body = json.dumps({"ok": True}).encode("utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            if path == "/api/mood/checkin":
+                user_id = _get_user_id_from_request(self.headers.get("Cookie"))
+                if user_id is None:
+                    self._send_error(HTTPStatus.UNAUTHORIZED, "请先登录")
+                    return
+                mood_score = int(data.get("mood_score", 5))
+                notes = data.get("notes")
+                payload = self.server.state.mood_checkin_payload(user_id, mood_score, notes)
+                self._send_json(payload)
+                return
+            if path == "/api/messages/import":
+                user_id = _get_user_id_from_request(self.headers.get("Cookie"))
+                if user_id is None:
+                    self._send_error(HTTPStatus.UNAUTHORIZED, "请先登录")
+                    return
+                messages = data.get("messages") or []
+                if not isinstance(messages, list):
+                    self._send_error(HTTPStatus.BAD_REQUEST, "messages must be a list")
+                    return
+                payload = self.server.state.import_messages_payload(user_id, messages)
                 self._send_json(payload)
                 return
             if path == "/api/feedback":
@@ -180,10 +325,6 @@ class DemoHandler(BaseHTTPRequestHandler):
                     self._send_error(HTTPStatus.BAD_REQUEST, "label is required")
                     return
                 payload = self.server.state.feedback_payload(label, data.get("turn_id"))
-                self._send_json(payload)
-                return
-            if path == "/api/persona":
-                payload = self.server.state.update_persona_payload(data)
                 self._send_json(payload)
                 return
             if path == "/api/notes":
@@ -201,15 +342,6 @@ class DemoHandler(BaseHTTPRequestHandler):
                 )
                 self._send_json(payload)
                 return
-            user_qq_id = _match_user_qq_route(path)
-            if user_qq_id is not None:
-                payload = self.server.state.bind_user_qq_payload(
-                    user_qq_id,
-                    external_id=str(data.get("external_id", "")),
-                    display_name=data.get("display_name"),
-                )
-                self._send_json(payload)
-                return
             self._send_error(HTTPStatus.NOT_FOUND, "not found")
         except RuntimeError as e:
             self._send_error(HTTPStatus.BAD_REQUEST, str(e))
@@ -222,15 +354,6 @@ class DemoHandler(BaseHTTPRequestHandler):
         try:
             path = urlparse(self.path).path
             data = self._read_json()
-            user_persona_id = _match_user_persona_route(path)
-            if user_persona_id is not None:
-                payload = self.server.state.update_user_persona_payload(user_persona_id, data)
-                self._send_json(payload)
-                return
-            if path == "/api/persona":
-                payload = self.server.state.update_persona_payload(data)
-                self._send_json(payload)
-                return
             self._send_error(HTTPStatus.NOT_FOUND, "not found")
         except RuntimeError as e:
             self._send_error(HTTPStatus.BAD_REQUEST, str(e))
@@ -303,10 +426,6 @@ class DemoHandler(BaseHTTPRequestHandler):
     def do_DELETE(self) -> None:  # noqa: N802
         try:
             path = urlparse(self.path).path
-            user_persona_id = _match_user_persona_route(path)
-            if user_persona_id is not None:
-                self._send_json(self.server.state.delete_user_persona_payload(user_persona_id))
-                return
             if path.startswith("/api/profile/fields/"):
                 key = unquote(path.removeprefix("/api/profile/fields/"))
                 self._send_json(self.server.state.delete_profile_field_payload(key))
@@ -318,6 +437,30 @@ class DemoHandler(BaseHTTPRequestHandler):
             if path.startswith("/api/notes/"):
                 note_id = int(path.removeprefix("/api/notes/"))
                 self._send_json(self.server.state.delete_note_payload(note_id))
+                return
+            if path == "/api/user/data":
+                user_id = _get_user_id_from_request(self.headers.get("Cookie"))
+                if user_id is None:
+                    self._send_error(HTTPStatus.UNAUTHORIZED, "请先登录")
+                    return
+                self._send_json(self.server.state.clear_user_data_payload(user_id))
+                return
+            if path == "/api/auth/account":
+                user_id = _get_user_id_from_request(self.headers.get("Cookie"))
+                if user_id is None:
+                    self._send_error(HTTPStatus.UNAUTHORIZED, "请先登录")
+                    return
+                self._send_json(self.server.state.delete_account_payload(user_id))
+                return
+            if path == "/api/assessment/status":
+                user_id = _get_user_id_from_request(self.headers.get("Cookie"))
+                if user_id is None:
+                    self._send_error(HTTPStatus.UNAUTHORIZED, "请先登录")
+                    return
+                from mybuddy.assessment import ConversationalAssessmentTracker
+                tracker = ConversationalAssessmentTracker(self.server.state.engine, user_id)
+                tracker.reset_cycle()
+                self._send_json({"ok": True})
                 return
             self._send_error(HTTPStatus.NOT_FOUND, "not found")
         except RuntimeError as e:
@@ -403,20 +546,6 @@ def _match_user_route(path: str) -> int | None:
     return None
 
 
-def _match_user_qq_route(path: str) -> int | None:
-    parts = path.strip("/").split("/")
-    if len(parts) == 4 and parts[:2] == ["api", "users"] and parts[3] == "qq":
-        return int(parts[2])
-    return None
-
-
-def _match_user_persona_route(path: str) -> int | None:
-    parts = path.strip("/").split("/")
-    if len(parts) == 4 and parts[:2] == ["api", "users"] and parts[3] == "persona":
-        return int(parts[2])
-    return None
-
-
 def _first_int(values: list[str] | None, *, default: int) -> int:
     if not values:
         return default
@@ -431,3 +560,9 @@ def _first_str(values: list[str] | None) -> str | None:
         return None
     clean = values[0].strip()
     return clean or None
+
+
+def _get_user_id_from_request(cookie_header: str | None) -> int | None:
+    """从 Cookie header 中提取已验证的 user_id。"""
+    from mybuddy.auth.manager import get_user_id_from_cookie
+    return get_user_id_from_cookie(cookie_header)

@@ -2,18 +2,16 @@
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 from sqlalchemy import Engine
 from sqlalchemy.exc import IntegrityError
 
 from mybuddy._time import utcnow
-from mybuddy.config import PersonaConfig
 
 from .db import session_scope
-from .models import ExternalAccount, InboundEvent, User, UserPersona, UserUsage
+from .models import ExternalAccount, InboundEvent, User, UserUsage
 
 DEFAULT_LOCAL_EXTERNAL_ID = "local"
 
@@ -46,24 +44,6 @@ class UserSummaryRecord:
     external_accounts: tuple[ExternalAccountRecord, ...]
     usage_today: dict[str, int]
     has_custom_persona: bool = False
-
-
-@dataclass(frozen=True)
-class UserPersonaRecord:
-    user_id: int
-    persona: PersonaConfig
-    updated_at: datetime
-
-    @property
-    def version(self) -> str:
-        return self.updated_at.isoformat()
-
-
-@dataclass(frozen=True)
-class ResolvedPersonaRecord:
-    persona: PersonaConfig
-    version: str
-    inherits_default: bool
 
 
 def _user_record(row: User) -> UserRecord:
@@ -104,9 +84,6 @@ def list_user_summaries(engine: Engine) -> list[UserSummaryRecord]:
             .filter(UserUsage.day == day)
             .all()
         )
-        persona_rows = s.query(UserPersona.user_id).filter(UserPersona.user_id.in_(user_ids)).all()
-        custom_persona_user_ids = {int(row[0]) for row in persona_rows}
-
         accounts: dict[int, list[ExternalAccountRecord]] = {user_id: [] for user_id in user_ids}
         usage: dict[int, dict[str, int]] = {user_id: {} for user_id in user_ids}
         for row in account_rows:
@@ -119,7 +96,6 @@ def list_user_summaries(engine: Engine) -> list[UserSummaryRecord]:
                 user=_user_record(row),
                 external_accounts=tuple(accounts.get(row.id, ())),
                 usage_today=usage.get(row.id, {}),
-                has_custom_persona=row.id in custom_persona_user_ids,
             )
             for row in users
         ]
@@ -172,69 +148,6 @@ def set_user_daily_limit(engine: Engine, user_id: int, daily_message_limit: int)
         row.daily_message_limit = limit
         s.flush()
         return _user_record(row)
-
-
-def get_user_persona(engine: Engine, user_id: int) -> UserPersonaRecord | None:
-    with session_scope(engine) as s:
-        row = s.query(UserPersona).filter(UserPersona.user_id == user_id).one_or_none()
-        return _user_persona_record(row) if row is not None else None
-
-
-def resolve_user_persona(
-    engine: Engine,
-    *,
-    user_id: int,
-    default_persona: PersonaConfig,
-) -> ResolvedPersonaRecord:
-    record = get_user_persona(engine, user_id)
-    if record is None:
-        return ResolvedPersonaRecord(
-            persona=default_persona.model_copy(deep=True),
-            version="default",
-            inherits_default=True,
-        )
-    return ResolvedPersonaRecord(
-        persona=record.persona,
-        version=record.version,
-        inherits_default=False,
-    )
-
-
-def set_user_persona(
-    engine: Engine,
-    *,
-    user_id: int,
-    persona: PersonaConfig,
-) -> UserPersonaRecord:
-    with session_scope(engine) as s:
-        user = s.get(User, user_id)
-        if user is None:
-            raise ValueError(f"user not found: {user_id}")
-        row = s.query(UserPersona).filter(UserPersona.user_id == user_id).one_or_none()
-        now = utcnow()
-        persona_json = json.dumps(persona.model_dump(), ensure_ascii=False, sort_keys=True)
-        if row is None:
-            row = UserPersona(
-                user_id=user_id,
-                persona_json=persona_json,
-                created_at=now,
-                updated_at=now,
-            )
-            s.add(row)
-        else:
-            row.persona_json = persona_json
-            row.updated_at = now
-        s.flush()
-        return _user_persona_record(row)
-
-
-def delete_user_persona(engine: Engine, user_id: int) -> bool:
-    with session_scope(engine) as s:
-        row = s.query(UserPersona).filter(UserPersona.user_id == user_id).one_or_none()
-        if row is None:
-            return False
-        s.delete(row)
-        return True
 
 
 def bind_external_account(
@@ -500,13 +413,3 @@ def _clean_external_id(value: str) -> str:
     return clean
 
 
-def _user_persona_record(row: UserPersona) -> UserPersonaRecord:
-    try:
-        payload = json.loads(row.persona_json)
-    except json.JSONDecodeError as e:
-        raise RuntimeError(f"user persona json is invalid:user_id={row.user_id}") from e
-    return UserPersonaRecord(
-        user_id=row.user_id,
-        persona=PersonaConfig.model_validate(payload),
-        updated_at=row.updated_at,
-    )

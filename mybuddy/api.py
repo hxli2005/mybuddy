@@ -16,8 +16,9 @@ from typing import TYPE_CHECKING, Any
 import yaml
 from pydantic import BaseModel, Field
 
+from mybuddy._time import utcnow
 from mybuddy.agent import Agent
-from mybuddy.config import Config, PersonaConfig, ensure_dirs, load_config
+from mybuddy.config import Config, ensure_dirs, load_config
 from mybuddy.emotion import EmotionDetector, EmotionTracker
 from mybuddy.learning import (
     FeedbackBus,
@@ -29,9 +30,12 @@ from mybuddy.learning import (
     make_trajectory_subscriber,
 )
 from mybuddy.llm import Message as LLMMessage
-from mybuddy.llm import Role, make_provider
+from mybuddy.llm import Role, Transcriber, make_provider, make_transcriber
 from mybuddy.memory import LongTermMemory, MemoryManager, UserProfile
+from mybuddy.auth import AuthManager
+from mybuddy.safety import CrisisDetector, InputModerator, OutputModerator
 from mybuddy.scheduler import MyBuddyScheduler
+from mybuddy.therapy import CbtGuide
 from mybuddy.storage import (
     Note,
     Reminder,
@@ -39,17 +43,14 @@ from mybuddy.storage import (
     append_message,
     bind_external_account,
     create_user,
-    delete_user_persona,
     drain_pending,
     get_user,
     init_db,
     list_messages,
     list_undelivered,
     list_user_summaries,
-    resolve_user_persona,
     session_scope,
     set_user_daily_limit,
-    set_user_persona,
     set_user_status,
 )
 from mybuddy.tools import (
@@ -85,20 +86,6 @@ class MemoryUpdateRequest(BaseModel):
     metadata: dict[str, Any] | None = None
 
 
-class PersonaUpdateRequest(BaseModel):
-    name: str | None = None
-    style: str | None = None
-    language: str | None = None
-    relationship: str | None = None
-    tone: str | None = None
-    boundaries: str | None = None
-    response_habits: list[str] | None = None
-    roleplay_style: dict[str, Any] | None = None
-    character_life: dict[str, Any] | None = None
-    relationship_model: dict[str, Any] | None = None
-    address_user: str | None = None
-
-
 class NoteCreateRequest(BaseModel):
     content: str = Field(min_length=1)
     title: str | None = None
@@ -121,13 +108,23 @@ class UserUpdateRequest(BaseModel):
     daily_message_limit: int | None = Field(default=None, ge=0)
 
 
-class UserQQBindRequest(BaseModel):
-    external_id: str = Field(min_length=1)
-    display_name: str | None = None
+class AuthRequest(BaseModel):
+    username: str
+    password: str
 
 
-class UserPersonaUpdateRequest(PersonaUpdateRequest):
-    pass
+class MoodCheckinRequest(BaseModel):
+    mood_score: int = Field(ge=0, le=10)
+    notes: str | None = None
+
+
+class ImportedMessage(BaseModel):
+    role: str
+    content: str
+
+
+class MessagesImportRequest(BaseModel):
+    messages: list[ImportedMessage]
 
 
 class ReminderUpdateRequest(BaseModel):
@@ -152,6 +149,8 @@ class AppState:
     scheduler: MyBuddyScheduler | None = None
     agent: Agent | None = None
     feedback_bus: FeedbackBus | None = None
+    auth: AuthManager | None = None
+    transcriber: Transcriber | None = None
     last_turn_id: str | None = None
     last_triggered_skills: list[str] = field(default_factory=list)
 
@@ -159,6 +158,7 @@ class AppState:
         cfg = load_config(self.config_path)
         ensure_dirs(cfg)
         engine = init_db(cfg.paths.db_file)
+        self.auth = AuthManager(engine)
         ltm = LongTermMemory(
             persist_dir=cfg.paths.chroma_dir,
             embedding_model=cfg.memory.embedding_model,
@@ -200,6 +200,10 @@ class AppState:
                 scheduler=scheduler,
                 skill_registry=skill_registry,
                 skill_curator=SkillCurator(provider, skill_registry, model=cfg.llm.small_model),
+                crisis_detector=CrisisDetector(provider, cfg.llm.small_model),
+                input_moderator=InputModerator(provider, cfg.llm.small_model),
+                output_moderator=OutputModerator(),
+                cbt_guide=CbtGuide(),
             )
             set_context(
                 engine=engine,
@@ -220,10 +224,172 @@ class AppState:
         self.scheduler = scheduler
         self.agent = agent
         self.feedback_bus = feedback_bus
+        self.transcriber = make_transcriber(cfg)
 
     def shutdown(self) -> None:
         if self.scheduler is not None:
             self.scheduler.shutdown()
+
+    # ----- 情绪追踪方法 -----
+
+    def _mood_tracker(self) -> "MoodTracker":
+        from mybuddy.mood import MoodTracker
+        return MoodTracker(self.engine)
+
+    def mood_payload(self, user_id: int, limit: int = 30) -> dict[str, Any]:
+        """查询用户情绪记录。"""
+        return {"records": self._mood_tracker().records(user_id, limit)}
+
+    def mood_trends_payload(self, user_id: int, days: int = 30) -> dict[str, Any]:
+        return {"daily_averages": self._mood_tracker().trends(user_id, days)}
+
+    def mood_stats_payload(self, user_id: int) -> dict[str, Any]:
+        return self._mood_tracker().stats(user_id)
+
+    def mood_checkin_payload(self, user_id: int, mood_score: int, notes: str | None) -> dict[str, Any]:
+        record_id = self._mood_tracker().checkin(user_id, mood_score, notes)
+        return {"ok": True, "id": record_id}
+
+    # ----- 语音转文字 -----
+
+    async def transcribe_payload(self, audio_bytes: bytes) -> dict[str, Any]:
+        if self.transcriber is None:
+            raise RuntimeError("语音转文字未启用,请在 config.yaml 中设置 transcription.enabled: true")
+        text = await self.transcriber.transcribe(audio_bytes)
+        return {"text": text}
+
+    # ----- 评估状态方法 -----
+
+    def _assessment_tracker(self, user_id: int | None):
+        """登录用户 → DB 追踪器;访客 → 进程内存追踪器。"""
+        from mybuddy.assessment import ConversationalAssessmentTracker, get_guest_tracker
+        if user_id is None:
+            return get_guest_tracker()
+        return ConversationalAssessmentTracker(_require(self.engine), user_id)
+
+    async def _try_assessment_scoring(self, user_id: int | None, user_message: str) -> None:
+        """无感化评估:检查是否有待评分维度,尝试自动评分(失败静默)。"""
+        try:
+            from mybuddy.assessment import AssessmentScorer
+
+            tracker = self._assessment_tracker(user_id)
+            asked = tracker.get_asked_dimensions()
+            if not asked:
+                return
+            scorer = AssessmentScorer(self.provider, self.cfg.llm.small_model)
+            pending_phq9 = [d["dimension_index"] for d in asked if d["assessment_type"] == "phq9"]
+            pending_gad7 = [d["dimension_index"] for d in asked if d["assessment_type"] == "gad7"]
+            result = await scorer.try_score(
+                user_message,
+                pending_phq9_indices=pending_phq9 or None,
+                pending_gad7_indices=pending_gad7 or None,
+            )
+            if result:
+                tracker.record_score(
+                    result["assessment_type"],
+                    result["dimension_index"],
+                    result["score"],
+                    user_message[:200],
+                )
+        except Exception:
+            pass
+
+    def assessment_status_payload(self, user_id: int) -> dict[str, Any]:
+        from mybuddy.assessment import ConversationalAssessmentTracker
+        engine = _require(self.engine)
+        tracker = ConversationalAssessmentTracker(engine, user_id)
+        return tracker.get_all_dimensions()
+
+    def assessment_history_payload(self, user_id: int) -> dict[str, Any]:
+        from mybuddy.assessment import ConversationalAssessmentTracker
+        engine = _require(self.engine)
+        tracker = ConversationalAssessmentTracker(engine, user_id)
+        return {"cycles": tracker.get_history()}
+
+    # ----- CBT 状态方法 -----
+
+    def reset_chat_context(self) -> dict[str, Any]:
+        """清空 agent 短期记忆,重置对话上下文(访客 + 登录用户通用)。"""
+        if self.agent is not None:
+            self.agent.reset_context()
+        return {"ok": True}
+
+    def clear_user_data_payload(self, user_id: int) -> dict[str, Any]:
+        """清除用户所有数据(mood/assessment/cbt/messages)。
+
+        同时清理未归属消息(None user_id),覆盖 cookie 修复前遗留的旧消息。
+        """
+        engine = _require(self.engine)
+        from mybuddy.storage.models import (
+            AssessmentCycle,
+            AssessmentDimension,
+            CbtEvent,
+            ChatSession,
+            Message,
+            MoodRecord,
+            SafetyEvent,
+        )
+        with session_scope(engine) as s:
+            for model in [MoodRecord, SafetyEvent, AssessmentDimension, AssessmentCycle, CbtEvent, ChatSession]:
+                s.query(model).filter(model.user_id == user_id).delete()
+            s.query(Message).filter(Message.session_id.like(f"user-{user_id}%")).delete()
+            s.query(Message).filter(Message.user_id == user_id).delete()
+            s.query(Message).filter(Message.user_id.is_(None)).delete()
+        return {"ok": True}
+
+    def import_messages_payload(self, user_id: int, messages: list[dict[str, str]]) -> dict[str, Any]:
+        """把访客对话导入登录账户(上限 50 条)。"""
+        engine = _require(self.engine)
+        imported = 0
+        for item in messages[:50]:
+            role = str(item.get("role") or "").strip()
+            content = str(item.get("content") or "").strip()
+            if role not in ("user", "assistant") or not content:
+                continue
+            append_message(
+                engine,
+                session_id=f"user-{user_id}",
+                role=role,
+                content=content,
+                meta={"source": "guest_import"},
+                user_id=user_id,
+            )
+            imported += 1
+        return {"ok": True, "imported": imported}
+
+    def export_user_data_payload(self, user_id: int) -> dict[str, Any]:
+        """导出该用户全部个人数据(JSON)。"""
+        engine = _require(self.engine)
+        from mybuddy.assessment import ConversationalAssessmentTracker
+        from mybuddy.mood import MoodTracker
+        from mybuddy.therapy import CbtTracker
+
+        tracker = ConversationalAssessmentTracker(engine, user_id)
+        return {
+            "exported_at": utcnow().isoformat(),
+            "user_id": user_id,
+            "mood_records": MoodTracker(engine).records(user_id, limit=1000),
+            "mood_stats": MoodTracker(engine).stats(user_id),
+            "assessment_status": tracker.get_all_dimensions(),
+            "assessment_history": tracker.get_history(limit=100),
+            "cbt_events": CbtTracker(engine, user_id).get_events(limit=200),
+            "messages": list_messages(engine, limit=500, user_id=user_id, user_scoped=True),
+        }
+
+    def delete_account_payload(self, user_id: int) -> dict[str, Any]:
+        """删除账户:清空全部数据并移除用户行。"""
+        self.clear_user_data_payload(user_id)
+        engine = _require(self.engine)
+        from mybuddy.storage.models import User
+        with session_scope(engine) as s:
+            s.query(User).filter(User.id == user_id).delete()
+        return {"ok": True}
+
+    def cbt_status_payload(self, user_id: int) -> dict[str, Any]:
+        from mybuddy.therapy import CbtTracker
+        tracker = CbtTracker(self.engine, user_id)
+        events = tracker.get_events()
+        return {"events": events}
 
     def status_payload(self) -> dict[str, Any]:
         cfg = _require(self.cfg)
@@ -237,39 +403,7 @@ class AppState:
             "memory_dir": cfg.paths.chroma_dir,
         }
 
-    def persona_payload(self) -> dict[str, Any]:
-        cfg = _require(self.cfg)
-        return {"persona": cfg.persona.model_dump()}
-
-    def update_persona_payload(self, updates: dict[str, Any]) -> dict[str, Any]:
-        cfg = _require(self.cfg)
-        merged = cfg.persona.model_dump()
-        merged.update(_clean_persona_updates(updates))
-        persona = PersonaConfig.model_validate(merged)
-        _write_persona_config(self.config_path, persona)
-
-        updated_cfg = load_config(self.config_path)
-        self._sync_config(updated_cfg)
-        return {"persona": updated_cfg.persona.model_dump()}
-
-    def _sync_config(self, cfg: Config) -> None:
-        self.cfg = cfg
-        if self.agent is not None:
-            self.agent._config = cfg
-            self.agent._memory._config = cfg
-        if self.scheduler is not None:
-            self.scheduler._config = cfg
-            if self.scheduler.running:
-                self.scheduler.schedule_daily_greeting(cfg.scheduler.daily_greeting)
-        set_context(
-            engine=self.engine,
-            config=cfg,
-            scheduler=self.scheduler,
-            provider=self.provider,
-            long_term=self.ltm,
-        )
-
-    async def chat_payload(self, message: str) -> dict[str, Any]:
+    async def chat_payload(self, message: str, user_id: int | None = None) -> dict[str, Any]:
         if self.agent is None:
             raise RuntimeError("LLM api_key 未配置,无法对话")
         # 工具上下文是 ContextVar,按线程/按 task 隔离。startup() 在主线程(或 FastAPI
@@ -291,8 +425,47 @@ class AppState:
                 session_id=self.agent.session_id,
                 items=drain_pending(engine),
                 add_to_short_term=self.agent._memory.add_message,
+                user_id=user_id,
             )
-            result = await self.agent.run(message.strip())
+            # 无感化评估:选取待投放维度,注入system prompt。
+            # 登录用户走 DB 追踪,访客走内存追踪(不持久化);危机状态下不投放。
+            assessment_hint = ""
+            try:
+                # 首条消息时自动创建活跃会话(chat 类型)
+                from mybuddy.session import SessionManager
+                SessionManager(engine).get_or_create_active(user_id)
+            except Exception:
+                pass
+            try:
+                from mybuddy.safety import CrisisLevel, classify_crisis_level
+
+                if classify_crisis_level(message) in (CrisisLevel.NONE, CrisisLevel.LOW):
+                    tracker = self._assessment_tracker(user_id)
+                    tracker.ensure_dimensions()
+                    _assessment_hint_dim = tracker.pick_next_dimension()
+                    if _assessment_hint_dim:
+                        assessment_hint = (
+                            f"你可以自然地关心一下用户最近的「{_assessment_hint_dim['dimension_name']}」。"
+                            f"参考: {_assessment_hint_dim['hint']} 不要暴露这是在评估,像平常聊天一样自然地问。"
+                        )
+                        tracker.mark_asked(_assessment_hint_dim["assessment_type"], _assessment_hint_dim["dimension_index"])
+            except Exception:
+                pass
+
+            # 安全门(输入审核/危机检测)、CBT 机会检测均已集中在 Agent.run 内部
+            result = await self.agent.run(
+                message.strip(), assessment_hint=assessment_hint, user_id=user_id
+            )
+
+            # 自动记录情绪(仅登录用户)
+            if result.emotion is not None and user_id is not None:
+                from mybuddy.mood import MoodTracker
+                MoodTracker(engine).record_from_emotion(user_id, result.emotion)
+
+            # 无感化评估:检查是否有待评分维度并尝试评分(访客同样参与,结果仅在内存)
+            if self.provider is not None:
+                await self._try_assessment_scoring(user_id, message.strip())
+
             result_text = result.text
             tool_calls = list(result.tool_calls)
             deterministic_tools = await _run_deterministic_demo_tools(message, tool_calls, self)
@@ -304,6 +477,7 @@ class AppState:
                 session_id=self.agent.session_id,
                 items=drain_pending(engine),
                 add_to_short_term=self.agent._memory.add_message,
+                user_id=user_id,
             )
             self.last_turn_id = result.trajectory.turn_id
             self.last_triggered_skills = list(result.triggered_skills)
@@ -318,6 +492,8 @@ class AppState:
                 "triggered_skills": result.triggered_skills,
                 "search_sources": result.search_sources,
                 "pending_messages": pending_before + pending_after,
+                "cbt_prompt": result.cbt_prompt,
+                "crisis_alert": result.crisis_alert,
             }
 
     def feedback_payload(self, label: str, turn_id: str | None = None) -> dict[str, Any]:
@@ -342,9 +518,24 @@ class AppState:
             "fields": p.get_all_fields(),
         }
 
-    def messages_payload(self, *, limit: int = 100, session_id: str | None = None) -> dict[str, Any]:
+    def messages_payload(
+        self,
+        *,
+        limit: int = 100,
+        session_id: str | None = None,
+        user_id: int | None = None,
+        user_scoped: bool = False,
+    ) -> dict[str, Any]:
         engine = _require(self.engine)
-        return {"messages": list_messages(engine, limit=limit, session_id=session_id)}
+        return {
+            "messages": list_messages(
+                engine,
+                limit=limit,
+                session_id=session_id,
+                user_id=user_id,
+                user_scoped=user_scoped,
+            )
+        }
 
     def users_payload(self) -> dict[str, Any]:
         engine = _require(self.engine)
@@ -385,83 +576,6 @@ class AppState:
         if updated is None:
             raise RuntimeError(f"测试用户不存在:id={user_id}")
         return {"user": _find_user_summary_payload(engine, user_id)}
-
-    def bind_user_qq_payload(
-        self,
-        user_id: int,
-        *,
-        external_id: str,
-        display_name: str | None = None,
-    ) -> dict[str, Any]:
-        clean_external_id = external_id.strip()
-        if not clean_external_id:
-            raise RuntimeError("QQ external_id 为空")
-        engine = _require(self.engine)
-        try:
-            bind_external_account(
-                engine,
-                user_id=user_id,
-                provider="qq",
-                external_id=clean_external_id,
-                display_name=(display_name or "").strip(),
-            )
-        except ValueError as e:
-            raise RuntimeError(str(e)) from e
-        return {"user": _find_user_summary_payload(engine, user_id)}
-
-    def user_persona_payload(self, user_id: int) -> dict[str, Any]:
-        engine = _require(self.engine)
-        cfg = _require(self.cfg)
-        if get_user(engine, user_id) is None:
-            raise RuntimeError(f"测试用户不存在:id={user_id}")
-        resolved = resolve_user_persona(
-            engine,
-            user_id=user_id,
-            default_persona=cfg.persona,
-        )
-        return {
-            "user_id": user_id,
-            "inherits_default": resolved.inherits_default,
-            "version": resolved.version,
-            "persona": resolved.persona.model_dump(),
-        }
-
-    def update_user_persona_payload(self, user_id: int, updates: dict[str, Any]) -> dict[str, Any]:
-        engine = _require(self.engine)
-        cfg = _require(self.cfg)
-        if get_user(engine, user_id) is None:
-            raise RuntimeError(f"测试用户不存在:id={user_id}")
-        resolved = resolve_user_persona(
-            engine,
-            user_id=user_id,
-            default_persona=cfg.persona,
-        )
-        merged = resolved.persona.model_dump()
-        merged.update(_clean_persona_updates(updates))
-        persona = PersonaConfig.model_validate(merged)
-        try:
-            record = set_user_persona(engine, user_id=user_id, persona=persona)
-        except ValueError as e:
-            raise RuntimeError(str(e)) from e
-        return {
-            "user_id": user_id,
-            "inherits_default": False,
-            "version": record.version,
-            "persona": record.persona.model_dump(),
-        }
-
-    def delete_user_persona_payload(self, user_id: int) -> dict[str, Any]:
-        engine = _require(self.engine)
-        cfg = _require(self.cfg)
-        if get_user(engine, user_id) is None:
-            raise RuntimeError(f"测试用户不存在:id={user_id}")
-        delete_user_persona(engine, user_id)
-        return {
-            "user_id": user_id,
-            "inherits_default": True,
-            "version": "default",
-            "persona": cfg.persona.model_dump(),
-        }
 
     def update_profile_field_payload(self, key: str, value: str) -> dict[str, Any]:
         clean_key = key.strip()
@@ -706,7 +820,7 @@ class AppState:
 
 def create_app(config_path: str = "config.yaml", max_steps: int = 6):
     try:
-        from fastapi import FastAPI, HTTPException
+        from fastapi import FastAPI, HTTPException, Request
         from fastapi.responses import FileResponse
         from fastapi.staticfiles import StaticFiles
     except ModuleNotFoundError as e:  # pragma: no cover - 只有未安装 api extra 时触发
@@ -742,27 +856,27 @@ def create_app(config_path: str = "config.yaml", max_steps: int = 6):
     async def status() -> dict[str, Any]:
         return state.status_payload()
 
-    @app.get("/api/persona")
-    async def persona() -> dict[str, Any]:
-        return state.persona_payload()
-
-    @app.put("/api/persona")
-    async def update_persona(req: PersonaUpdateRequest) -> dict[str, Any]:
-        return state.update_persona_payload(req.model_dump(exclude_none=True))
-
-    @app.post("/api/persona")
-    async def update_persona_post(req: PersonaUpdateRequest) -> dict[str, Any]:
-        return state.update_persona_payload(req.model_dump(exclude_none=True))
+    @app.post("/api/chat/reset")
+    async def chat_reset() -> dict[str, Any]:
+        return state.reset_chat_context()
 
     @app.post("/api/chat")
-    async def chat(req: ChatRequest) -> dict[str, Any]:
+    async def chat(req: ChatRequest, request: Request) -> dict[str, Any]:
         if state.agent is None:
             raise HTTPException(status_code=400, detail="LLM api_key 未配置,无法对话")
-        return await state.chat_payload(req.message)
+        from mybuddy.auth.manager import get_user_id_from_cookie
+        user_id = get_user_id_from_cookie(request.headers.get("Cookie"))
+        return await state.chat_payload(req.message, user_id=user_id)
 
     @app.get("/api/messages")
-    async def messages(limit: int = 100, session_id: str | None = None) -> dict[str, Any]:
-        return state.messages_payload(limit=limit, session_id=session_id)
+    async def messages(request: Request, limit: int = 100, session_id: str | None = None) -> dict[str, Any]:
+        from mybuddy.auth.manager import get_user_id_from_cookie
+        user_id = get_user_id_from_cookie(request.headers.get("Cookie"))
+        if user_id is None:
+            return {"messages": []}
+        return state.messages_payload(
+            limit=limit, session_id=session_id, user_id=user_id, user_scoped=True
+        )
 
     @app.get("/api/users")
     async def users() -> dict[str, Any]:
@@ -786,44 +900,6 @@ def create_app(config_path: str = "config.yaml", max_steps: int = 6):
                 status=req.status,
                 daily_message_limit=req.daily_message_limit,
             )
-        except RuntimeError as e:
-            raise HTTPException(status_code=400, detail=str(e)) from e
-
-    @app.post("/api/users/{user_id}/qq")
-    async def bind_test_user_qq(user_id: int, req: UserQQBindRequest) -> dict[str, Any]:
-        try:
-            return state.bind_user_qq_payload(
-                user_id,
-                external_id=req.external_id,
-                display_name=req.display_name,
-            )
-        except RuntimeError as e:
-            raise HTTPException(status_code=400, detail=str(e)) from e
-
-    @app.get("/api/users/{user_id}/persona")
-    async def user_persona(user_id: int) -> dict[str, Any]:
-        try:
-            return state.user_persona_payload(user_id)
-        except RuntimeError as e:
-            raise HTTPException(status_code=400, detail=str(e)) from e
-
-    @app.put("/api/users/{user_id}/persona")
-    async def update_user_persona(
-        user_id: int,
-        req: UserPersonaUpdateRequest,
-    ) -> dict[str, Any]:
-        try:
-            return state.update_user_persona_payload(
-                user_id,
-                req.model_dump(exclude_none=True),
-            )
-        except RuntimeError as e:
-            raise HTTPException(status_code=400, detail=str(e)) from e
-
-    @app.delete("/api/users/{user_id}/persona")
-    async def delete_user_persona(user_id: int) -> dict[str, Any]:
-        try:
-            return state.delete_user_persona_payload(user_id)
         except RuntimeError as e:
             raise HTTPException(status_code=400, detail=str(e)) from e
 
@@ -926,7 +1002,171 @@ def create_app(config_path: str = "config.yaml", max_steps: int = 6):
         except RuntimeError as e:
             raise HTTPException(status_code=400, detail=str(e)) from e
 
+    # ----- 认证端点 -----
+
+    @app.post("/api/auth/register")
+    async def auth_register(req: AuthRequest):
+        try:
+            result = state.auth.register(req.username, req.password)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        from fastapi.responses import JSONResponse
+        resp = JSONResponse({"user_id": result["user_id"], "username": result["username"]})
+        resp.set_cookie(
+            key="mybuddy_session",
+            value=result["cookie"],
+            httponly=True,
+            samesite="lax",
+            max_age=30 * 24 * 3600,
+        )
+        return resp
+
+    @app.post("/api/auth/login")
+    async def auth_login(req: AuthRequest):
+        try:
+            result = state.auth.login(req.username, req.password)
+        except ValueError as e:
+            raise HTTPException(status_code=401, detail=str(e)) from e
+        from fastapi.responses import JSONResponse
+        resp = JSONResponse({"user_id": result["user_id"], "username": result["username"]})
+        resp.set_cookie(
+            key="mybuddy_session",
+            value=result["cookie"],
+            httponly=True,
+            samesite="lax",
+            max_age=30 * 24 * 3600,
+        )
+        return resp
+
+    @app.post("/api/auth/logout")
+    async def auth_logout():
+        from fastapi.responses import JSONResponse
+        resp = JSONResponse({"ok": True})
+        resp.delete_cookie("mybuddy_session")
+        return resp
+
+    @app.get("/api/auth/me")
+    async def auth_me(request):
+        """返回当前用户信息。"""
+        from mybuddy.auth.manager import get_user_id_from_cookie
+        user_id = get_user_id_from_cookie(request.headers.get("Cookie"))
+        if user_id is None:
+            return {}
+        user = state.auth.get_user(user_id)
+        return user if user is not None else {}
+
+    # ----- 安全资源端点 -----
+
+    @app.get("/api/safety/resources")
+    async def safety_resources():
+        from mybuddy.safety.constants import HOTLINES
+        return {"hotlines": HOTLINES}
+
+    # ----- 情绪/评估/CBT 端点(基础占位) -----
+
+    @app.get("/api/mood")
+    async def mood(request: Request, limit: int = 30):
+        user_id = _cookie_user_id(request)
+        if user_id is None:
+            return {"records": [], "daily_averages": []}
+        return state.mood_payload(user_id, limit=limit)
+
+    @app.get("/api/mood/trends")
+    async def mood_trends(request: Request, days: int = 30):
+        user_id = _cookie_user_id(request)
+        if user_id is None:
+            return {"daily_averages": []}
+        return state.mood_trends_payload(user_id, days=days)
+
+    @app.get("/api/mood/stats")
+    async def mood_stats(request: Request):
+        user_id = _cookie_user_id(request)
+        if user_id is None:
+            return {"total_records": 0, "streak": 0, "categories": {}}
+        return state.mood_stats_payload(user_id)
+
+    @app.post("/api/mood/checkin")
+    async def mood_checkin(req: MoodCheckinRequest, request: Request):
+        user_id = _cookie_user_id(request)
+        if user_id is None:
+            raise HTTPException(status_code=401, detail="请先登录")
+        return state.mood_checkin_payload(user_id, req.mood_score, req.notes)
+
+    @app.get("/api/assessment/status")
+    async def assessment_status(request: Request):
+        user_id = _cookie_user_id(request)
+        if user_id is None:
+            return {"phq9": [], "gad7": []}
+        return state.assessment_status_payload(user_id)
+
+    @app.get("/api/assessment/history")
+    async def assessment_history(request: Request):
+        user_id = _cookie_user_id(request)
+        if user_id is None:
+            return {"cycles": []}
+        return state.assessment_history_payload(user_id)
+
+    @app.get("/api/cbt/status")
+    async def cbt_status(request: Request):
+        user_id = _cookie_user_id(request)
+        if user_id is None:
+            return {"events": []}
+        return state.cbt_status_payload(user_id)
+
+    @app.delete("/api/assessment/status")
+    async def reset_assessment(request: Request):
+        from mybuddy.auth.manager import get_user_id_from_cookie
+        from mybuddy.assessment import ConversationalAssessmentTracker
+        user_id = get_user_id_from_cookie(request.headers.get("Cookie"))
+        if user_id is None:
+            raise HTTPException(status_code=401, detail="请先登录")
+        engine = state.engine
+        tracker = ConversationalAssessmentTracker(engine, user_id)
+        tracker.reset_cycle()
+        return {"ok": True}
+
+    @app.delete("/api/user/data")
+    async def clear_user_data(request: Request):
+        from mybuddy.auth.manager import get_user_id_from_cookie
+        user_id = get_user_id_from_cookie(request.headers.get("Cookie"))
+        if user_id is None:
+            raise HTTPException(status_code=401, detail="请先登录")
+        return state.clear_user_data_payload(user_id)
+
+    @app.post("/api/messages/import")
+    async def import_messages(req: MessagesImportRequest, request: Request):
+        user_id = _cookie_user_id(request)
+        if user_id is None:
+            raise HTTPException(status_code=401, detail="请先登录")
+        return state.import_messages_payload(
+            user_id, [m.model_dump() for m in req.messages]
+        )
+
+    @app.get("/api/user/export")
+    async def export_user_data(request: Request):
+        user_id = _cookie_user_id(request)
+        if user_id is None:
+            raise HTTPException(status_code=401, detail="请先登录")
+        return state.export_user_data_payload(user_id)
+
+    @app.delete("/api/auth/account")
+    async def delete_account(request: Request):
+        user_id = _cookie_user_id(request)
+        if user_id is None:
+            raise HTTPException(status_code=401, detail="请先登录")
+        state.delete_account_payload(user_id)
+        from fastapi.responses import JSONResponse
+        resp = JSONResponse({"ok": True})
+        resp.delete_cookie("mybuddy_session")
+        return resp
+
     return app
+
+
+def _cookie_user_id(request) -> int | None:
+    """从请求 Cookie 解析当前用户 id;访客返回 None。"""
+    from mybuddy.auth.manager import get_user_id_from_cookie
+    return get_user_id_from_cookie(request.headers.get("Cookie"))
 
 
 def _frontend_static_dir(frontend_dir: Path) -> Path:
@@ -1120,56 +1360,6 @@ def _restore_reminders(scheduler: MyBuddyScheduler, engine: Engine) -> None:
         pending = [(r.id, r.trigger_at) for r in rows]
     for rid, trigger in pending:
         scheduler.schedule_reminder(rid, trigger)
-
-
-def _clean_persona_updates(updates: dict[str, Any]) -> dict[str, Any]:
-    allowed = set(PersonaConfig.model_fields)
-    clean: dict[str, Any] = {}
-    for key, value in updates.items():
-        if key not in allowed or value is None:
-            continue
-        if key == "response_habits":
-            if isinstance(value, list):
-                clean[key] = [str(item).strip() for item in value if str(item).strip()]
-            continue
-        if isinstance(value, str):
-            value = value.strip()
-            if not value:
-                continue
-        clean[key] = value
-    return clean
-
-
-def _write_persona_config(config_path: str, persona: PersonaConfig) -> None:
-    path = Path(config_path)
-    replacement = yaml.safe_dump(
-        {"persona": persona.model_dump()},
-        allow_unicode=True,
-        sort_keys=False,
-    ).strip()
-    if not path.exists():
-        path.write_text(replacement + "\n", encoding="utf-8")
-        return
-
-    text = path.read_text(encoding="utf-8")
-    lines = text.splitlines(keepends=True)
-    start = next((i for i, line in enumerate(lines) if line.startswith("persona:")), None)
-    if start is None:
-        suffix = "" if text.endswith("\n") else "\n"
-        path.write_text(text + suffix + "\n" + replacement + "\n", encoding="utf-8")
-        return
-
-    end = start + 1
-    while end < len(lines):
-        line = lines[end]
-        if line.startswith("#") or (line.strip() and not line.startswith((" ", "\t"))):
-            break
-        if line.strip() == "":
-            break
-        end += 1
-
-    new_text = "".join(lines[:start]) + replacement + "\n" + "".join(lines[end:])
-    path.write_text(new_text, encoding="utf-8")
 
 
 WEATHER_INTENT_RE = re.compile(r"(天气|气温|下雨|降雨|温度|weather)", re.I)
@@ -1373,6 +1563,7 @@ def _integrate_pending_messages(
     session_id: str,
     items: list[dict[str, Any]],
     add_to_short_term: Callable[[LLMMessage], None] | None = None,
+    user_id: int | None = None,
 ) -> list[dict[str, Any]]:
     """把主动触达转成 assistant 对话消息,同时保留提醒类 system 语义。"""
     integrated: list[dict[str, Any]] = []
@@ -1394,6 +1585,7 @@ def _integrate_pending_messages(
                 role=Role.ASSISTANT.value,
                 content=content,
                 meta=meta,
+                user_id=user_id,
             )
             if add_to_short_term is not None:
                 add_to_short_term(LLMMessage(role=Role.ASSISTANT, content=content))

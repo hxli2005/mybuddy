@@ -34,11 +34,11 @@ from mybuddy.emotion import build_emotional_support, support_system_hint
 from mybuddy.learning import Trajectory, TrajectoryLogger, TrajectoryStep
 from mybuddy.llm import BaseLLMProvider, Message, Role
 from mybuddy.memory import MemoryManager
+from mybuddy.safety import CrisisLevel
 from mybuddy.storage import append_message, enqueue
 from mybuddy.tools import ToolRegistry
 
 from .context import build_messages, build_system_prompt
-from .living_state import synthesize_living_state
 from .search import (
     build_search_context,
     build_unavailable_search_context,
@@ -53,7 +53,9 @@ if TYPE_CHECKING:
 
     from mybuddy.emotion import EmotionDetector, EmotionResult, EmotionTracker
     from mybuddy.learning import SkillCurator, SkillRegistry
+    from mybuddy.safety import CrisisDetector, InputModerator, OutputModerator
     from mybuddy.scheduler import MyBuddyScheduler
+    from mybuddy.therapy import CbtGuide
 
 logger = logging.getLogger(__name__)
 
@@ -72,6 +74,8 @@ class AgentResult:
     emotional_support: dict[str, Any] | None
     triggered_skills: list[str]
     search_sources: list[dict[str, str]]
+    cbt_prompt: dict[str, str] | None
+    crisis_alert: bool
 
     def __init__(
         self,
@@ -84,6 +88,8 @@ class AgentResult:
         emotional_support: dict[str, Any] | None = None,
         triggered_skills: list[str] | None = None,
         search_sources: list[dict[str, str]] | None = None,
+        cbt_prompt: dict[str, str] | None = None,
+        crisis_alert: bool = False,
     ) -> None:
         self.text = text
         self.steps = steps
@@ -94,6 +100,8 @@ class AgentResult:
         self.emotional_support = emotional_support
         self.triggered_skills = triggered_skills or []
         self.search_sources = search_sources or []
+        self.cbt_prompt = cbt_prompt
+        self.crisis_alert = crisis_alert
 
 
 class Agent:
@@ -113,6 +121,11 @@ class Agent:
         scheduler: MyBuddyScheduler | None = None,
         skill_registry: SkillRegistry | None = None,
         skill_curator: SkillCurator | None = None,
+        user_id: int | None = None,
+        crisis_detector: CrisisDetector | None = None,
+        input_moderator: InputModerator | None = None,
+        output_moderator: OutputModerator | None = None,
+        cbt_guide: CbtGuide | None = None,
     ) -> None:
         self._provider = provider
         self._config = config
@@ -130,6 +143,14 @@ class Agent:
         # M6:skill 匹配 + 自动抽象(均可选)
         self._skill_registry = skill_registry
         self._skill_curator = skill_curator
+        # 安全/CBT 管线(均可选,None 时跳过对应的门)
+        self._user_id = user_id
+        self._crisis_detector = crisis_detector
+        self._input_moderator = input_moderator
+        self._output_moderator = output_moderator
+        self._cbt_guide = cbt_guide
+        # 当前 run 的消息归属用户(run() 开头刷新)
+        self._active_user_id: int | None = user_id
         self._warned_search_registry_fallback = False
         # 持有后台 task 强引用:create_task 只被事件循环弱引用,挂起(await 网络)期间
         # 无强引用会被 GC 提前回收,导致抽取/复盘静默中断(CPython 已知坑)。
@@ -143,16 +164,91 @@ class Agent:
     def history(self) -> list[Message]:
         return self._memory.get_recent_messages()
 
-    async def run(self, user_input: str) -> AgentResult:
+    def reset_context(self) -> None:
+        """清空短期记忆 + 长期记忆档案，重置情绪状态，等同新对话。"""
+        self._memory.clear_short_term()
+        self._memory.clear_long_term()
+        if self._emotion_tracker is not None:
+            self._emotion_tracker.reset()
+
+    async def run(
+        self,
+        user_input: str,
+        assessment_hint: str = "",
+        cbt_hint: str = "",
+        user_id: int | None = None,
+    ) -> AgentResult:
+        effective_user_id = user_id if user_id is not None else self._user_id
+        # 供 _persist_chat_message 关联消息归属(访客为 None)
+        self._active_user_id = effective_user_id
+
+        # 0a. 输入审核门:blocked 直接返回预设安全响应,不调用主 LLM
+        if self._input_moderator is not None:
+            moderation = await self._input_moderator.check(user_input)
+            if moderation.blocked:
+                self._log_safety_event(
+                    effective_user_id, "blocked_input", moderation.reason
+                )
+                return self._safety_result(
+                    user_input,
+                    moderation.replacement or "",
+                    finish_reason="input_blocked",
+                )
+
+        # 0b. 危机检测门:CRITICAL/HIGH 跳过整个 Agent 循环直接返回安全响应
+        crisis_level = CrisisLevel.NONE
+        crisis_hint = ""
+        if self._crisis_detector is not None:
+            crisis_level, crisis_response = await self._crisis_detector.classify_severity(
+                user_input
+            )
+            if crisis_response is not None and crisis_response.skip_llm:
+                self._log_safety_event(effective_user_id, crisis_level.value)
+                return self._safety_result(
+                    user_input,
+                    crisis_response.message,
+                    finish_reason="crisis_intervention",
+                    crisis_alert=True,
+                )
+            if crisis_level == CrisisLevel.MEDIUM:
+                self._log_safety_event(effective_user_id, crisis_level.value)
+            if crisis_response is not None:
+                crisis_hint = crisis_response.system_hint
+
         # 1. 情绪检测(可选)
         emotion = await self._detect_emotion(user_input)
-        emotional_support = build_emotional_support(user_input, emotion)
+        emotional_support = build_emotional_support(
+            user_input, emotion, crisis_level=crisis_level.value
+        )
         consecutive_negative = self._has_consecutive_negative()
         scene_hint = support_system_hint(
             emotional_support,
             consecutive_negative=consecutive_negative,
         )
         all_tool_calls: list[dict[str, Any]] = []
+
+        # 1b. CBT 机会检测(可选):危机 MEDIUM 及以上时不引入
+        cbt_prompt_payload: dict[str, str] | None = None
+        if (
+            self._cbt_guide is not None
+            and crisis_level in (CrisisLevel.NONE, CrisisLevel.LOW)
+            and not cbt_hint
+        ):
+            opportunity = self._detect_cbt_opportunity(
+                user_input,
+                emotion.label if emotion is not None else "neutral",
+                effective_user_id,
+            )
+            if opportunity is not None:
+                cbt_hint = (
+                    f"CBT引导提示:用户可能适合「{opportunity['name']}」技巧。\n"
+                    f"{opportunity['hint']}\n"
+                    "不要使用专业术语,不要暴露CBT或任何治疗方法名称。像朋友一样自然引导。"
+                )
+                cbt_prompt_payload = {
+                    "technique": opportunity["technique"],
+                    "name": opportunity["name"],
+                }
 
         # 2. 检索记忆上下文。开 embedding 时语义查询是同步网络调用,丢到线程里跑,
         #    避免阻塞事件循环、卡住其他并发请求(纯词法时无网络,直接同步即可)。
@@ -175,7 +271,7 @@ class Agent:
         if search_call is not None:
             all_tool_calls.append(search_call)
 
-        # 5. 合并 system prompt:人设 + 记忆 + 情绪 + skill + 外部资料
+        # 5. 合并 system prompt:人设 + 记忆 + 情绪 + skill + 外部资料 + 安全提示
         extras = "\n\n".join(
             x
             for x in (
@@ -183,15 +279,11 @@ class Agent:
                 search_context,
                 scene_hint,
                 skill_hint,
+                crisis_hint,
             )
             if x
         )
-        # 动态「角色生活」状态:本轮从真实信号(距上次多久 / 现在几点 / 上次聊啥)合成,
-        # 让小布「此刻」是活的且接真记忆,而非配置里写死的同一杯温水。失败回退静态。
-        life_state = synthesize_living_state(
-            self._config.persona, engine=self._engine, session_id=self._session_id
-        )
-        system = build_system_prompt(self._config.persona, extras, life=life_state)
+        system = build_system_prompt(self._config.persona, extras, assessment_hint=assessment_hint, cbt_hint=cbt_hint)
         traj = self._logger.start(
             session_id=self._session_id,
             system=system,
@@ -318,6 +410,22 @@ class Agent:
                 },
             )
 
+        # 7. 输出审核门:flagged 时重写(移除诊断/药物等违规内容)
+        if self._output_moderator is not None and final_text:
+            try:
+                out_mod = await self._output_moderator.check(final_text)
+                if out_mod.flagged and out_mod.replacement:
+                    traj.meta["output_moderation"] = {
+                        "category": out_mod.category.value if out_mod.category else None,
+                        "reason": out_mod.reason,
+                    }
+                    self._log_safety_event(
+                        effective_user_id, "output_rewritten", out_mod.reason
+                    )
+                    final_text = out_mod.replacement
+            except Exception:
+                logger.exception("output moderation failed")
+
         traj.final_response = final_text
         traj.finish_reason = finish_reason
         self._logger.commit(traj)
@@ -342,7 +450,103 @@ class Agent:
             emotional_support=emotional_support.to_dict(),
             triggered_skills=triggered_skills,
             search_sources=search_sources,
+            cbt_prompt=cbt_prompt_payload,
+            crisis_alert=crisis_level != CrisisLevel.NONE,
         )
+
+    # -----------------------------------------------------------------
+    # 安全/CBT 辅助
+    # -----------------------------------------------------------------
+
+    def _safety_result(
+        self,
+        user_input: str,
+        safety_message: str,
+        *,
+        finish_reason: str,
+        crisis_alert: bool = False,
+    ) -> AgentResult:
+        """构造跳过 LLM 循环的安全直返结果(用户消息与安全回复均入记)。"""
+        traj = self._logger.start(
+            session_id=self._session_id,
+            system="",
+            user_input=user_input,
+        )
+        traj.final_response = safety_message
+        traj.finish_reason = finish_reason
+        self._persist_chat_message(
+            Role.USER, user_input, meta={"turn_id": traj.turn_id, "source": "chat"}
+        )
+        self._persist_chat_message(
+            Role.ASSISTANT,
+            safety_message,
+            meta={"turn_id": traj.turn_id, "source": "safety_gate", "finish_reason": finish_reason},
+        )
+        self._memory.add_message(Message(role=Role.USER, content=user_input))
+        self._memory.add_message(Message(role=Role.ASSISTANT, content=safety_message))
+        self._logger.commit(traj)
+        return AgentResult(
+            text=safety_message,
+            steps=0,
+            finish_reason=finish_reason,
+            trajectory=traj,
+            crisis_alert=crisis_alert,
+        )
+
+    def _log_safety_event(
+        self,
+        user_id: int | None,
+        severity: str,
+        details: str | None = None,
+    ) -> None:
+        """记录安全事件到数据库(engine 缺失时静默跳过)。"""
+        if self._engine is None:
+            return
+        try:
+            from mybuddy.storage.db import session_scope
+            from mybuddy.storage.models import SafetyEvent
+
+            with session_scope(self._engine) as s:
+                s.add(
+                    SafetyEvent(
+                        user_id=user_id or 0,
+                        event_type="crisis_detected",
+                        severity=severity,
+                        details=details,
+                    )
+                )
+        except Exception:
+            logger.exception("log safety event failed")
+
+    def _detect_cbt_opportunity(
+        self,
+        user_input: str,
+        emotion_label: str,
+        user_id: int | None,
+    ) -> dict | None:
+        """CBT 机会窗口检测:登录用户用 DB 级冷却,访客用引擎内存冷却。"""
+        try:
+            from mybuddy.therapy import CbtTracker
+
+            tracker = CbtTracker(
+                self._engine if user_id else None,
+                user_id,
+            )
+            cooldown_check = tracker.is_on_cooldown if user_id else None
+            opportunity = self._cbt_guide.detect_opportunity(
+                user_input,
+                emotion_label,
+                cooldown_check=cooldown_check,
+            )
+            if opportunity is not None:
+                tracker.record(
+                    opportunity["technique"],
+                    context={"trigger_message": user_input[:200]},
+                )
+            return opportunity
+        except Exception:
+            logger.exception("cbt opportunity detection failed")
+            return None
 
     # -----------------------------------------------------------------
     # 情绪辅助
@@ -365,6 +569,7 @@ class Agent:
                 role=role.value,
                 content=content,
                 meta=meta,
+                user_id=self._active_user_id,
             )
         except Exception:
             logger.exception("persist chat message failed")

@@ -105,6 +105,8 @@ async def test_emotion_written_to_trajectory_meta(tmp_path) -> None:
         "label": "negative",
         "strength": 0.7,
         "reason": "累",
+        "category": None,
+        "intensity": 3,
     }
     assert result.emotional_support is not None
     assert result.emotional_support["mode"] == "strong_support"

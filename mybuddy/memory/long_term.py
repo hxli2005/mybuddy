@@ -286,6 +286,20 @@ class LongTermMemory:
             path.unlink()
         self._card_cache.pop(str(path), None)
 
+    def clear_all(self) -> int:
+        """删除所有档案卡,清空长期记忆。返回删除数量。"""
+        count = 0
+        for path in sorted(self._archive_dir.glob("*.md")):
+            try:
+                path.unlink()
+                count += 1
+            except OSError:
+                pass
+        self._card_cache.clear()
+        if self._semantic is not None and self._semantic.enabled:
+            self._semantic.reconcile([])
+        return count
+
     def update(
         self,
         uid: str,

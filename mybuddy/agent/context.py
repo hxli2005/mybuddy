@@ -1,14 +1,12 @@
-"""Agent 上下文构建:system prompt 和消息窗口。
-
-M3:接入 MemoryManager,每次推理前检索长期记忆和用户画像,注入 system prompt。
-"""
+"""Agent 上下文构建:system prompt 和消息窗口。"""
 
 from __future__ import annotations
 
 from datetime import datetime
 
-from mybuddy.config import CharacterLifeConfig, PersonaConfig
+from mybuddy.config import PersonaConfig
 from mybuddy.llm import Message
+from mybuddy.safety import CapabilityGuard
 
 
 def build_system_prompt(
@@ -16,116 +14,56 @@ def build_system_prompt(
     memory_context: str = "",
     *,
     now: datetime | None = None,
-    life: CharacterLifeConfig | None = None,
+    assessment_hint: str = "",
+    cbt_hint: str = "",
 ) -> str:
-    """把人设配置拼成 system prompt。
-
-    memory_context 为 MemoryManager.build_context_section() 的输出,
-    包含本轮少量相关的长期记忆、用户画像字段和场景线索。
-    life 为本轮合成的动态「角色生活」状态(见 living_state);None 时回退静态配置。
-    """
-    role = persona.roleplay_style
-    life = life if life is not None else persona.character_life
-    relationship = persona.relationship_model
+    """构建 system prompt。memory_context 包含记忆检索结果和场景线索。"""
     time_block = _time_block(now)
-    voice = _compact_items(
-        [persona.style, persona.tone, *persona.response_habits, *role.speech_style],
-        limit=10,
-    )
-    traits = _compact_items(role.personality_traits, limit=3)
-    micro_reactions = _compact_items(role.micro_reactions, limit=2)
-    rituals = _compact_items(relationship.shared_rituals, limit=2)
-    examples = _format_dialogue_examples(role.example_dialogues)
-    relationship_state = _relationship_state_summary(relationship.axes)
     base = (
         f"你是 {persona.name}。\n"
-        "\n角色契约:\n"
-        f"- 身份:{role.identity}\n"
-        f"- 关系:{persona.relationship}; 阶段:{relationship.stage}; {relationship_state}\n"
-        f"- 语言:{persona.language}; 称呼:{persona.address_user}\n"
-        f"- 口吻:{voice}\n"
-        f"- 性格质感:{traits}\n"
-        f"- 边界:{relationship.boundaries_note}; {persona.boundaries}\n"
+        "\n角色:\n"
+        "- 一个懂心理学、会接得住情绪的温暖陪伴者,用日常语言帮用户理解和调节情绪。\n"
+        f"- 语言:{persona.language}; 称呼:{persona.address_user}(默认用\"你\",除非用户明确要求用特定称呼)\n"
+        f"- 口吻:{persona.tone}\n"
+        f"- 边界:{persona.boundaries}\n"
         f"{time_block}"
-        "\n当前状态:\n"
-        f"- 角色生活:{life.today_status}; 心情:{life.current_mood}; 近况:{life.recent_self_event}\n"
-        f"- 可用性:{life.availability_style}\n"
-        "\n关系素材:\n"
-        f"- 共同仪式:{rituals or '按相关记忆自然使用'}\n"
-        f"{examples}"
+        f"\n{CapabilityGuard.system_prompt_section()}\n"
         "\n回复原则:\n"
-        "- 像同一个角色在关系里回应,不要像随叫随到的客服或心理咨询师。\n"
-        "- 不要主动给自己贴关系身份标签;用熟悉的接话、偏爱、行动和细节让关系感自然出现。\n"
-        f"- 每轮只选一个最贴合的微反应:{micro_reactions or '停顿、放轻或具体动作'}。\n"
+        "- 像一个懂心理学、会接得住情绪的温暖朋友,不是随叫随到的客服。\n"
+        "- 不要暴露内部字段名或向用户逐条报告你检测到了什么(情绪、风险等)。\n"
         "- 不要套用固定的'我理解你/你现在感到/可以试试'三段式;先找这一刻的具体由头。\n"
-        "- 情绪、记忆和策略只作为内部判断,不要明示字段名,不要逐条汇报依据。\n"
-        "- 能帮忙做事时也保持角色内表达,用低压、具体、短的下一步承接。\n"
+        "- 用低压、具体、短的下一步承接,像朋友聊天而不是做心理评估。\n"
+        "\n安全规则:\n"
+        "- 用户表达自伤或自杀意图时:不害怕、不讲大道理、不试图独自解决。先表达关心,然后温和地建议联系信任的人或专业热线。\n"
+        "- 用户询问诊断、药物或治疗方案时:明确表示这不是你能做的,建议咨询专业医生或心理咨询师。\n"
         "\n工具使用:\n"
         "- 用户请求设置提醒、查询天气等具体事项时,调用对应工具。\n"
-        "- 涉及新闻、最新事实、价格、政策、版本、职位变动或其他时效信息时,优先依据外部资料检索段;没有资料就不要装作确认。\n"
+        "- 涉及新闻、最新事实或其他时效信息时,优先依据外部资料检索段;没有资料就不要装作确认。\n"
         "- 日常对话直接回答即可,不要为了展示能力强行使用工具。"
     )
+    if assessment_hint:
+        base += f"\n\n{assessment_hint}"
+    if cbt_hint:
+        base += f"\n\n{cbt_hint}"
     if memory_context:
         return base + "\n\n" + memory_context
     return base
 
 
-def _time_block(now: datetime | None = None) -> str:
-    current = now or datetime.now().astimezone()
-    tz_name = current.tzname() or "local"
-    return (
-        "\n当前时间:\n"
-        f"- 日期:{current.date().isoformat()}\n"
-        f"- 时间:{current.strftime('%H:%M')}\n"
-        f"- 时区:{tz_name}\n"
-        f"- 星期:{_weekday_zh(current.weekday())}\n"
-    )
-
-
 def build_messages(history: list[Message]) -> list[Message]:
-    """透传短期记忆窗口。
-
-    长期记忆/用户画像已通过 system prompt 注入,此处只需送短期消息窗口。
-    """
+    """构建消息列表(透传短期记忆窗口)。"""
     return list(history)
 
 
-def _compact_items(items: list[str], *, limit: int) -> str:
-    lines = [item.strip() for item in items if item and item.strip()]
-    return "; ".join(lines[:limit])
-
-
-def _format_dialogue_examples(examples: list[object]) -> str:
-    lines: list[str] = []
-    # few-shot 例句是文体的最高杠杆,配置了几条就用几条(上限防长):
-    # 之前 [:2] 静默丢弃第三条,配置与生效不一致。
-    for item in examples[:4]:
-        user = getattr(item, "user", "").strip()
-        assistant = getattr(item, "assistant", "").strip()
-        if not user or not assistant:
-            continue
-        lines.append(f"- 用户:{user}\n  {assistant}")
-    if not lines:
-        return ""
-    return "\n对话风格样例:\n" + "\n".join(lines) + "\n"
-
-
-def _relationship_state_summary(axes: dict[str, float]) -> str:
-    trust = axes.get("trust")
-    ease = axes.get("ease")
-    boundary = axes.get("boundary_clarity")
-    notes: list[str] = []
-    if isinstance(trust, (int, float)):
-        notes.append("信任偏高" if trust >= 0.6 else "信任仍在建立")
-    if isinstance(ease, (int, float)):
-        notes.append("相处较自然" if ease >= 0.55 else "需要更克制")
-    if isinstance(boundary, (int, float)) and boundary >= 0.75:
-        notes.append("边界清楚")
-    return "关系状态:" + "、".join(notes) if notes else "关系状态:稳定推进"
-
-
-def _weekday_zh(index: int) -> str:
-    names = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
-    if 0 <= index < len(names):
-        return names[index]
-    return "未知"
+def _time_block(now: datetime | None = None) -> str:
+    if now is None:
+        now = datetime.now()
+    weekdays = ["一", "二", "三", "四", "五", "六", "日"]
+    tz_name = now.astimezone().tzname() or ""
+    return (
+        "\n当前时间:\n"
+        f"- 日期:{now.strftime('%Y-%m-%d')}\n"
+        f"- 时间:{now.strftime('%H:%M')}\n"
+        f"- 时区:{tz_name}\n"
+        f"- 星期:{weekdays[now.weekday()]}\n"
+    )

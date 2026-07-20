@@ -22,11 +22,13 @@ def append_message(
     role: str,
     content: str,
     meta: dict[str, Any] | None = None,
+    user_id: int | None = None,
 ) -> int:
     """写入一条原始聊天消息,返回 SQL id。"""
     with session_scope(engine) as s:
         row = Message(
             session_id=session_id,
+            user_id=user_id,
             role=role,
             content=content,
             meta_json=json.dumps(meta or {}, ensure_ascii=False, default=str),
@@ -41,13 +43,24 @@ def list_messages(
     *,
     limit: int = 100,
     session_id: str | None = None,
+    user_id: int | None = None,
+    user_scoped: bool = False,
 ) -> list[dict[str, Any]]:
-    """读取最近原始聊天消息,按时间正序返回。"""
+    """读取最近原始聊天消息,按时间正序返回。
+
+    user_scoped=True 时按用户隔离:登录用户(user_id=int)只看自己的消息,
+    访客(user_id=None)只看无归属消息。
+    """
     clean_limit = max(1, min(int(limit), 500))
     with session_scope(engine) as s:
         q = s.query(Message)
         if session_id:
             q = q.filter(Message.session_id == session_id)
+        if user_scoped:
+            if user_id is None:
+                q = q.filter(Message.user_id.is_(None))
+            else:
+                q = q.filter(Message.user_id == user_id)
         rows = q.order_by(Message.created_at.desc(), Message.id.desc()).limit(clean_limit).all()
         rows.reverse()
         return [_message_payload(row) for row in rows]

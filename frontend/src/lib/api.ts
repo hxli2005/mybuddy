@@ -1,28 +1,33 @@
 import type {
+  AssessmentHistoryResponse,
+  AssessmentStatusResponse,
+  AuthResponse,
   ChatResponse,
+  CrisisResourcesResponse,
   MessagesPayload,
-  MemoryPayload,
-  MemoryItem,
-  Note,
-  NotesPayload,
-  Persona,
-  PersonaPayload,
-  ProfilePayload,
-  Reminder,
-  RemindersPayload,
-  Skill,
-  SkillsPayload,
+  MoodRecordsResponse,
+  MoodStatsResponse,
+  MoodTrendsResponse,
   StatusPayload,
-  TestUser,
-  UserPersonaPayload,
-  UsersPayload,
+  UserInfo,
 } from "../types/api";
+
+let onUnauthorized: (() => void) | null = null;
+
+/** 注册全局 401 处理(AuthProvider 挂载时调用):清空登录态并跳转登录页。 */
+export function setUnauthorizedHandler(handler: (() => void) | null) {
+  onUnauthorized = handler;
+}
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const res = await fetch(path, {
+    credentials: "same-origin",
     headers: { "Content-Type": "application/json", ...(options.headers || {}) },
     ...options,
   });
+  if (res.status === 401 && onUnauthorized) {
+    onUnauthorized();
+  }
   const text = await res.text();
   const data = text ? JSON.parse(text) : {};
   if (!res.ok) {
@@ -31,157 +36,10 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   return data as T;
 }
 
+/* ---- 基础 ---- */
+
 export function fetchStatus(): Promise<StatusPayload> {
   return request<StatusPayload>("/api/status");
-}
-
-export function fetchPersona(): Promise<PersonaPayload> {
-  return request<PersonaPayload>("/api/persona");
-}
-
-export function savePersona(persona: Persona): Promise<PersonaPayload> {
-  return request<PersonaPayload>("/api/persona", {
-    method: "PUT",
-    body: JSON.stringify(persona),
-  });
-}
-
-export function fetchProfile(): Promise<ProfilePayload> {
-  return request<ProfilePayload>("/api/profile");
-}
-
-export function updateProfileField(key: string, value: string): Promise<{ field: { key: string; value: string } }> {
-  return request<{ field: { key: string; value: string } }>(`/api/profile/fields/${encodeURIComponent(key)}`, {
-    method: "PATCH",
-    body: JSON.stringify({ value }),
-  });
-}
-
-export function deleteProfileField(key: string): Promise<{ ok: boolean; key: string }> {
-  return request<{ ok: boolean; key: string }>(`/api/profile/fields/${encodeURIComponent(key)}`, {
-    method: "DELETE",
-  });
-}
-
-export function fetchMemory(): Promise<MemoryPayload> {
-  return request<MemoryPayload>("/api/memory");
-}
-
-export function updateMemoryItem(id: string, input: { content?: string }): Promise<{ memory: MemoryItem }> {
-  return request<{ memory: MemoryItem }>(`/api/memory/archive/${encodeURIComponent(id)}`, {
-    method: "PATCH",
-    body: JSON.stringify(input),
-  });
-}
-
-export function deleteMemoryItem(id: string): Promise<{ ok: boolean; id: string }> {
-  return request<{ ok: boolean; id: string }>(`/api/memory/archive/${encodeURIComponent(id)}`, {
-    method: "DELETE",
-  });
-}
-
-export function fetchReminders(): Promise<RemindersPayload> {
-  return request<RemindersPayload>("/api/reminders");
-}
-
-export function cancelReminder(id: number): Promise<{ reminder: Reminder }> {
-  return request<{ reminder: Reminder }>(`/api/reminders/${id}`, {
-    method: "PATCH",
-    body: JSON.stringify({ status: "cancelled" }),
-  });
-}
-
-export function fetchSkills(): Promise<SkillsPayload> {
-  return request<SkillsPayload>("/api/skills");
-}
-
-export function updateSkill(name: string, archived: boolean): Promise<{ skill: Skill }> {
-  return request<{ skill: Skill }>(`/api/skills/${encodeURIComponent(name)}`, {
-    method: "PATCH",
-    body: JSON.stringify({ archived }),
-  });
-}
-
-export function fetchNotes(): Promise<NotesPayload> {
-  return request<NotesPayload>("/api/notes");
-}
-
-export function createNote(input: {
-  title?: string;
-  content: string;
-  tags?: string[];
-}): Promise<{ note: Note }> {
-  return request<{ note: Note }>("/api/notes", {
-    method: "POST",
-    body: JSON.stringify(input),
-  });
-}
-
-export function updateNote(
-  id: number,
-  input: { title?: string; content?: string; tags?: string[] },
-): Promise<{ note: Note }> {
-  return request<{ note: Note }>(`/api/notes/${id}`, {
-    method: "PATCH",
-    body: JSON.stringify(input),
-  });
-}
-
-export function deleteNote(id: number): Promise<{ ok: boolean; id: number }> {
-  return request<{ ok: boolean; id: number }>(`/api/notes/${id}`, {
-    method: "DELETE",
-  });
-}
-
-export function fetchUsers(): Promise<UsersPayload> {
-  return request<UsersPayload>("/api/users");
-}
-
-export function createUser(input: {
-  display_name: string;
-  daily_message_limit?: number;
-}): Promise<{ user: TestUser }> {
-  return request<{ user: TestUser }>("/api/users", {
-    method: "POST",
-    body: JSON.stringify(input),
-  });
-}
-
-export function updateUser(
-  id: number,
-  input: { status?: string; daily_message_limit?: number },
-): Promise<{ user: TestUser }> {
-  return request<{ user: TestUser }>(`/api/users/${id}`, {
-    method: "PATCH",
-    body: JSON.stringify(input),
-  });
-}
-
-export function bindQqAccount(
-  userId: number,
-  input: { external_id: string; display_name?: string },
-): Promise<{ user: TestUser }> {
-  return request<{ user: TestUser }>(`/api/users/${userId}/qq`, {
-    method: "POST",
-    body: JSON.stringify(input),
-  });
-}
-
-export function fetchUserPersona(userId: number): Promise<UserPersonaPayload> {
-  return request<UserPersonaPayload>(`/api/users/${userId}/persona`);
-}
-
-export function saveUserPersona(userId: number, persona: Persona): Promise<UserPersonaPayload> {
-  return request<UserPersonaPayload>(`/api/users/${userId}/persona`, {
-    method: "PUT",
-    body: JSON.stringify(persona),
-  });
-}
-
-export function resetUserPersona(userId: number): Promise<UserPersonaPayload> {
-  return request<UserPersonaPayload>(`/api/users/${userId}/persona`, {
-    method: "DELETE",
-  });
 }
 
 export function sendChat(message: string): Promise<ChatResponse> {
@@ -195,9 +53,125 @@ export function fetchMessages(limit = 100): Promise<MessagesPayload> {
   return request<MessagesPayload>(`/api/messages?limit=${limit}`);
 }
 
+export function resetChatContext(): Promise<{ ok: boolean }> {
+  return request<{ ok: boolean }>("/api/chat/reset", { method: "POST" });
+}
+
 export function sendFeedback(label: string, turnId: string): Promise<{ ok: boolean }> {
   return request<{ ok: boolean }>("/api/feedback", {
     method: "POST",
     body: JSON.stringify({ label, turn_id: turnId }),
   });
+}
+
+/* ---- 认证 ---- */
+
+export function register(username: string, password: string): Promise<AuthResponse> {
+  return request<AuthResponse>("/api/auth/register", {
+    method: "POST",
+    body: JSON.stringify({ username, password }),
+  });
+}
+
+export function login(username: string, password: string): Promise<AuthResponse> {
+  return request<AuthResponse>("/api/auth/login", {
+    method: "POST",
+    body: JSON.stringify({ username, password }),
+  });
+}
+
+export function logout(): Promise<{ ok: boolean }> {
+  return request<{ ok: boolean }>("/api/auth/logout", { method: "POST" });
+}
+
+export function fetchCurrentUser(): Promise<UserInfo> {
+  return request<UserInfo>("/api/auth/me");
+}
+
+export function deleteAccount(): Promise<{ ok: boolean }> {
+  return request<{ ok: boolean }>("/api/auth/account", { method: "DELETE" });
+}
+
+/* ---- 情绪 ---- */
+
+export function fetchMoodRecords(limit = 30): Promise<MoodRecordsResponse> {
+  return request<MoodRecordsResponse>(`/api/mood?limit=${limit}`);
+}
+
+export function fetchMoodTrends(days = 30): Promise<MoodTrendsResponse> {
+  return request<MoodTrendsResponse>(`/api/mood/trends?days=${days}`);
+}
+
+export function fetchMoodStats(): Promise<MoodStatsResponse> {
+  return request<MoodStatsResponse>("/api/mood/stats");
+}
+
+export function moodCheckin(moodScore: number, notes?: string): Promise<{ ok: boolean; id: number }> {
+  return request<{ ok: boolean; id: number }>("/api/mood/checkin", {
+    method: "POST",
+    body: JSON.stringify({ mood_score: moodScore, notes: notes || null }),
+  });
+}
+
+/* ---- 评估 ---- */
+
+export function fetchAssessmentStatus(): Promise<AssessmentStatusResponse> {
+  return request<AssessmentStatusResponse>("/api/assessment/status");
+}
+
+export function fetchAssessmentHistory(): Promise<AssessmentHistoryResponse> {
+  return request<AssessmentHistoryResponse>("/api/assessment/history");
+}
+
+export function resetAssessment(): Promise<{ ok: boolean }> {
+  return request<{ ok: boolean }>("/api/assessment/status", { method: "DELETE" });
+}
+
+/* ---- 安全 ---- */
+
+export function fetchSafetyResources(): Promise<CrisisResourcesResponse> {
+  return request<CrisisResourcesResponse>("/api/safety/resources");
+}
+
+/* ---- CBT ---- */
+
+export function fetchCbtStatus(): Promise<{ events: Array<Record<string, unknown>> }> {
+  return request<{ events: Array<Record<string, unknown>> }>("/api/cbt/status");
+}
+
+/* ---- 语音转文字 ---- */
+
+export async function transcribeAudio(blob: Blob): Promise<string> {
+  const res = await fetch("/api/transcribe", {
+    method: "POST",
+    credentials: "same-origin",
+    body: blob,
+  });
+  if (res.status === 401 && onUnauthorized) {
+    onUnauthorized();
+  }
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.detail || `HTTP ${res.status}`);
+  }
+  return data.text || "";
+}
+
+/* ---- 用户数据 ---- */
+
+export function importGuestMessages(
+  messages: Array<{ role: string; content: string }>,
+): Promise<{ ok: boolean; imported: number }> {
+  return request<{ ok: boolean; imported: number }>("/api/messages/import", {
+    method: "POST",
+    body: JSON.stringify({ messages }),
+  });
+}
+
+export function exportUserData(): Promise<Record<string, unknown>> {
+  return request<Record<string, unknown>>("/api/user/export");
+}
+
+export function clearUserData(): Promise<{ ok: boolean }> {
+  return request<{ ok: boolean }>("/api/user/data", { method: "DELETE" });
 }

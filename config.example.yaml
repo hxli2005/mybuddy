@@ -124,6 +124,11 @@ logging:
   level: INFO
   file: "./data/mybuddy.log"
 
+# ============ 语音转文字 ============
+transcription:
+  enabled: true                    # 是否启用本地 Whisper 语音转文字
+  model: base                      # 模型大小: tiny / base / small / medium / large-v3
+
 # ============ 外部工具 ============
 tools:
   weather_mock: false             # true 时跳过 open-meteo,返回占位数据(离线/测试用)
