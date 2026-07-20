@@ -267,7 +267,7 @@ AGENTS.md            这个分支的施工守则
 .\scripts\build_share.ps1 -PetRoot "D:\path\to\0000_core\pet\vup"
 ```
 
-产物为 `dist/MyBuddy-win-x64.zip`。构建脚本会收集自包含身体、心智桥、读本、设置入口和必需动画子集；收件人解压后只需填写自己的 key。
+产物为 `dist/MyBuddy-<版本>-win-x64.zip` 及同名 `.sha256` 校验文件。构建脚本会收集自包含身体、心智桥、读本、许可、构建身份、设置入口和必需动画子集；旧候选包会移入 `dist/previous/`，根目录只保留本次候选。收件人解压后只需填写自己的 key。
 
 包内 VPet 动画版权归“虚拟主播模拟器制作组”所有，只允许按当前归属与条款免费、非商用分发。完整来源、查阅日期和分发限制见 [distribution/THIRD_PARTY_NOTICES.txt](distribution/THIRD_PARTY_NOTICES.txt)。如果用途、收费方式或上游条款变化，必须重新审核授权。
 

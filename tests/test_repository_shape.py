@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 ROOT = Path(__file__).parents[1]
@@ -79,3 +80,30 @@ def test_share_first_run_matches_deepseek_default() -> None:
     assert "base_url: https://api.deepseek.com" in config
     assert "DeepSeek API key" in first_run
     assert "OpenRouter" not in first_run
+
+
+def test_share_package_has_one_versioned_auditable_candidate() -> None:
+    pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    package = (ROOT / "mybuddy" / "__init__.py").read_text(encoding="utf-8")
+    script = (ROOT / "scripts" / "build_share.ps1").read_text(encoding="utf-8")
+
+    product_version = re.search(r'(?m)^version = "([^"]+)"$', pyproject)
+    package_version = re.search(r'(?m)^__version__ = "([^"]+)"$', package)
+    assert product_version is not None
+    assert package_version is not None
+    assert product_version.group(1) == package_version.group(1)
+
+    for required in (
+        '"LICENSE"',
+        '"BUILD.txt"',
+        "-p:Version=$productVersion",
+        "-p:DebugSymbols=false",
+        "-p:DebugType=None",
+        "-Filter *.pdb",
+        '"MyBuddy-$productVersion-win-x64.zip"',
+        "Get-FileHash -LiteralPath $archive -Algorithm SHA256",
+        '"$archive.sha256"',
+        'Join-Path $outputRoot "previous"',
+    ):
+        assert required in script
+    assert '"MyBuddy-win-x64.zip"' not in script
