@@ -1330,3 +1330,13 @@ def test_replace_failure_rolls_back_already_replaced_file(tmp_path, monkeypatch)
 
     assert json.loads(first.read_text(encoding="utf-8")) == {"old": 1}
     assert json.loads(second.read_text(encoding="utf-8")) == {"old": 2}
+
+
+def test_just_happened_read_wording_is_not_current_activity() -> None:
+    bundle = CandidateBundle.model_validate(
+        _valid_bundle("读过。刚才正好翻到“羁鸟恋旧林，池鱼思故渊”。")
+    )
+
+    reasons = validate_activity_truth(bundle, None, {"read_1": "self_reading"})
+
+    assert reasons == []

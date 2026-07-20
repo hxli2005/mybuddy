@@ -389,7 +389,7 @@ def validate_activity_truth(
     expression = bundle.expression or ""
     reasons: list[str] = []
     ongoing_read = re.search(
-        r"正[^，。！？\n]{0,8}(?:读|翻)|正看到[「“\"]|还没读完|我念给你听",
+        r"(?<!刚才)正[^，。！？\n]{0,8}(?:读|翻)|正看到[「“\"]|还没读完|我念给你听",
         expression,
     )
     if ongoing_read and active_activity != "read":
@@ -970,6 +970,9 @@ async def _generate_candidate(
         "experience_focus": "body_touch/body_raise 先回应本次身体事实，不要接着回答自己上一句",
         "expression_form": "只写会说出口的话，不用括号舞台动作",
         "raise_truth": "body_raise 表示已经正常放下，禁止要求用户放我下来或松开我",
+        "past_question_truth": "用户问一件过去是否发生，不等于它发生过；无对应证据要明确说不记得或不能确认，不能把提问记录成那件共同经历。self_reading 只证明我自己读过，不证明我们一起读过。",
+        "public_correction": "用户纠正已有事实时，旧表达留在历史；用本次输入证据 correct 对应长期记忆，并在 expression 里公开承认错处和正确事实。",
+        "history_is_not_memory": "selected_history 的 id 只能作 evidence_id，不是长期记忆 target_id；仅回答过去是否发生时通常不需要 memory_operation。",
     }
     constrained_prompt = json.dumps(payload, ensure_ascii=False)
     last_reasons: list[str] = []
