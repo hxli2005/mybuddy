@@ -7,7 +7,7 @@
 
 - 当前写入者：无
 - 当前任务：无
-- 最近完成：S18.6 DeepSeek V4 结构化生成收敛
+- 最近完成：S18.7 首次运行切换 DeepSeek
 - 下一任务：S18 BLOCKED；等待所有者以最终身体形态开始真实多日基线
 - 后续任务：无
 - 工作区要求：保持提交后干净；新任务先更新本板再领取
@@ -43,7 +43,8 @@
 | S18.4 | DONE | read进入→Study B持续循环→到时C退出/打断收据 | S18.3 | 正文时长内不回idle；正常结束才推进段落，提前打断不冒充读完 |
 | S18.5 | DONE | 删除 Claude→只保留 DeepSeek/OpenRouter→发布配置可运行 | S18.4 | 无 Anthropic 依赖或残留；两种 provider 选择与回归通过；机器侧留出余量 |
 | S18.6 | DONE | DeepSeek V4 非思考工具调用→动态回合约束→真实-key复验 | S18.5 | Flash/Pro 实测比较；结构失败与静态接住收敛；贴实际台词 |
-| S18 | BLOCKED | 多日真实轨迹→记忆/阅读/身体互相改变→人格验收 | S18.6 | 四审计问题由轨迹回答；停机不补帧、沉默零债务、世界阻力与技术故障严格分开；贴实际台词 |
+| S18.7 | DONE | 首次输入DeepSeek key→发布默认直连V4 Flash→设置可更换 | S18.6 | 初始化文案、默认配置、说明一致；发布构建与测试通过 |
+| S18 | BLOCKED | 多日真实轨迹→记忆/阅读/身体互相改变→人格验收 | S18.7 | 四审计问题由轨迹回答；停机不补帧、沉默零债务、世界阻力与技术故障严格分开；贴实际台词 |
 
 已裁决的后续任务可以 BLOCKED 预登记；解除依赖时只把紧邻下一项改为 READY，
 不得并行激活。只读评审不占ACTIVE名额，
@@ -60,15 +61,15 @@
 
 ## 最近一次交接
 
-- 任务：S18.6 DeepSeek V4 结构化生成收敛
+- 任务：S18.7 首次运行切换 DeepSeek
 - 提交：本提交
-- 改动：DeepSeek V4 结构化调用关闭 thinking 并强制唯一工具；把动作、表达、活动时序和身体事件焦点放进每回合负载，兼容字符串 null。
-- 裁决：同规格实测 Flash 约25秒且结构稳定，Pro约30秒但出现空工具参数波动；开发示例改用 deepseek-v4-flash，OpenRouter分发默认不变。
-- 真实运行：最终完整链路0失败、无静态兜底，实际显示“忙完啦？回来得正好，我正闲着。”“嗯？摸头干嘛，我又不是小猫。”“羁鸟恋旧林，池鱼思故渊……这两句读得人心口软了一下。”；最终raise单腿显示“嗯？”，0失败。
-- 轨迹：user_experience/body_touch/body_raise/self_reading/self_walk/shared_expression 全部出现；证据在 data/deepseek-v4-flash-final-language-acceptance 与 data/deepseek-v4-flash-raise-final。
-- 回归：Python 85 passed，Ruff/diff全绿；机器侧4872行；密钥未落盘，临时配置、测试目录和进程均已清理。
-- 她哪里更活了：她不再把内部阅读计划当成已经发生的人生，触碰、提起和读诗都先接住眼前真实事实再说话。
-- 下一步：S18仍BLOCKED，等待所有者用最终身体做真实多日基线；四审计问题必须由轨迹回答。
+- 改动：首次运行、设置页与错误提示改为 DeepSeek key；发布默认配置直连 deepseek-v4-flash，使用说明、README和DESIGN同步，OpenRouter手动配置能力保留。
+- 真实运行：直接使用 distribution/config.default.yaml 与首次运行同名环境 key 跑完整链路，26.6秒、0失败；实际显示“忙完啦？那正好，我也闲着。回来就好。”“嗯，摸我头呢？感觉到了。”“羁鸟恋旧林，池鱼思故渊……这句真好。”
+- 轨迹：user_experience/body_touch/body_raise/self_reading/self_walk/shared_expression 全部出现；证据在 data/deepseek-first-run-default-acceptance。
+- 回归：Python 86 passed，BuddyShell 12 passed，Ruff/diff全绿；机器侧4872行；密钥未落盘，临时目录和监听进程已清理。
+- 阻塞：S18真实基线前仍须覆盖raise措辞“检查我还在不在？”这一用户动机猜测；本初始化刀不修改心智校验。
+- 她哪里更活了：这刀不改她的人格；收件人第一次填入DeepSeek key后，真正醒来的仍是能聊天、感到触碰、读书和行走的同一个她。
+- 下一步：S18仍BLOCKED，等待所有者用最终身体做真实多日基线并处理上述真实漏例。
 
 交接只允许保留最近一次。禁止粘贴完整diff、长测试日志、未来设计和“顺便发现”
 清单；这些分别属于Git、测试产物、DESIGN.md和当前任务之外。

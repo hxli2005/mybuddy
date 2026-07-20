@@ -65,3 +65,17 @@ def test_machine_side_stays_under_owner_limit() -> None:
     ]
     line_count = sum(len(path.read_text(encoding="utf-8").splitlines()) for path in files)
     assert line_count <= 5000, line_count
+
+
+def test_share_first_run_matches_deepseek_default() -> None:
+    config = (ROOT / "distribution" / "config.default.yaml").read_text(encoding="utf-8")
+    first_run = "\n".join(
+        (ROOT / path).read_text(encoding="utf-8")
+        for path in ("buddyshell/FirstRunWindow.xaml", "buddyshell/FirstRunWindow.xaml.cs")
+    )
+
+    assert "provider: deepseek" in config
+    assert "model: deepseek-v4-flash" in config
+    assert "base_url: https://api.deepseek.com" in config
+    assert "DeepSeek API key" in first_run
+    assert "OpenRouter" not in first_run

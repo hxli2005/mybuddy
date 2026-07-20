@@ -12,15 +12,15 @@
         </Grid.RowDefinitions>
         <StackPanel>
             <TextBlock Text="让小布醒来" FontSize="23" FontWeight="SemiBold" Foreground="#272C35" />
-            <TextBlock Text="只需要填一次你自己的 OpenRouter API key。"
+            <TextBlock Text="只需要填一次你自己的 DeepSeek API key。"
                        Margin="0,5,0,0" Foreground="#6E7581" />
         </StackPanel>
         <StackPanel Grid.Row="1" Margin="0,24,0,0">
-            <TextBlock Text="OpenRouter API key" FontSize="12" Foreground="#4F5662" />
+            <TextBlock Text="DeepSeek API key" FontSize="12" Foreground="#4F5662" />
             <PasswordBox x:Name="ApiKey" Height="36" Margin="0,6,0,12"
                          Padding="8,6" PasswordChar="●" />
             <TextBlock TextWrapping="Wrap" FontSize="11" Foreground="#6E7581" LineHeight="18">
-                对话会发送给 OpenRouter 及所选模型供应商，并由你自己的账户产生费用。
+                对话会发送给 DeepSeek，并由你自己的账户产生费用。
                 key 只会用 Windows 当前用户加密后保存在这台电脑。
             </TextBlock>
         </StackPanel>

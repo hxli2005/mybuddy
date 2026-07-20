@@ -18,7 +18,7 @@
             <StackPanel>
                 <TextBlock Text="离开多少分钟后视为不在场" FontSize="11" Foreground="#6E7581" />
                 <TextBox x:Name="IdlePauseMinutes" Height="32" Margin="0,4,0,10" />
-                <Button Content="更换 OpenRouter API key" Click="ChangeKey_Click"
+                <Button Content="更换 DeepSeek API key" Click="ChangeKey_Click"
                         Height="34" Margin="0,0,0,14" />
                 <TextBlock TextWrapping="Wrap" FontSize="10" Foreground="#7A818D">
                     VPet 素材版权归虚拟主播模拟器制作组；当前仅按非商用条件使用。

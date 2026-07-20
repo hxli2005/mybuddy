@@ -63,7 +63,7 @@ public static class SettingsStore
     public static string ReadApiKey(ShellSettings settings)
     {
         if (string.IsNullOrWhiteSpace(settings.ProtectedApiKey))
-            throw new InvalidOperationException("还没有设置 OpenRouter API key。");
+            throw new InvalidOperationException("还没有设置 DeepSeek API key。");
         try
         {
             var protectedBytes = Convert.FromBase64String(settings.ProtectedApiKey);

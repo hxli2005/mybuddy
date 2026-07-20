@@ -19,7 +19,7 @@ public partial class FirstRunWindow : Window
         var key = ApiKey.Password.Trim();
         if (key.Length < 10)
         {
-            MessageBox.Show(this, "请粘贴完整的 OpenRouter API key。", "还差一步");
+            MessageBox.Show(this, "请粘贴完整的 DeepSeek API key。", "还差一步");
             return;
         }
         try
