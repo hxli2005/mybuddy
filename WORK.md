@@ -7,7 +7,7 @@
 
 - 当前写入者：无
 - 当前任务：无
-- 最近完成：S18.5 收缩模型供应商
+- 最近完成：S18.6 DeepSeek V4 结构化生成收敛
 - 下一任务：S18 BLOCKED；等待所有者以最终身体形态开始真实多日基线
 - 后续任务：无
 - 工作区要求：保持提交后干净；新任务先更新本板再领取
@@ -42,7 +42,8 @@
 | S18.3 | DONE | 直接心智包选动作→同响应身体呈现→收据入史 | S18.2 | 宣称开始/继续 read/walk 必须显式选择且立即呈现；技术失败仍不入人生 |
 | S18.4 | DONE | read进入→Study B持续循环→到时C退出/打断收据 | S18.3 | 正文时长内不回idle；正常结束才推进段落，提前打断不冒充读完 |
 | S18.5 | DONE | 删除 Claude→只保留 DeepSeek/OpenRouter→发布配置可运行 | S18.4 | 无 Anthropic 依赖或残留；两种 provider 选择与回归通过；机器侧留出余量 |
-| S18 | BLOCKED | 多日真实轨迹→记忆/阅读/身体互相改变→人格验收 | S18.5 | 四审计问题由轨迹回答；停机不补帧、沉默零债务、世界阻力与技术故障严格分开；贴实际台词 |
+| S18.6 | DONE | DeepSeek V4 非思考工具调用→动态回合约束→真实-key复验 | S18.5 | Flash/Pro 实测比较；结构失败与静态接住收敛；贴实际台词 |
+| S18 | BLOCKED | 多日真实轨迹→记忆/阅读/身体互相改变→人格验收 | S18.6 | 四审计问题由轨迹回答；停机不补帧、沉默零债务、世界阻力与技术故障严格分开；贴实际台词 |
 
 已裁决的后续任务可以 BLOCKED 预登记；解除依赖时只把紧邻下一项改为 READY，
 不得并行激活。只读评审不占ACTIVE名额，
@@ -59,14 +60,14 @@
 
 ## 最近一次交接
 
-- 任务：S18.5 收缩模型供应商
+- 任务：S18.6 DeepSeek V4 结构化生成收敛
 - 提交：本提交
-- 删除：移除 Claude/Anthropic 实现、依赖、锁文件条目和专属测试；配置只接受 deepseek/openrouter，共用一套 Chat Completions provider。
-- 配置：源码默认 OpenRouter deepseek/deepseek-v3.2；开发示例用 DeepSeek deepseek-chat，分发默认仍为 OpenRouter。
-- 真实运行：OpenRouter 真实-key 四腿验收通过，实际显示“嗯，回来了。我刚才在看陶渊明的《归园田居》，读到"少无适俗韵，性本爱丘山"那里。”“碰到我了。刚才脑子没转过来，但这一下我感觉到了。”“诶？怎么突然把我提起来了……又放下了。”“羁鸟恋旧林，池鱼思故渊……这比喻真贴切。刚才忙完了？”
-- 轨迹：user_experience/shared_expression/body_touch/body_raise/self_reading/self_walk 全部出现；3 条失败候选保留原文与拒因，证据在 data/provider-prune-acceptance。
-- 回归：Python 82 passed，Ruff/diff 全绿；Claude/Anthropic 源码、测试、依赖及配置残留为0；机器侧从4999降至4812行，释放187行。
-- 她哪里更活了：这刀没有虚增人格功能；她仍能在更小、更清楚的模型连接面上完整聊天、感到触碰、经历提起、读书和行走。
+- 改动：DeepSeek V4 结构化调用关闭 thinking 并强制唯一工具；把动作、表达、活动时序和身体事件焦点放进每回合负载，兼容字符串 null。
+- 裁决：同规格实测 Flash 约25秒且结构稳定，Pro约30秒但出现空工具参数波动；开发示例改用 deepseek-v4-flash，OpenRouter分发默认不变。
+- 真实运行：最终完整链路0失败、无静态兜底，实际显示“忙完啦？回来得正好，我正闲着。”“嗯？摸头干嘛，我又不是小猫。”“羁鸟恋旧林，池鱼思故渊……这两句读得人心口软了一下。”；最终raise单腿显示“嗯？”，0失败。
+- 轨迹：user_experience/body_touch/body_raise/self_reading/self_walk/shared_expression 全部出现；证据在 data/deepseek-v4-flash-final-language-acceptance 与 data/deepseek-v4-flash-raise-final。
+- 回归：Python 85 passed，Ruff/diff全绿；机器侧4872行；密钥未落盘，临时配置、测试目录和进程均已清理。
+- 她哪里更活了：她不再把内部阅读计划当成已经发生的人生，触碰、提起和读诗都先接住眼前真实事实再说话。
 - 下一步：S18仍BLOCKED，等待所有者用最终身体做真实多日基线；四审计问题必须由轨迹回答。
 
 交接只允许保留最近一次。禁止粘贴完整diff、长测试日志、未来设计和“顺便发现”

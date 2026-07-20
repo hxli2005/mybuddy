@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 from mybuddy.config import LLMConfig
-from mybuddy.llm import Message, Role, ToolCall, make_provider
+from mybuddy.llm import Message, Role, ToolCall, ToolSpec, make_provider
 from mybuddy.llm.openai_compatible import (
     DEEPSEEK_BASE_URL,
     OPENROUTER_BASE_URL,
@@ -70,9 +70,11 @@ async def test_openai_compatible_provider_retries_transient_errors(monkeypatch) 
     class Completions:
         def __init__(self) -> None:
             self.calls = 0
+            self.kwargs = []
 
         def create(self, **kwargs):  # noqa: ANN003 —— 同步客户端,经 asyncio.to_thread 调用
             self.calls += 1
+            self.kwargs.append(kwargs)
             if self.calls == 1:
                 raise TransientError("bad gateway")
             msg = type("Msg", (), {"content": "ok", "tool_calls": []})()
@@ -87,14 +89,20 @@ async def test_openai_compatible_provider_retries_transient_errors(monkeypatch) 
         def __init__(self) -> None:
             self.chat = Chat()
 
-    provider = OpenAICompatibleProvider(LLMConfig(provider="openrouter", api_key="x"))
+    provider = OpenAICompatibleProvider(
+        LLMConfig(provider="deepseek", model="deepseek-v4-pro", api_key="x")
+    )
     provider._client = Client()  # type: ignore[assignment]
 
     async def _no_sleep(_delay: float) -> None:
         return None
 
     monkeypatch.setattr("mybuddy.llm.openai_compatible.asyncio.sleep", _no_sleep)
-    resp = await provider.generate([Message(role=Role.USER, content="hi")])
+    tool = ToolSpec(name="submit_bundle", description="submit", parameters={"type": "object"})
+    resp = await provider.generate([Message(role=Role.USER, content="hi")], tools=[tool])
 
     assert resp.text == "ok"
     assert provider._client.chat.completions.calls == 2
+    request = provider._client.chat.completions.kwargs[-1]
+    assert request["extra_body"] == {"thinking": {"type": "disabled"}}
+    assert request["tool_choice"]["function"]["name"] == "submit_bundle"

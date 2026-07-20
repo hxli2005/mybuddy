@@ -148,6 +148,59 @@ def test_candidate_schema_requires_memory_payload_and_expression() -> None:
     assert "action_choice" in schema["required"]
 
 
+def test_candidate_normalizes_deepseek_null_strings() -> None:
+    candidate = _valid_bundle("null")
+    candidate["action_choice"] = "null"
+
+    bundle = CandidateBundle.model_validate(candidate)
+    assert bundle.action_choice is None and bundle.expression is None
+
+
+@pytest.mark.asyncio
+async def test_candidate_prompt_exposes_runtime_constraints(tmp_path) -> None:
+    files = MindFiles(tmp_path)
+    provider = StubProvider([_valid_bundle()])
+
+    await mind_step(
+        "我回来了。",
+        provider=provider,
+        files=files,
+        now=datetime(2026, 7, 20, 10, 0, tzinfo=UTC),
+    )
+
+    prompt = json.loads(provider.calls[0][0].content)
+    constraints = prompt["runtime_constraints"]
+    assert "reading" not in prompt["state"] and "next_activity" not in prompt["state"]
+    assert constraints["current_activity"] == "idle"
+    assert constraints["action_choice_must_be_one_of"] == [None, "read", "walk"]
+    assert constraints["expression_must_be"] == "nonempty_string"
+    assert "action_choice 是即将启动" in constraints["activity_truth"]
+    assert constraints["expression_form"] == "只写会说出口的话，不用括号舞台动作"
+
+
+@pytest.mark.asyncio
+async def test_premature_read_claim_retries_before_it_becomes_history(tmp_path) -> None:
+    files = MindFiles(tmp_path)
+    bad = _valid_bundle("我正好在翻陶渊明。")
+    good = _valid_bundle("忙完啦。我在这儿。")
+    provider = StubProvider([bad, good])
+
+    result = await mind_step(
+        "我刚忙完，回来看看你。",
+        provider=provider,
+        files=files,
+        now=datetime(2026, 7, 20, 10, 0, tzinfo=UTC),
+    )
+
+    _, _, _, failures = _read(files)
+    assert result.committed is True
+    assert result.attempts == 2
+    assert any(
+        "没有正在进行的 read，却声称已经在读" in reason
+        for reason in failures[0]["reasons"]
+    )
+
+
 @pytest.mark.asyncio
 async def test_action_claim_retries_until_read_is_scheduled(tmp_path) -> None:
     files = MindFiles(tmp_path)
@@ -491,7 +544,7 @@ async def test_raise_claim_requires_raw_fact_and_cannot_infer_motive(tmp_path) -
     assert result.committed is False
     assert any("本次输入不是 body_raise 原始事实" in reason for reason in result.rejection_reasons)
 
-    authored_motive = _valid_bundle("刚才被你提起来，是因为喜欢我吧。")
+    authored_motive = _valid_bundle("刚把我抱起来又放下，是确认我还在不在？")
     authored_motive["memory_operations"] = []
     motive_files = MindFiles(tmp_path / "motive")
     result = await mind_step(
@@ -503,6 +556,18 @@ async def test_raise_claim_requires_raw_fact_and_cannot_infer_motive(tmp_path) -
 
     assert result.committed is False
     assert any("从原始提起推断了用户动机" in reason for reason in result.rejection_reasons)
+
+    unreleased = _valid_bundle("还真把我抱起来了。现在放我下来。")
+    unreleased["memory_operations"] = []
+    result = await mind_step(
+        None,
+        experience_type="body_raise",
+        provider=StubProvider([unreleased, unreleased]),
+        files=MindFiles(tmp_path / "unreleased"),
+    )
+
+    assert result.committed is False
+    assert any("已确认正常放下" in reason for reason in result.rejection_reasons)
 
 
 @pytest.mark.asyncio

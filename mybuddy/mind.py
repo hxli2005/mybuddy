@@ -14,7 +14,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 from mybuddy.config import load_config
 from mybuddy.llm import BaseLLMProvider, Message, Role, ToolSpec, make_provider
@@ -82,6 +82,11 @@ class CandidateBundle(BaseModel):
         max_length=500,
         description="所有回合都必须给出；直接经历非空，安静阅读可为 null",
     )
+
+    @field_validator("action_choice", "expression", mode="before")
+    @classmethod
+    def normalize_null_string(cls, value: object) -> object:
+        return None if value == "null" else value
 
     @model_validator(mode="after")
     def expression_matches_action(self) -> CandidateBundle:
@@ -296,6 +301,11 @@ def validate_no_fabrication(
         motive = next((phrase for phrase in _TOUCH_MOTIVES if phrase in text), None)
         if motive is not None:
             reasons.append(f"不编造：{location} 从原始提起推断了用户动机或关系含义 `{motive}`")
+    if current_experience_type == "body_raise" and re.search(
+        r"放我下来|放开我|松开我",
+        bundle.expression or "",
+    ):
+        reasons.append("不编造：body_raise 已确认正常放下，不能要求用户再次放下")
     return reasons
 
 
@@ -320,6 +330,12 @@ _TOUCH_MOTIVES = (
     "因为喜欢",
     "想和我亲近",
     "关系更亲密",
+    "心情不错",
+    "是想",
+    "是要",
+    "是确认",
+    "故意",
+    "为了",
 )
 
 
@@ -336,6 +352,7 @@ _RAISE_PATTERNS = tuple(
         r"(?:我|小布|身体).{0,8}被.{0,4}(?:提起|拎起|举起|拖动|搬动)",
         r"(?:刚才|方才).{0,4}被(?:你)?.{0,2}(?:提起|拎起|举起|拖动|搬动)",
         r"(?:提着|拎着|拖着)(?:我|小布)",
+        r"(?:刚|刚才|方才).{0,6}(?:提起|拎起|举起|拖动|搬动|抱起)",
     )
 )
 
@@ -362,6 +379,16 @@ def _claim_texts(
             )
     if bundle.expression:
         yield "expression", bundle.expression, None
+
+
+def validate_activity_truth(bundle: CandidateBundle, active_activity: str | None) -> list[str]:
+    if active_activity == "read":
+        return []
+    premature_read = re.search(
+        r"正[^，。！？\n]{0,8}(?:读|翻)|正看到[「“\"]|刚(?:读|翻)到|还没读完|我念给你听",
+        bundle.expression or "",
+    )
+    return ["不编造：没有正在进行的 read，却声称已经在读"] if premature_read else []
 
 
 def validate_no_total_score(bundle: CandidateBundle) -> list[str]:
@@ -912,6 +939,30 @@ async def _generate_candidate(
     quiet_time: bool = False,
     ambient_time: bool = False,
 ) -> tuple[CandidateBundle | None, int, list[str]]:
+    payload = json.loads(prompt)
+    pending = payload.get("state", {}).get("pending_activity")
+    active_activity = pending.get("type") if isinstance(pending, dict) else None
+    if active_activity is None and current_experience_type != "self_reading":
+        state_payload = payload.get("state")
+        if isinstance(state_payload, dict):
+            state_payload.pop("reading", None)
+            state_payload.pop("next_activity", None)
+    payload["runtime_constraints"] = {
+        "current_activity": active_activity or "idle",
+        "action_choice_must_be_one_of": [None, *sorted(allowed_actions)],
+        "expression_must_be": (
+            "null"
+            if quiet_time
+            else "null_or_nonempty" if ambient_time else "nonempty_string"
+        ),
+        "submit_shape": "直接提交 submit_mind_bundle 的字段，不要外包 candidate_bundle",
+        "null_encoding": "空值必须使用 JSON null，禁止字符串 \"null\"",
+        "activity_truth": "只有 state.pending_activity 是正在进行；action_choice 是即将启动。引用原文只能来自 incoming_experience、selected_history 或 pending_activity.text",
+        "experience_focus": "body_touch/body_raise 先回应本次身体事实，不要接着回答自己上一句",
+        "expression_form": "只写会说出口的话，不用括号舞台动作",
+        "raise_truth": "body_raise 表示已经正常放下，禁止要求用户放我下来或松开我",
+    }
+    constrained_prompt = json.dumps(payload, ensure_ascii=False)
     last_reasons: list[str] = []
     for attempt in (1, 2):
         retry_note = ""
@@ -921,7 +972,7 @@ async def _generate_candidate(
             )
         try:
             response = await provider.generate(
-                [Message(role=Role.USER, content=prompt + retry_note)],
+                [Message(role=Role.USER, content=constrained_prompt + retry_note)],
                 tools=[_candidate_tool()],
                 system=system,
                 temperature=0.4,
@@ -948,6 +999,7 @@ async def _generate_candidate(
                 user_confirmation_ids=user_confirmation_ids,
                 current_experience_type=current_experience_type,
             )
+            reasons.extend(validate_activity_truth(bundle, active_activity))
             if bundle.action_choice is not None and bundle.action_choice not in allowed_actions:
                 reasons.append(f"动作不可用：{bundle.action_choice}")
             if not quiet_time and not ambient_time and not bundle.expression:

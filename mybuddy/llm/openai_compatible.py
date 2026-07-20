@@ -45,14 +45,22 @@ class OpenAICompatibleProvider(BaseLLMProvider):
         system: str | None = None,
     ) -> LLMResponse:
         api_messages = _to_openai_messages(messages, system=system)
+        request_model = model or self._cfg.model
         kwargs: dict[str, Any] = {
-            "model": model or self._cfg.model,
+            "model": request_model,
             "messages": api_messages,
             "temperature": temperature if temperature is not None else self._cfg.temperature,
             "max_tokens": max_tokens or self._cfg.max_tokens,
         }
         if tools:
             kwargs["tools"] = [_to_openai_tool(t) for t in tools]
+        if self._cfg.provider == "deepseek" and request_model.startswith("deepseek-v4"):
+            kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
+            if len(tools or []) == 1:
+                kwargs["tool_choice"] = {
+                    "type": "function",
+                    "function": {"name": tools[0].name},
+                }
 
         resp = await self._create_with_retries(kwargs)
         return _from_openai_response(resp)
