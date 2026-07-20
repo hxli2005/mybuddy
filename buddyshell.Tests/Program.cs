@@ -116,7 +116,9 @@ internal static class Program
         const double width = 336;
         const double height = 420;
         Equal(EdgeSide.Left, EdgeDock.Detect(area, area.Left, width));
+        Equal(EdgeSide.Left, EdgeDock.Detect(area, area.Left - width / 2, width));
         Equal(EdgeSide.Right, EdgeDock.Detect(area, area.Right - width, width));
+        Equal(EdgeSide.Right, EdgeDock.Detect(area, area.Right - width / 2, width));
         Equal<EdgeSide?>(null, EdgeDock.Detect(area, area.Left + 100, width));
 
         var ratio = EdgeDock.TopRatio(area, height, 240);

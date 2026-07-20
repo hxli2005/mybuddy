@@ -11,8 +11,8 @@ public static class EdgeDock
 
     public static EdgeSide? Detect(Rect workArea, double left, double width)
     {
-        if (Math.Abs(left - workArea.Left) <= SnapDistance) return EdgeSide.Left;
-        if (Math.Abs(left + width - workArea.Right) <= SnapDistance) return EdgeSide.Right;
+        if (left <= workArea.Left + SnapDistance) return EdgeSide.Left;
+        if (left + width >= workArea.Right - SnapDistance) return EdgeSide.Right;
         return null;
     }
 
