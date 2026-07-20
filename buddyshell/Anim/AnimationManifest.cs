@@ -110,7 +110,7 @@ public sealed partial class AnimationManifest
                 animation.PlanId,
                 animation.Intent,
                 SequencePhase(animation.Entry, AnimationPhaseKind.Entry),
-                Phase(animation.Body, AnimationPhaseKind.Body, shape == BodyActionShape.Interactive)!,
+                Phase(animation.Body, AnimationPhaseKind.Body, shape != BodyActionShape.Horizontal)!,
                 Phase(animation.Exit, AnimationPhaseKind.Exit));
 
         private AnimationPlan Looping(string id, AnimationIntent intent, string? entry, string body, string? exit, bool baseline = false) =>

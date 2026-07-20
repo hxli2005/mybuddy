@@ -117,9 +117,7 @@ public sealed class AnimationController : IAnimationController, IAnimationDiagno
         {
             StartRequest(new AnimationRequest(
                 reaction,
-                AnimationSource.System,
-                $"reply:{correlationId}",
-                AnimationPriority.Response));
+                AnimationSource.System, $"reply:{correlationId}"));
         }
         else if (_request?.CorrelationId == correlationId)
         {
@@ -163,6 +161,14 @@ public sealed class AnimationController : IAnimationController, IAnimationDiagno
             {
                 ResetToBaselineWithoutRender();
             }
+            return;
+        }
+        if (_phase.Kind == AnimationPhaseKind.Body && _phase.Loop &&
+            _execution == AnimationExecutionKind.Transient &&
+            _request is { DurationMs: > 0 } request && elapsed >= request.DurationMs)
+        {
+            if (_plan.Exit is { } exit) StartPhase(exit);
+            else ResumePersistentView();
             return;
         }
         if (AnimationTimeline.IsComplete(_phase, elapsed)) AdvancePhase();
@@ -277,9 +283,7 @@ public sealed class AnimationController : IAnimationController, IAnimationDiagno
     private void OnTouchStarted(object? sender, TouchDetectedEventArgs args) => Submit(
         new AnimationRequest(
             args.Zone == TouchZone.Head ? AnimationIntent.TouchHeadReflex : AnimationIntent.TouchBodyReflex,
-            AnimationSource.Touch,
-            args.CorrelationId,
-            AnimationPriority.Touch));
+            AnimationSource.Touch, args.CorrelationId));
 
     private void OnTouchDetected(object? sender, TouchDetectedEventArgs args) =>
         TouchDetected?.Invoke(this, args);

@@ -49,7 +49,6 @@ class BodyEvent(BaseModel):
 
 class BodyPresence(BaseModel):
     model_config = ConfigDict(extra="forbid")
-
     present: bool
     fullscreen: bool
     surface: Literal["full", "edge"] = "full"
@@ -96,6 +95,7 @@ class BodyActivity(BaseModel):
 
     id: str
     type: Literal["read", "walk"]
+    duration_ms: int = Field(default=15_000, ge=0)
 
 
 class BodyStepRequest(BaseModel):
@@ -146,7 +146,11 @@ class BodyBridge:
             pending_activity = state.get("pending_activity")
             activity = (
                 BodyActivity.model_validate(
-                    {"id": pending_activity["id"], "type": pending_activity["type"]}
+                    {
+                        key: pending_activity[key]
+                        for key in ("id", "type", "duration_ms")
+                        if key in pending_activity
+                    }
                 )
                 if isinstance(pending_activity, dict)
                 else None

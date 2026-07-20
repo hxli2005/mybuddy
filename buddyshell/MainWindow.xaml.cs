@@ -195,9 +195,7 @@ public partial class MainWindow : Window
             eventId = $"raise-{Guid.NewGuid():N}";
             _animationController.BeginInteractive(new AnimationRequest(
                 animation.Intent,
-                AnimationSource.DirectManipulation,
-                eventId,
-                AnimationPriority.DirectManipulation));
+                AnimationSource.DirectManipulation, eventId));
             var start = new Point(Left, Top);
             DragMove();
             released = Math.Abs(Left - start.X) >= SystemParameters.MinimumHorizontalDragDistance ||
@@ -305,9 +303,7 @@ public partial class MainWindow : Window
         var animationId = $"chat:{Guid.NewGuid():N}";
         _animationController.Submit(new AnimationRequest(
             AnimationIntent.Think,
-            AnimationSource.Chat,
-            animationId,
-            AnimationPriority.Think));
+            AnimationSource.Chat, animationId));
         try
         {
             var response = await StepAsync(bodyEvent);
@@ -325,10 +321,10 @@ public partial class MainWindow : Window
             }
             SetMindConnectionState(response);
         }
-        catch (BridgeRequestException exception)
+        catch (BridgeRequestException)
         {
             SetConnectionState("未连接，输入已保留", ConnectionState.Warning);
-            _animationController.Complete(animationId, new AnimationOutcome(IsError: true, Reason: exception.Message));
+            _animationController.Complete(animationId, new AnimationOutcome());
         }
         finally
         {
@@ -410,9 +406,7 @@ public partial class MainWindow : Window
         {
             _animationController?.Submit(new AnimationRequest(
                 action.Animation(BodyActionDirection.Still).Intent,
-                AnimationSource.State,
-                activity.Id,
-                AnimationPriority.Activity));
+                AnimationSource.State, activity.Id, activity.DurationMs));
             return;
         }
         if (action.Shape == BodyActionShape.Horizontal)
@@ -440,9 +434,7 @@ public partial class MainWindow : Window
             _walkTimer.Start();
             _animationController?.Submit(new AnimationRequest(
                 action.Animation(_walkAttempt.Direction).Intent,
-                AnimationSource.State,
-                activityId,
-                AnimationPriority.Activity));
+                AnimationSource.State, activityId));
         }
         catch (Exception exception)
         {
@@ -604,9 +596,7 @@ public partial class MainWindow : Window
         rise
             ? side == EdgeSide.Left ? AnimationIntent.EdgeLeftRise : AnimationIntent.EdgeRightRise
             : side == EdgeSide.Left ? AnimationIntent.EdgeLeft : AnimationIntent.EdgeRight,
-        AnimationSource.DirectManipulation,
-        $"edge:{side.ToString().ToLowerInvariant()}:{(rise ? "rise" : "main")}:{Guid.NewGuid():N}",
-        AnimationPriority.DirectManipulation);
+        AnimationSource.DirectManipulation, $"edge:{side.ToString().ToLowerInvariant()}:{(rise ? "rise" : "main")}:{Guid.NewGuid():N}");
 
     private void UpdateEdgeVisibility()
     {

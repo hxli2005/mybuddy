@@ -18,7 +18,7 @@ internal static class Program
             ("edge docking exposes only a narrow strip", EdgeDockingExposesNarrowStrip),
             ("edge transitions preserve side-hide continuity", EdgeTransitionsPreserveContinuity),
             ("body action catalog adds same-shape actions as data", BodyActionCatalogIsDataDriven),
-            ("read completion emits a physical receipt", ReadCompletionEmitsReceipt),
+            ("read loops until its duration then emits a receipt", ReadLoopsUntilDurationThenEmitsReceipt),
             ("raised drag holds until release and interrupts with a receipt", RaisedDragHoldsUntilRelease),
             ("touch interrupts read without a completed receipt", TouchInterruptsRead),
             ("walk displacement stays inside work area", WalkDisplacementStaysInsideWorkArea),
@@ -141,14 +141,12 @@ internal static class Program
         fixture.Controller.BeginInteractive(new AnimationRequest(
             AnimationIntent.Raised,
             AnimationSource.DirectManipulation,
-            "raise-before-edge",
-            AnimationPriority.DirectManipulation));
+            "raise-before-edge"));
         fixture.Advance(10);
         var main = new AnimationRequest(
             AnimationIntent.EdgeLeft,
             AnimationSource.DirectManipulation,
-            "edge-main-1",
-            AnimationPriority.DirectManipulation);
+            "edge-main-1");
         fixture.Controller.BeginInteractive(main);
         Equal("edge.left.normal", fixture.Controller.Snapshot.PlanId);
         Equal(AnimationPhaseKind.Entry, fixture.Controller.Snapshot.Phase);
@@ -157,8 +155,7 @@ internal static class Program
         var rise = new AnimationRequest(
             AnimationIntent.EdgeLeftRise,
             AnimationSource.DirectManipulation,
-            "edge-rise-1",
-            AnimationPriority.DirectManipulation);
+            "edge-rise-1");
         fixture.Controller.BeginInteractive(rise);
         fixture.Advance(10);
         var resumedMain = main with { CorrelationId = "edge-main-2" };
@@ -200,7 +197,7 @@ internal static class Program
         }
     }
 
-    private static void ReadCompletionEmitsReceipt()
+    private static void ReadLoopsUntilDurationThenEmitsReceipt()
     {
         using var fixture = new Fixture();
         ActivityFinishedEventArgs? receipt = null;
@@ -208,10 +205,13 @@ internal static class Program
         fixture.Controller.Submit(new AnimationRequest(
             AnimationIntent.Read,
             AnimationSource.State,
-            "read-1",
-            AnimationPriority.Activity));
+            "read-1", 100));
         Equal("activity.read.normal", fixture.Controller.Snapshot.PlanId);
         fixture.Advance(30);
+        Equal(null, receipt);
+        Equal(AnimationPhaseKind.Body, fixture.Controller.Snapshot.Phase);
+        Equal(AnimationExecutionKind.Transient, fixture.Controller.Snapshot.Execution);
+        fixture.Advance(90);
         Equal("read-1", receipt?.ActivityId);
         Equal(true, receipt?.Completed);
         Equal("idle.default.normal", fixture.Controller.Snapshot.BaselinePlanId);
@@ -228,13 +228,11 @@ internal static class Program
         fixture.Controller.Submit(new AnimationRequest(
             AnimationIntent.Read,
             AnimationSource.State,
-            "read-before-raise",
-            AnimationPriority.Activity));
+            "read-before-raise"));
         fixture.Controller.BeginInteractive(new AnimationRequest(
             AnimationIntent.Raised,
             AnimationSource.DirectManipulation,
-            "raise-1",
-            AnimationPriority.DirectManipulation));
+            "raise-1"));
 
         Equal("read-before-raise", receipt?.ActivityId);
         Equal("interrupted", receipt?.Status);
@@ -260,8 +258,7 @@ internal static class Program
         fixture.Controller.Submit(new AnimationRequest(
             AnimationIntent.Read,
             AnimationSource.State,
-            "read-interrupted",
-            AnimationPriority.Activity));
+            "read-interrupted"));
         fixture.Renderer.RaiseTouchStarted(TouchZone.Head, "touch-1");
         Equal("read-interrupted", receipt?.ActivityId);
         Equal(false, receipt?.Completed);
@@ -300,8 +297,7 @@ internal static class Program
         fixture.Controller.Submit(new AnimationRequest(
             AnimationIntent.WalkRight,
             AnimationSource.State,
-            "walk-1",
-            AnimationPriority.Activity));
+            "walk-1"));
         Equal("activity.walk.right.normal", fixture.Controller.Snapshot.PlanId);
         fixture.Advance(30);
         Equal("walk-1", receipt?.ActivityId);
@@ -319,8 +315,7 @@ internal static class Program
         fixture.Controller.Submit(new AnimationRequest(
             AnimationIntent.WalkLeft,
             AnimationSource.State,
-            "walk-fault",
-            AnimationPriority.Activity));
+            "walk-fault"));
 
         Equal("walk-fault", receipt?.ActivityId);
         Equal("failed", receipt?.Status);
@@ -335,8 +330,7 @@ internal static class Program
         fixture.Controller.Submit(new AnimationRequest(
             AnimationIntent.Think,
             AnimationSource.Chat,
-            "chat-1",
-            AnimationPriority.Think));
+            "chat-1"));
         fixture.Advance(10);
         Equal(true, fixture.Controller.Snapshot.ThinkPending);
         fixture.Controller.Complete("chat-1", new AnimationOutcome(AnimationIntent.Happy));
@@ -414,8 +408,8 @@ internal static class Program
                 item.Intent,
                 Phase(root, item.Id, AnimationPhaseKind.Entry),
                 Phase(root, item.Id, AnimationPhaseKind.Body,
-                    item.Baseline || item.Pending || item.Intent is AnimationIntent.Raised or
-                        AnimationIntent.EdgeLeft or AnimationIntent.EdgeRight or
+                    item.Baseline || item.Pending || item.Intent is AnimationIntent.Read or
+                        AnimationIntent.Raised or AnimationIntent.EdgeLeft or AnimationIntent.EdgeRight or
                         AnimationIntent.EdgeLeftRise or AnimationIntent.EdgeRightRise),
                 Phase(root, item.Id, AnimationPhaseKind.Exit),
                 item.Baseline,

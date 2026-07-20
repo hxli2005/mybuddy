@@ -105,6 +105,7 @@ class PendingReadActivity(PendingActivity):
     title: str
     passage_index: int
     text: str
+    duration_ms: int = 15_000
 
 
 class PendingWalkActivity(PendingActivity):
@@ -453,13 +454,15 @@ def _activity(action: str, state: dict[str, Any], reading_path: Path) -> dict[st
         return {"id": f"walk_{uuid.uuid4().hex}", "type": "walk"}
     source = _reading_source(reading_path)
     passage_index = int(state["reading"]["next_passage"])
+    text = source["passages"][passage_index]
     return {
         "id": f"read_{uuid.uuid4().hex}",
         "type": "read",
         "source": source["source"],
         "title": source["title"],
         "passage_index": passage_index,
-        "text": source["passages"][passage_index],
+        "text": text,
+        "duration_ms": max(15_000, len(text) * 250),
     }
 
 

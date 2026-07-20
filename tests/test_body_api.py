@@ -185,10 +185,12 @@ def test_direct_read_choice_returns_action_with_its_words(api) -> None:
     assert response.status_code == 200
     body = response.json()
     assert body["expression"]["text"] == "我继续读诗了。"
+    assert body["activity"]["duration_ms"] >= 15_000
     assert body["activity"]["type"] == "read"
     state = json.loads((data_dir / "state.json").read_text(encoding="utf-8"))
     assert state["pending_activity"]["id"] == body["activity"]["id"]
     assert state["pending_activity"]["passage_index"] == 0
+    assert state["pending_activity"]["duration_ms"] == body["activity"]["duration_ms"]
 
 
 def test_new_event_waits_in_body_until_previous_expression_is_shown(api) -> None:

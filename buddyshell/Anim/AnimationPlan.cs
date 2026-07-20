@@ -3,7 +3,6 @@ namespace BuddyShell.Anim;
 public enum AnimationPhaseKind { Entry, Body, Exit }
 public enum AnimationExecutionKind { Baseline, Transient, Pending, Interactive }
 public enum AnimationSource { State, Touch, Chat, System, DirectManipulation }
-public enum AnimationPriority { Activity = 20, Think = 60, Response = 70, Touch = 90, DirectManipulation = 100 }
 
 public sealed record LayerPlacement(
     double Width,
@@ -75,12 +74,9 @@ public sealed record AnimationRequest(
     AnimationIntent Intent,
     AnimationSource Source,
     string CorrelationId,
-    AnimationPriority Priority);
+    int DurationMs = 0);
 
-public sealed record AnimationOutcome(
-    AnimationIntent? Reaction = null,
-    bool IsError = false,
-    string? Reason = null);
+public sealed record AnimationOutcome(AnimationIntent? Reaction = null);
 
 public sealed record AnimationSnapshot(
     long Generation,

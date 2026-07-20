@@ -102,13 +102,15 @@ public sealed class BodyActivity
 
     [JsonPropertyName("type")]
     public string Type { get; set; } = "read";
+
+    [JsonPropertyName("duration_ms")]
+    public int DurationMs { get; set; } = 15_000;
 }
 
 public sealed class BodyStepResponse
 {
     [JsonPropertyName("activity")]
     public BodyActivity? Activity { get; set; }
-
     [JsonPropertyName("expression")]
     public PendingBodyExpression? Expression { get; set; }
 
