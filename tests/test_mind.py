@@ -22,6 +22,7 @@ from scripts.accept_real_key import DEFAULT_TEXT, encode_payload
 
 def _valid_bundle(expression: str = "我在这儿，先陪你坐一会儿。") -> dict:
     return {
+        "action_choice": None,
         "state_changes": {
             "mood": "安静地关心",
             "energy": "平稳",
@@ -70,6 +71,7 @@ class StubProvider(BaseLLMProvider):
 
 def _time_bundle(expression=None) -> dict:  # noqa: ANN001
     return {
+        "action_choice": None,
         "state_changes": {
             "mood": "安静",
             "energy": "平稳",
@@ -143,6 +145,35 @@ def test_candidate_schema_requires_memory_payload_and_expression() -> None:
     operation = schema["$defs"]["MemoryOperation"]
     assert {"content", "evidence_ids"} <= set(operation["required"])
     assert "expression" in schema["required"]
+    assert "action_choice" in schema["required"]
+
+
+@pytest.mark.asyncio
+async def test_action_claim_retries_until_read_is_scheduled(tmp_path) -> None:
+    files = MindFiles(tmp_path)
+    bad = _valid_bundle("我继续读诗了。")
+    good = json.loads(json.dumps(bad, ensure_ascii=False))
+    good["action_choice"] = "read"
+    provider = StubProvider([bad, good])
+
+    result = await mind_step(
+        "你继续读吧。",
+        provider=provider,
+        files=files,
+        now=datetime(2026, 7, 20, 10, 0, tzinfo=UTC),
+    )
+
+    state, _, _, failures = _read(files)
+    assert result.committed is True
+    assert result.attempts == 2
+    assert state["pending_expression"]["text"] == "我继续读诗了。"
+    assert state["pending_activity"]["type"] == "read"
+    assert state["pending_activity"]["passage_index"] == 0
+    assert any(
+        "不编造：expression 声称 read，但 action_choice 不匹配" in reason
+        for reason in failures[0]["reasons"]
+    )
+    assert "上一个整包被拒绝" in provider.calls[1][0].content
 
 
 @pytest.mark.parametrize(
@@ -348,6 +379,7 @@ async def test_s8_real_fabricated_touch_bundle_is_rejected_with_structural_reaso
     tmp_path, incoming: str
 ) -> None:
     bad = {
+        "action_choice": None,
         "state_changes": {
             "mood": "平静",
             "energy": "平稳",
@@ -411,6 +443,7 @@ async def test_touch_claim_in_expression_alone_requires_current_body_touch(tmp_p
 @pytest.mark.asyncio
 async def test_body_touch_can_be_evidence_for_her_own_touch_experience(tmp_path) -> None:
     bundle = {
+        "action_choice": None,
         "state_changes": {
             "mood": "平静",
             "energy": "平稳",

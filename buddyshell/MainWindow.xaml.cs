@@ -313,16 +313,16 @@ public partial class MainWindow : Window
             var response = await StepAsync(bodyEvent);
             if (response.EventStatus is not ("processed" or "duplicate"))
                 throw new BridgeRequestException($"身体桥未接收聊天事件：{response.EventStatus}");
-            ApplyActivity(response);
             Chat.AcceptSent(text);
             _pendingChatText = null;
             _pendingChatEventId = null;
+            _animationController.Complete(animationId, new AnimationOutcome(AnimationIntent.Happy));
+            ApplyActivity(response);
             if (response.Expression is not null)
             {
                 ShowBodyExpression(response.Expression);
                 await ConfirmShownAsync();
             }
-            _animationController.Complete(animationId, new AnimationOutcome(AnimationIntent.Happy));
             SetMindConnectionState(response);
         }
         catch (BridgeRequestException exception)

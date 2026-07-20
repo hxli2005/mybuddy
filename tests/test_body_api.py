@@ -19,6 +19,7 @@ class StubProvider(BaseLLMProvider):
         is_ambient_reading = is_reading and "ambient" in kwargs.get("system", "")
         is_touch = incoming is not None and incoming["type"] == "body_touch"
         is_raise = incoming is not None and incoming["type"] == "body_raise"
+        chooses_read = incoming is not None and incoming.get("content") == "你继续读吧"
         touch_zone = incoming.get("zone") if is_touch else None
         return LLMResponse(
             tool_calls=[
@@ -26,6 +27,7 @@ class StubProvider(BaseLLMProvider):
                     id="call_1",
                     name="submit_mind_bundle",
                     arguments={
+                        "action_choice": "read" if chooses_read else None,
                         "state_changes": {
                             "mood": "放松",
                             "energy": "平稳",
@@ -60,7 +62,9 @@ class StubProvider(BaseLLMProvider):
                                 "target_id": None,
                             }
                         ],
-                        "expression": "刚读到一句很想回到自在处的话。你今天还好吗？"
+                        "expression": "我继续读诗了。"
+                        if chooses_read
+                        else "刚读到一句很想回到自在处的话。你今天还好吗？"
                         if is_ambient_reading
                         else None
                         if is_reading
@@ -166,6 +170,25 @@ def test_expression_is_non_destructive_and_event_id_is_idempotent(api) -> None:
     repeated_receipt = client.post("/api/body/step", json={"shown_id": expression["id"]})
     assert repeated_receipt.json()["shown_confirmed"] is False
     assert _history(data_dir) == after_shown
+
+
+def test_direct_read_choice_returns_action_with_its_words(api) -> None:
+    client, _, data_dir = api
+    response = client.post(
+        "/api/body/step",
+        json={
+            "event": {"event_id": "chat-read-now", "type": "chat", "content": "你继续读吧"},
+            "presence": {"present": True, "fullscreen": False},
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["expression"]["text"] == "我继续读诗了。"
+    assert body["activity"]["type"] == "read"
+    state = json.loads((data_dir / "state.json").read_text(encoding="utf-8"))
+    assert state["pending_activity"]["id"] == body["activity"]["id"]
+    assert state["pending_activity"]["passage_index"] == 0
 
 
 def test_new_event_waits_in_body_until_previous_expression_is_shown(api) -> None:

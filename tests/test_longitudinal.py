@@ -94,6 +94,7 @@ class LongitudinalProvider(BaseLLMProvider):
                     id="longitudinal",
                     name="submit_mind_bundle",
                     arguments={
+                        "action_choice": None,
                         "state_changes": {
                             "mood": "\u5b89\u9759",
                             "energy": "\u5e73\u7a33",

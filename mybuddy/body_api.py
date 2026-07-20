@@ -26,7 +26,6 @@ from mybuddy.mind import (
 
 class BodyEvent(BaseModel):
     model_config = ConfigDict(extra="forbid")
-
     event_id: str = Field(min_length=1, max_length=160)
     type: Literal["chat", "touch_head", "touch_body", "raise"]
     content: str | None = Field(default=None, max_length=4000)
@@ -325,14 +324,9 @@ class BodyBridge:
         return True
 
 
-def _failure_status(
-    reasons: list[str],
-) -> Literal["rejected", "unavailable"]:
-    return (
-        "unavailable"
-        if any(reason.startswith("模型调用失败：") for reason in reasons)
-        else "rejected"
-    )
+def _failure_status(reasons: list[str]) -> Literal["rejected", "unavailable"]:
+    unavailable = any(reason.startswith("模型调用失败：") for reason in reasons)
+    return "unavailable" if unavailable else "rejected"
 
 
 def create_body_app(
