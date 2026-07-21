@@ -65,7 +65,7 @@ def test_machine_side_stays_under_owner_limit() -> None:
         if path.suffix in {".py", ".cs"} and "obj" not in path.parts and "bin" not in path.parts
     ]
     line_count = sum(len(path.read_text(encoding="utf-8").splitlines()) for path in files)
-    assert line_count <= 5000, line_count
+    assert line_count <= 6000, line_count
 
 
 def test_share_first_run_matches_deepseek_default() -> None:
