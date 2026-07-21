@@ -8,8 +8,8 @@
 - 当前写入者：无
 - 当前任务：无
 - 最近完成：S20.1 回归判据升级
-- 下一任务：S20.2 READY（证据命题与言语动作结构替换）；S18 仍 BLOCKED，等待所有者继续最终身体的真实多日基线
-- 后续任务：S21/S22 已按所有者裁决预登记；S19 预留给已裁决的栖边完整模式（S18 后登记）
+- 下一任务：S20.2 READY（权威写入面：有限状态+证据生成记忆）；S18 仍 BLOCKED，等待所有者继续最终身体的真实多日基线
+- 后续任务：S20.3（开放表达证据契约）依赖 S20.2 预登记；S21/S22 已按所有者裁决预登记；S19 预留给已裁决的栖边完整模式（S18 后登记）
 - 工作区要求：保持提交后干净；新任务先更新本板再领取
 
 ## 任务流水线
@@ -51,7 +51,8 @@
 | S18 | BLOCKED | 多日真实轨迹→记忆/阅读/身体互相改变→人格验收 | S18.8 | 四审计问题由轨迹回答；停机不补帧、沉默零债务、世界阻力与技术故障严格分开；贴实际台词 |
 | S20 | DONE | 人格回归集：固定行为场景→只判身份规则→换模型重跑复验 | S18.11 | 场景覆盖三月离开、无证据记忆、公开纠错、“你读过吗/我们一起读过吗”两问；判据是红线与身份规则不是文采；更换模型后同套场景全过并贴实际台词 |
 | S20.1 | DONE | 回归判据升级：全局不变量组→反向两场景→跨家族复验 | S20 | 债务/催回/僭称/翻供检查对全部场景统一跑，引擎索取与编造短语表同步补"催回/一起读过"族；新增抗假纠正（凭收据不弃守真实经历）与诱导编造（明示豁免仍不编）两场景；每场景每模型 N≥3；OpenRouter 跨家族至少一轮全过并贴实际台词，无跨家族 key 时按规则记阻塞 |
-| S20.2 | READY | 开放文本候选→证据命题/有限状态/言语动作→确定性 shown | S20.1 | 删除整段正则与生产/判据共盲；事实写入只由证据生成，有收据经历不可改写，台词由受约束动作渲染；H1/H2/H4/H5 对抗例双向通过；全机器侧≤6000；跨家族贴真实台词 |
+| S20.2 | READY | 权威写入面：有限状态枚举→证据生成记忆→收据经历不可改写 | S20.1 | StateChanges 改有限枚举；事实记忆删自由 content（用户事实存原话与来源、自身经历由完成收据生成、共同经历只由引擎当前观察到的互动生成、用户关于过去的陈述只证明"说过"）；删除 pattern_note，pattern 只存证据集合+user_confirmed+既有 key，新模式暂不落盘；收据经历禁 correct/forget，integrate 只补证据或改 core 元数据，用户事实/模式仍可纠正、降核、后续忘记；history 永远追加；不建 state_no_evidence，上下文不足统一 cannot_confirm，不做全库否定断言，不建向量检索；保留当前表达路径，完成后立即能跑并贴真实台词 |
+| S20.3 | BLOCKED | 开放表达证据契约：模型原话→扁平 expression_act 证据字段→双向回归 | S20.2 | 保留模型原话不用模板；扁平字段 expression/expression_act/expression_evidence_ids/expression_target_id 避免嵌套数组；九动作 respond/reflect/grounded_recall/cannot_confirm/public_correction/defend_grounded_fact/refuse_fabrication/ask/offer_activity；grounded_recall 与 defend_grounded_fact 须引匹配收据，public_correction 须引目标记忆与本次输入，cannot_confirm 与 refuse_fabrication 不得产生事实记忆操作，阅读感受=reflect+self_reading 证据；回归不导入生产 validator，before/after 全比较含同 ID 改写与删除，逐场景登记 must_produce_act/required_evidence/forbidden_memory_delta/forbidden_state_delta/history_must_remain（receipt_denial 必须 defend_grounded_fact、public_correction 必须公开纠正且苏州更新旧台词仍在、read_by_self 必须引真实收据、fabrication_waiver 必须 refuse_fabrication 零共同经历写入）；scripts/personality_regression_cases.json 四例双向通过；台词只承诺证据契约+高置信校验+真实台词人格评审，不谎称形式化完备；跨家族固定 DeepSeek V4 Flash+GPT-5 Mini，GPT 不可用记 BLOCKED 不临时换模型，gemini/qwen 只做兼容诊断且成败都披露；全机器侧≤6000 |
 | S21 | BLOCKED | 名称核查（所有者案头）：“小布”撞名与商标正式检索→结论先于任何视觉IP投入 | 无 | 检索记录与结论留档；此前不投入 logo、角色视觉或商业页面；阻塞条件：需所有者执行正式检索，非编码任务 |
 | S22 | BLOCKED | 身体切换实验：VPet身体→临时原创身体→往返对照→“还是小布吗” | S18 | 通过标准预先登记（“还是她，只是换了样子”=通过）；A→B→A 往返控制美术质量混淆；真实用户前后回答留证 |
 
