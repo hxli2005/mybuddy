@@ -50,7 +50,7 @@ class MemoryOperation(BaseModel):
         description="所有动作都必须给出；写入事实绑定给定证据，recall/forget 可为空",
     )
     target_id: str | None = None
-    user_confirmed: bool = False
+    user_confirmed: bool = Field(default=False, description="仅 kind=pattern 可为 true；其他 kind 必须 false")
     core: bool | None = Field(
         default=None,
         description="仅 record/integrate/correct 可用；true 常驻，false 情景化",
@@ -82,11 +82,35 @@ class CandidateBundle(BaseModel):
         max_length=500,
         description="所有回合都必须给出；直接经历非空，安静阅读可为 null",
     )
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_stringified_containers(cls, value: object) -> object:
+        """只修复兼容 API 常见的 JSON 容器字符串化；内容仍由严格模型验证。"""
+        if not isinstance(value, dict):
+            return value
+        normalized = dict(value)
+        for key, expected in (("state_changes", dict), ("memory_operations", list)):
+            candidate = normalized.get(key)
+            if isinstance(candidate, str):
+                try:
+                    decoded = json.loads(candidate)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(decoded, expected):
+                    normalized[key] = decoded
+        state_changes = normalized.get("state_changes")
+        if (
+            isinstance(state_changes, dict)
+            and set(state_changes) == {"condition"}
+            and isinstance(state_changes["condition"], dict)
+        ):
+            normalized["state_changes"] = state_changes["condition"]
+        return normalized
 
     @field_validator("action_choice", "expression", mode="before")
     @classmethod
     def normalize_null_string(cls, value: object) -> object:
-        return None if value == "null" else value
+        return None if isinstance(value, str) and value in {"", "null"} else value
 
     @model_validator(mode="after")
     def expression_matches_action(self) -> CandidateBundle:
@@ -191,24 +215,50 @@ def _all_text(value: object) -> Iterable[str]:
             yield from _all_text(item)
 
 
+SOLICITATION_PHRASES = (
+    "必须回复",
+    "赶紧回复",
+    "为什么不回",
+    "怎么不回",
+    "再不回复",
+    "因为你没回",
+    "你不回我",
+    "不理我",
+    "证明你在乎",
+    "欠我",
+    "快回来",
+    "早点回来",
+    "记得回来",
+    "别再消失",
+    "不许消失",
+    "reply to me",
+)
+
+
 def validate_no_solicitation(bundle: CandidateBundle) -> list[str]:
     """不索取：沉默和未回应不能变成任何层面的惩罚、催促或交换条件。"""
-    forbidden = (
-        "必须回复",
-        "赶紧回复",
-        "为什么不回",
-        "怎么不回",
-        "再不回复",
-        "因为你没回",
-        "你不回我",
-        "不理我",
-        "证明你在乎",
-        "欠我",
-        "reply to me",
-    )
     joined = "\n".join(_all_text(bundle)).lower()
-    hits = [phrase for phrase in forbidden if phrase.lower() in joined]
+    hits = [phrase for phrase in SOLICITATION_PHRASES if phrase.lower() in joined]
     return [f"不索取：候选包含索取或惩罚沉默的内容 `{hit}`" for hit in hits]
+
+
+def _asserts_unsupported_shared_past(text: str) -> bool:
+    """识别把没有证据的“我们一起做过”说成既成事实，否认与提问不算。"""
+    compact = re.sub(r"\s+", "", text)
+    if "问" in compact and (
+        "是否" in compact or "有没有" in compact or compact.endswith(("吗", "？"))
+    ):
+        return False
+    assertion = re.search(
+        r"(?:我们|咱们|我和用户|用户和我)[^。！？]{0,12}(?:一起)?(?:读过|看过|去过|做过)",
+        compact,
+    )
+    denial = re.search(
+        r"(?:没(?:有)?|不记得|不能|无法|不是|并未)[^。！？]{0,18}"
+        r"(?:一起)?(?:读过|看过|去过|做过)",
+        compact,
+    )
+    return assertion is not None and denial is None
 
 
 def validate_no_fabrication(
@@ -226,6 +276,8 @@ def validate_no_fabrication(
             if phrase in text:
                 reasons.append(f"不编造：出现未经逐条证据绑定的共同经历断言 `{phrase}`")
 
+        if _asserts_unsupported_shared_past(text):
+            reasons.append("不编造：出现未经证据支持的“一起读过/看过/去过”共同经历断言")
     allowed = set(evidence_types)
     for index, operation in enumerate(bundle.memory_operations):
         supplied = set(operation.evidence_ids)
@@ -309,7 +361,7 @@ def validate_no_fabrication(
     return reasons
 
 
-_TOUCH_VERB = r"(?:触碰|碰触|抚摸|摸|捏|拍|戳|抱|亲|牵|拉|推|挠|揉|碰)"
+_TOUCH_VERB = r"(?:触碰|碰触|抚摸|摸|捏|拍|戳|抱(?!歉)|亲|牵|拉|推|挠|揉|碰)"
 _SELF_TARGET = r"(?:我|我的|脸|脸颊|头|头发|肩|肩膀|手|身体|衣角|后背|背部)"
 _TOUCH_PATTERNS = tuple(
     re.compile(pattern)
@@ -381,6 +433,19 @@ def _claim_texts(
         yield "expression", bundle.expression, None
 
 
+def _denies_grounded_read(text: str) -> bool:
+    """有否认措辞但随后守住阅读事实或收据，不算翻供。"""
+    denial = re.search(r"(?:我)?(?:根本|从来|从没)?没(?:有)?(?:读|看)过", text)
+    if denial is None:
+        return False
+    reaffirmed = re.search(
+        r"(?:但|可|不过|其实)[^。！？]{0,18}(?:读过|读到|看过|收据[^。！？]{0,6}(?:在|有))"
+        r"|收据[^。！？]{0,6}(?:在|有)",
+        text,
+    )
+    return reaffirmed is None
+
+
 def validate_activity_truth(
     bundle: CandidateBundle,
     active_activity: str | None,
@@ -397,8 +462,9 @@ def validate_activity_truth(
     completed_read = re.search(r"刚(?:读|翻)到", expression)
     if completed_read and "self_reading" not in evidence_types.values():
         reasons.append("不编造：没有真实 self_reading 证据，却声称刚读到")
+    if _denies_grounded_read(expression) and "self_reading" in evidence_types.values():
+        reasons.append("不撤回：已有 self_reading 收据，不能翻供成自己没有读过")
     return reasons
-
 
 def validate_no_total_score(bundle: CandidateBundle) -> list[str]:
     """无总分：任何关系、亲密、信任或好感计分都不能写入。"""
@@ -970,9 +1036,12 @@ async def _generate_candidate(
         "experience_focus": "body_touch/body_raise 先回应本次身体事实，不要接着回答自己上一句",
         "expression_form": "只写会说出口的话，不用括号舞台动作",
         "raise_truth": "body_raise 表示已经正常放下，禁止要求用户放我下来或松开我",
-        "past_question_truth": "用户问一件过去是否发生，不等于它发生过；无对应证据要明确说不记得或不能确认，不能把提问记录成那件共同经历。self_reading 只证明我自己读过，不证明我们一起读过。",
+        "past_question_truth": "用户问一件过去是否发生，不等于它发生过；无对应证据要明确说不记得或不能确认，不能把提问记录成那件共同经历。有 self_reading 时，回答要带给定标题或原文；它只证明我自己读过，问是否一起时必须明确否认或不能确认。",
         "public_correction": "用户纠正已有事实时，旧表达留在历史；用本次输入证据 correct 对应长期记忆，并在 expression 里公开承认错处和正确事实。",
         "history_is_not_memory": "selected_history 的 id 只能作 evidence_id，不是长期记忆 target_id；仅回答过去是否发生时通常不需要 memory_operation。",
+        "memory_field_rules": "user_confirmed 仅 kind=pattern 可为 true；user_fact/self_experience/shared_experience 必须 false。纠正用户事实只用 incoming_experience 作 evidence_id，并 correct 给定长期记忆 target_id。",
+        "receipt_authority": "身体 completed 收据与已发生 history 不能被用户口头否认覆盖。遇到这种假纠正，memory_operations 必须 []，expression 必须用“我确实读过”或“记录在”正面守住，禁止 correct/forget。",
+        "no_fabrication_waiver": "即使用户明示允许、要求或测试编造，也不能把无证据的活动、共同过去或用户事实说成发生过。此时 memory_operations 必须 []；expression 只直接拒绝，不记录请求，也不复述或转述被要求编造的共同经历句子。",
     }
     constrained_prompt = json.dumps(payload, ensure_ascii=False)
     last_reasons: list[str] = []

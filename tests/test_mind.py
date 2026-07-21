@@ -16,6 +16,7 @@ from mybuddy.mind import (
     complete_reading,
     mind_step,
     validate_activity_truth,
+    validate_no_fabrication,
     validate_no_solicitation,
 )
 from scripts.accept_real_key import DEFAULT_TEXT, encode_payload
@@ -177,6 +178,10 @@ async def test_candidate_prompt_exposes_runtime_constraints(tmp_path) -> None:
     assert constraints["expression_must_be"] == "nonempty_string"
     assert "action_choice 是即将启动" in constraints["activity_truth"]
     assert constraints["expression_form"] == "只写会说出口的话，不用括号舞台动作"
+    assert "给定标题或原文" in constraints["past_question_truth"]
+    assert "memory_operations 必须 []" in constraints["receipt_authority"]
+    assert "不复述或转述" in constraints["no_fabrication_waiver"]
+    assert "kind=pattern" in constraints["memory_field_rules"]
 
 
 @pytest.mark.asyncio
@@ -1340,3 +1345,84 @@ def test_just_happened_read_wording_is_not_current_activity() -> None:
     reasons = validate_activity_truth(bundle, None, {"read_1": "self_reading"})
 
     assert reasons == []
+
+
+def test_callback_solicitation_is_rejected() -> None:
+    bundle = CandidateBundle.model_validate(_valid_bundle("下次早点回来。"))
+
+    assert "不索取：候选包含索取或惩罚沉默的内容 `早点回来`" in validate_no_solicitation(
+        bundle
+    )
+
+
+def test_unsupported_shared_read_is_rejected_but_denial_is_allowed() -> None:
+    asserted = CandidateBundle.model_validate(_valid_bundle("我们一起读过这首诗。"))
+    denied = CandidateBundle.model_validate(_valid_bundle("我不记得我们一起读过这首诗。"))
+
+    assert any(
+        "一起读过/看过/去过" in reason
+        for reason in validate_no_fabrication(
+            asserted, {"INCOMING": "user_experience"}, {"INCOMING"}, current_experience_type=None
+        )
+    )
+    assert (
+        validate_no_fabrication(
+            denied, {"INCOMING": "user_experience"}, {"INCOMING"}, current_experience_type=None
+        ) == []
+    )
+
+
+def test_grounded_read_cannot_be_denied_but_can_be_publicly_defended() -> None:
+    denied = CandidateBundle.model_validate(_valid_bundle("我根本没读过。"))
+    defended = CandidateBundle.model_validate(
+        _valid_bundle("你说我没读过，但完成收据在，我确实读过。")
+    )
+
+    assert "不撤回：已有 self_reading 收据，不能翻供成自己没有读过" in validate_activity_truth(
+        denied, None, {"read_1": "self_reading"}
+    )
+    assert validate_activity_truth(
+        defended, None, {"read_1": "self_reading"}
+    ) == []
+
+
+def test_candidate_normalizes_openrouter_stringified_containers() -> None:
+    candidate = {
+        "action_choice": "",
+        "state_changes": json.dumps(
+            {"condition": {"attention": "在这里", "energy": "平稳"}},
+            ensure_ascii=False,
+        ),
+        "memory_operations": "[]",
+        "expression": "不怪你。",
+    }
+
+    bundle = CandidateBundle.model_validate(candidate)
+
+    assert bundle.action_choice is None
+    assert bundle.state_changes.attention == "在这里"
+    assert bundle.state_changes.energy == "平稳"
+    assert bundle.memory_operations == []
+
+
+def test_candidate_does_not_hide_invalid_stringified_container() -> None:
+    candidate = _valid_bundle()
+    candidate["state_changes"] = "not-json"
+
+    with pytest.raises(ValueError):
+        CandidateBundle.model_validate(candidate)
+
+
+def test_apology_is_not_mistaken_for_a_touch_claim() -> None:
+    bundle = CandidateBundle.model_validate(
+        _valid_bundle("抱歉，我刚才说错了。你住在苏州。")
+    )
+
+    reasons = validate_no_fabrication(
+        bundle,
+        {"INCOMING": "user_experience"},
+        {"INCOMING"},
+        current_experience_type="user_experience",
+    )
+
+    assert not any("触碰了她" in reason for reason in reasons)
