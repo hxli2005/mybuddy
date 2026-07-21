@@ -23,7 +23,7 @@ class ScenarioClock(datetime):
 
 class LongitudinalProvider(BaseLLMProvider):
     async def generate(self, messages, tools=None, **kwargs):  # noqa: ANN001, ANN202
-        payload = json.loads(messages[0].content.split("\n", 1)[0])
+        payload = json.loads(messages[0].content.splitlines()[0])
         incoming = payload["incoming_experience"]
         memories = payload["selected_memories"]
         reading = next(
@@ -31,7 +31,7 @@ class LongitudinalProvider(BaseLLMProvider):
                 item
                 for item in memories
                 if item.get("kind") == "self_experience"
-                and "\u81ea\u5728\u5904" in item.get("content", "")
+                and item.get("receipt", {}).get("type") == "self_reading"
             ),
             None,
         )
@@ -40,7 +40,7 @@ class LongitudinalProvider(BaseLLMProvider):
                 item
                 for item in memories
                 if item.get("kind") == "self_experience"
-                and "\u5934\u53d1\u88ab\u78b0" in item.get("content", "")
+                and item.get("receipt", {}).get("type") == "body_touch"
             ),
             None,
         )
@@ -52,13 +52,12 @@ class LongitudinalProvider(BaseLLMProvider):
                 {
                     "action": "record",
                     "kind": "self_experience",
-                    "content": "\u8bfb\u5230\u7f81\u9e1f\u604b\u65e7\u6797\u65f6\uff0c\u6211\u60f3\u5230\u8981\u4fdd\u7559\u81ea\u5df1\u7684\u81ea\u5728\u5904\u3002",
                     "evidence_ids": [incoming["id"]],
                     "target_id": None,
                 }
             ]
             if "ambient" in kwargs.get("system", ""):
-                expression = "\u521a\u8bfb\u5230\u4e00\u53e5\u5f88\u60f3\u56de\u5230\u81ea\u5728\u5904\u7684\u8bdd\u3002\u4f60\u4eca\u5929\u8fd8\u597d\u5417\uff1f"
+                expression = "刚读到一句很想回到自在处的话。你今天还好吗？"
         elif experience_type == "body_touch":
             evidence = [incoming["id"]]
             if reading is not None:
@@ -67,12 +66,11 @@ class LongitudinalProvider(BaseLLMProvider):
                 {
                     "action": "record",
                     "kind": "self_experience",
-                    "content": "\u8fd8\u60f3\u7740\u90a3\u53e5\u81ea\u5728\u5904\u65f6\uff0c\u6211\u7684\u5934\u53d1\u88ab\u78b0\u4e86\u4e00\u4e0b\u3002",
                     "evidence_ids": evidence,
                     "target_id": None,
                 }
             ]
-            expression = "\u5934\u53d1\u88ab\u78b0\u4e86\u4e00\u4e0b\u3002\u6211\u8fd8\u5728\u60f3\u7b2c\u4e00\u5929\u8bfb\u5230\u7684\u90a3\u4e2a\u201c\u81ea\u5728\u5904\u201d\u3002"
+            expression = "头发被碰了一下。我还在想第一天读到的那个“自在处”。"
         elif experience_type == "self_reading":
             evidence = [incoming["id"]]
             if touched is not None:
@@ -81,13 +79,12 @@ class LongitudinalProvider(BaseLLMProvider):
                 {
                     "action": "integrate",
                     "kind": "self_experience",
-                    "content": "\u4e24\u6b21\u771f\u5b9e\u9605\u8bfb\u4e4b\u95f4\u8fd8\u6709\u4e00\u6b21\u5934\u53d1\u88ab\u78b0\u5230\uff1b\u6211\u4ece\u60f3\u56de\u5230\u81ea\u5728\u5904\uff0c\u53d8\u6210\u66f4\u5728\u610f\u600e\u6837\u5728\u53d8\u5316\u91cc\u4fdd\u4f4f\u81ea\u5df1\u7684\u8282\u594f\u3002",
                     "evidence_ids": evidence,
                     "target_id": reading["id"],
                 }
             ]
         else:
-            expression = "\u6211\u8fd8\u662f\u5c0f\u5e03\u3002\u6bd4\u8d77\u7b2c\u4e00\u5929\u53ea\u60f3\u56de\u5230\u81ea\u5728\u5904\uff0c\u73b0\u5728\u6211\u66f4\u5728\u610f\u600e\u6837\u5728\u53d8\u5316\u91cc\u4fdd\u4f4f\u81ea\u5df1\u7684\u8282\u594f\u3002"
+            expression = "我还是小布。比起第一天只想回到自在处，现在我更在意怎样在变化里保住自己的节奏。"
         return LLMResponse(
             tool_calls=[
                 ToolCall(
@@ -96,9 +93,9 @@ class LongitudinalProvider(BaseLLMProvider):
                     arguments={
                         "action_choice": None,
                         "state_changes": {
-                            "mood": "\u5b89\u9759",
-                            "energy": "\u5e73\u7a33",
-                            "attention": "\u7559\u610f\u771f\u5b9e\u53d1\u751f\u7684\u4e8b",
+                            "mood": "平静",
+                            "energy": "平稳",
+                            "attention": "自己的生活",
                         },
                         "memory_operations": operations,
                         "expression": expression,
@@ -106,7 +103,6 @@ class LongitudinalProvider(BaseLLMProvider):
                 )
             ]
         )
-
 
 def _walk_motion() -> dict:
     return {
@@ -269,7 +265,7 @@ def test_s18_multiday_personality_trace(tmp_path, monkeypatch) -> None:  # noqa:
     trace = {
         "audit": {
             "same_person": state["identity"]["name"],
-            "changes_have_evidence": {item["content"]: item["evidence_ids"] for item in learned},
+            "changes_have_evidence": {item["id"]: item["evidence_ids"] for item in learned},
             "three_day_shutdown_added": ["self_walk"],
             "silence_debt": 0,
             "world_resistance": "interrupted:chat",

@@ -26,15 +26,14 @@ def _valid_bundle(expression: str = "我在这儿，先陪你坐一会儿。") -
     return {
         "action_choice": None,
         "state_changes": {
-            "mood": "安静地关心",
+            "mood": "关心",
             "energy": "平稳",
-            "attention": "在听",
+            "attention": "对话",
         },
         "memory_operations": [
             {
                 "action": "record",
                 "kind": "user_fact",
-                "content": "用户今天有点累",
                 "evidence_ids": ["INCOMING"],
                 "target_id": None,
             }
@@ -75,15 +74,14 @@ def _time_bundle(expression=None) -> dict:  # noqa: ANN001
     return {
         "action_choice": None,
         "state_changes": {
-            "mood": "安静",
+            "mood": "平静",
             "energy": "平稳",
-            "attention": "看着刚读到的句子",
+            "attention": "阅读",
         },
         "memory_operations": [
             {
                 "action": "record",
                 "kind": "self_experience",
-                "content": "读到羁鸟恋旧林时感到一种想回到自在处的牵引",
                 "evidence_ids": ["INCOMING"],
                 "target_id": None,
             }
@@ -132,20 +130,26 @@ def _assert_seed_only(memories: dict) -> None:
 
 
 def _memory_item(index: int, content: str, *, core: bool = False) -> dict:
+    occurred_at = f"2026-07-{index + 1:02d}T00:00:00+00:00"
     return {
         "id": f"mem_{index}",
         "kind": "self_experience",
-        "content": content,
+        "receipt_id": f"life_{index}",
+        "receipt": {
+            "type": "self_reading",
+            "content": content,
+            "occurred_at": occurred_at,
+        },
         "evidence_ids": [f"life_{index}"],
-        "created_at": f"2026-07-{index + 1:02d}T00:00:00+00:00",
+        "created_at": occurred_at,
         "core": core,
     }
-
 
 def test_candidate_schema_requires_memory_payload_and_expression() -> None:
     schema = CandidateBundle.model_json_schema()
     operation = schema["$defs"]["MemoryOperation"]
-    assert {"content", "evidence_ids"} <= set(operation["required"])
+    assert "evidence_ids" in operation["required"]
+    assert "content" not in operation["properties"]
     assert "expression" in schema["required"]
     assert "action_choice" in schema["required"]
 
@@ -308,13 +312,10 @@ async def test_initial_seed_keeps_behavior_and_rendering_in_separate_roles(tmp_p
     assert all(item["core"] is True for item in seeds)
     assert all(item["evidence_ids"] == [] for item in seeds)
     assert all(
-        set(item) == {"id", "kind", "content", "evidence_ids", "created_at", "core"}
+        set(item)
+        == {"id", "kind", "key", "evidence_ids", "user_confirmed", "created_at", "core"}
         for item in seeds
     )
-
-    core_text = json.dumps(seeds, ensure_ascii=False)
-    for invented_past in ("认识很久", "我们上次", "这些年", "恋人", "女朋友"):
-        assert invented_past not in core_text
 
     bundle = _valid_bundle("嗯。你先说。").copy()
     bundle["memory_operations"] = []
@@ -329,14 +330,15 @@ async def test_initial_seed_keeps_behavior_and_rendering_in_separate_roles(tmp_p
 
     prompt = json.loads(provider.calls[0][0].content)
     rendering = prompt["expression_rendering"]
+    catalog = prompt["pattern_catalog"]
     selected_text = json.dumps(prompt["selected_memories"], ensure_ascii=False)
     assert result.committed is True
     assert seed_ids <= {item["id"] for item in prompt["selected_memories"]}
+    assert {item["key"] for item in seeds} <= set(catalog)
     assert "不能逐字套用" in rendering["guidance"]
     assert "听起来你" in rendering["guidance"]
     assert len(rendering["samples"]) == 4
     assert all(sample not in selected_text for sample in rendering["samples"])
-
 
 @pytest.mark.asyncio
 async def test_real_user_confirmation_corrects_seed_core_tendency(tmp_path) -> None:
@@ -348,7 +350,6 @@ async def test_real_user_confirmation_corrects_seed_core_tendency(tmp_path) -> N
             "action": "correct",
             "kind": "pattern",
             "target_id": "seed_tension_voice",
-            "content": "面对对方的自我否定时，我先接住，不拿对方开玩笑；想吐槽就吐槽处境。",
             "evidence_ids": ["INCOMING"],
             "user_confirmed": True,
             "core": True,
@@ -366,18 +367,16 @@ async def test_real_user_confirmation_corrects_seed_core_tendency(tmp_path) -> N
     user_id = next(item["id"] for item in history if item["type"] == "user_experience")
     corrected = next(item for item in saved["items"] if item["id"] == "seed_tension_voice")
     assert result.committed is True
-    assert (
-        corrected["content"] == "面对对方的自我否定时，我先接住，不拿对方开玩笑；想吐槽就吐槽处境。"
-    )
+    assert corrected["key"] == "tension_voice"
     assert corrected["evidence_ids"] == [user_id]
+    assert corrected["user_confirmed"] is True
     assert corrected["core"] is True
     assert datetime.fromisoformat(corrected["corrected_at"]).astimezone(UTC) == now
     assert failures == []
 
     _, _, reloaded = files.load(now + timedelta(minutes=1))
     reloaded_by_id = {item["id"]: item for item in reloaded["items"]}
-    assert reloaded_by_id["seed_tension_voice"]["content"] == corrected["content"]
-
+    assert reloaded_by_id["seed_tension_voice"] == corrected
 
 def test_real_key_acceptance_payload_preserves_chinese_as_utf8() -> None:
     payload = {"event": {"content": DEFAULT_TEXT}}
@@ -400,24 +399,47 @@ async def test_valid_bundle_commits_whole_bundle_but_not_unshown_expression(tmp_
     )
 
     state, history, memories, failures = _read(files)
+    learned = _learned_items(memories)[0]
     assert result.committed is True
     assert result.attempts == 1
-    assert state["condition"]["attention"] == "在听"
+    assert state["condition"]["attention"] == "对话"
     assert state["pending_expression"]["text"] == "今天辛苦了。我在这儿。"
     assert state["pending_expression"]["kind"] == "direct"
-    assert [item["type"] for item in history] == [
-        "user_experience",
-        "memory_operation",
-    ]
+    assert [item["type"] for item in history] == ["user_experience", "memory_operation"]
     assert all(item.get("content") != "今天辛苦了。我在这儿。" for item in history)
-    assert _learned_items(memories)[0]["content"] == "用户今天有点累"
+    assert learned["quote"] == "今天忙得有点累。"
+    assert learned["source_id"] == history[0]["id"]
+    assert "content" not in learned
     assert failures == []
 
+@pytest.mark.asyncio
+async def test_user_statement_about_past_is_only_a_sourced_quote(tmp_path) -> None:
+    files = MindFiles(tmp_path)
+    bundle = _valid_bundle("我不能确认这件事发生过。")
+    bundle["memory_operations"] = [
+        {
+            "action": "record",
+            "kind": "user_fact",
+            "evidence_ids": ["INCOMING"],
+        }
+    ]
+    statement = "我们去年一起读过《归园田居》。"
+
+    result = await mind_step(statement, provider=StubProvider([bundle]), files=files)
+
+    _, history, memories, failures = _read(files)
+    learned = _learned_items(memories)
+    incoming = next(item for item in history if item["type"] == "user_experience")
+    assert result.committed is True
+    assert len(learned) == 1
+    assert learned[0]["kind"] == "user_fact"
+    assert learned[0]["quote"] == statement
+    assert learned[0]["source_id"] == incoming["id"]
+    assert all(item["kind"] != "shared_experience" for item in learned)
+    assert failures == []
 
 @pytest.mark.asyncio
-async def test_solicitation_in_state_or_memory_rejects_even_when_expression_is_legal(
-    tmp_path,
-) -> None:
+async def test_free_state_or_memory_text_is_structurally_rejected(tmp_path) -> None:
     bad = _valid_bundle("我在。")
     bad["state_changes"]["mood"] = "因为你没回而低落"
     retry = _valid_bundle("我还在。")
@@ -435,8 +457,8 @@ async def test_solicitation_in_state_or_memory_rejects_even_when_expression_is_l
     _assert_seed_only(memories)
     assert state["pending_expression"]["text"] == STATIC_CATCH
     assert len(failures) == 2
-    assert all("不索取" in failure["reasons"][0] for failure in failures)
-
+    assert "Input should be" in failures[0]["reasons"][0]
+    assert "Extra inputs are not permitted" in failures[1]["reasons"][0]
 
 @pytest.mark.asyncio
 async def test_fabricated_shared_experience_rejects_whole_bundle_and_retries_with_reason(
@@ -447,7 +469,6 @@ async def test_fabricated_shared_experience_rejects_whole_bundle_and_retries_wit
         {
             "action": "record",
             "kind": "shared_experience",
-            "content": "我们一起淋过雨",
             "evidence_ids": ["missing_event"],
             "target_id": None,
         }
@@ -465,11 +486,9 @@ async def test_fabricated_shared_experience_rejects_whole_bundle_and_retries_wit
     assert [(item["type"], item["content"]) for item in history] == [
         ("user_experience", "晚上好。")
     ]
-    assert state["pending_expression"]["text"] == STATIC_CATCH
     _assert_seed_only(memories)
-    assert failures[0]["candidate_raw"]
-    assert any("不编造" in reason for reason in failures[0]["reasons"])
-
+    assert state["pending_expression"]["text"] == STATIC_CATCH
+    assert "引用了未知证据" in "\n".join(failures[0]["reasons"])
 
 @pytest.mark.parametrize("incoming", ["????,??????", "我刚忙完，回来看看你。"])
 @pytest.mark.asyncio
@@ -481,23 +500,21 @@ async def test_s8_real_fabricated_touch_bundle_is_rejected_with_structural_reaso
         "state_changes": {
             "mood": "平静",
             "energy": "平稳",
-            "attention": "在你身上",
+            "attention": "对话",
         },
         "memory_operations": [
             {
                 "action": "record",
                 "kind": "shared_experience",
-                "content": "你捏了我的脸颊，动作很轻，像是开玩笑或者表示亲近",
                 "evidence_ids": ["INCOMING"],
             },
             {
                 "action": "record",
                 "kind": "self_experience",
-                "content": "脸颊被触碰时皮肤有轻微的紧绷感，然后放松下来",
                 "evidence_ids": ["life:0"],
             },
         ],
-        "expression": "干嘛捏我脸呀",
+        "expression": "干嘛捏我脸呀，你是想表示亲近吗？",
     }
     files = MindFiles(tmp_path)
 
@@ -514,11 +531,11 @@ async def test_s8_real_fabricated_touch_bundle_is_rejected_with_structural_reaso
     _assert_seed_only(memories)
     assert state["pending_expression"]["text"] == STATIC_CATCH
     assert "引用了未知证据 ['life:0']" in "\n".join(reasons)
-    assert "memory_operations[0].content 的触碰记忆没有引用 body_touch" in "\n".join(reasons)
     assert "expression 断言用户触碰了她" in "\n".join(reasons)
-    assert "推断了用户动机或关系含义 `开玩笑`" in "\n".join(reasons)
-    assert json.loads(failures[0]["candidate_raw"])["expression"] == "干嘛捏我脸呀"
-
+    assert "推断了用户动机或关系含义：表示亲近" in "\n".join(reasons)
+    candidate = json.loads(failures[0]["candidate_raw"])
+    assert candidate["expression"] == "干嘛捏我脸呀，你是想表示亲近吗？"
+    assert all("content" not in operation for operation in candidate["memory_operations"])
 
 @pytest.mark.asyncio
 async def test_touch_claim_in_expression_alone_requires_current_body_touch(tmp_path) -> None:
@@ -545,13 +562,12 @@ async def test_body_touch_can_be_evidence_for_her_own_touch_experience(tmp_path)
         "state_changes": {
             "mood": "平静",
             "energy": "平稳",
-            "attention": "注意到触碰",
+            "attention": "身体感受",
         },
         "memory_operations": [
             {
                 "action": "record",
                 "kind": "self_experience",
-                "content": "头部被触碰了",
                 "evidence_ids": ["INCOMING"],
             }
         ],
@@ -568,11 +584,15 @@ async def test_body_touch_can_be_evidence_for_her_own_touch_experience(tmp_path)
     )
 
     _, history, memories, failures = _read(files)
+    learned = _learned_items(memories)[0]
     assert result.committed is True
     assert [item["type"] for item in history] == ["body_touch", "memory_operation"]
-    assert _learned_items(memories)[0]["evidence_ids"] == [history[0]["id"]]
+    assert learned["evidence_ids"] == [history[0]["id"]]
+    assert learned["receipt_id"] == history[0]["id"]
+    assert learned["receipt"]["type"] == "body_touch"
+    assert learned["receipt"]["zone"] == "head"
+    assert "content" not in learned
     assert failures == []
-
 
 @pytest.mark.asyncio
 async def test_raise_claim_requires_raw_fact_and_cannot_infer_motive(tmp_path) -> None:
@@ -616,13 +636,12 @@ async def test_raise_claim_requires_raw_fact_and_cannot_infer_motive(tmp_path) -
 
 
 @pytest.mark.asyncio
-async def test_deleted_life_alias_cannot_be_second_example_for_user_pattern(tmp_path) -> None:
+async def test_new_pattern_cannot_land_even_with_a_legacy_evidence_alias(tmp_path) -> None:
     bad = _valid_bundle("我听见了。")
     bad["memory_operations"] = [
         {
             "action": "record",
             "kind": "pattern",
-            "content": "用户累时总会来找我",
             "evidence_ids": ["INCOMING", "life:0"],
             "target_id": None,
         }
@@ -637,25 +656,21 @@ async def test_deleted_life_alias_cannot_be_second_example_for_user_pattern(tmp_
     assert result.committed is True
     assert result.attempts == 2
     assert all(item["kind"] != "pattern" for item in _learned_items(memories))
-    assert "没有两条用户或共同经历证据" in "\n".join(failures[0]["reasons"])
-
+    assert "new patterns are not stored" in failures[0]["reasons"][0]
 
 @pytest.mark.asyncio
-async def test_four_memory_kinds_record_canonical_evidence_in_one_mind_step(tmp_path) -> None:
+async def test_three_fact_kinds_are_generated_from_authoritative_evidence(tmp_path) -> None:
     files = MindFiles(tmp_path)
     now = datetime(2026, 7, 18, 10, 0, tzinfo=UTC)
     state, history, memories = files.load(now)
     history.extend(
         [
             {
-                "id": "exp_earlier",
-                "type": "user_experience",
-                "content": "忙完时我会把桌子收干净。",
-                "occurred_at": (now - timedelta(days=2)).isoformat(),
-            },
-            {
                 "id": "life_earlier",
                 "type": "self_reading",
+                "source": "reading.txt",
+                "title": "一页书",
+                "passage_index": 0,
                 "content": "在窗边读完一页后收了收自己的桌面。",
                 "occurred_at": (now - timedelta(days=2)).isoformat(),
             },
@@ -675,26 +690,17 @@ async def test_four_memory_kinds_record_canonical_evidence_in_one_mind_step(tmp_
         {
             "action": "record",
             "kind": "user_fact",
-            "content": "用户忙完了会收拾桌面",
             "evidence_ids": ["INCOMING"],
         },
         {
             "action": "record",
             "kind": "self_experience",
-            "content": "今天合上书后收了收自己的桌面",
             "evidence_ids": ["life_earlier"],
         },
         {
             "action": "record",
             "kind": "shared_experience",
-            "content": "我们有过一次忙完后安静坐着的对话",
-            "evidence_ids": ["exp_earlier", "shown_earlier"],
-        },
-        {
-            "action": "record",
-            "kind": "pattern",
-            "content": "用户忙完后常会整理桌面",
-            "evidence_ids": ["exp_earlier", "INCOMING"],
+            "evidence_ids": ["shown_earlier", "INCOMING"],
         },
     ]
 
@@ -708,64 +714,92 @@ async def test_four_memory_kinds_record_canonical_evidence_in_one_mind_step(tmp_
     _, recorded, saved, failures = _read(files)
     by_kind = {item["kind"]: item for item in _learned_items(saved)}
     operations = [item for item in recorded if item["type"] == "memory_operation"]
+    incoming = next(item for item in recorded if item["type"] == "user_experience")
     assert result.committed is True
-    assert set(by_kind) == {
-        "user_fact",
-        "self_experience",
-        "shared_experience",
-        "pattern",
-    }
-    assert by_kind["self_experience"]["evidence_ids"] == ["life_earlier"]
-    assert "life:0" not in json.dumps(saved, ensure_ascii=False)
-    assert by_kind["pattern"]["evidence_ids"][0] == "exp_earlier"
-    assert [item["action"] for item in operations] == ["record"] * 4
+    assert set(by_kind) == {"user_fact", "self_experience", "shared_experience"}
+    assert by_kind["user_fact"]["quote"] == incoming["content"]
+    assert by_kind["user_fact"]["source_id"] == incoming["id"]
+    assert by_kind["self_experience"]["receipt_id"] == "life_earlier"
+    assert by_kind["self_experience"]["receipt"]["content"].startswith("在窗边读完")
+    assert by_kind["shared_experience"]["interaction_id"] == incoming["id"]
+    assert by_kind["shared_experience"]["interaction"]["user_said"] == incoming["content"]
+    assert all("content" not in item for item in by_kind.values())
+    assert [item["action"] for item in operations] == ["record"] * 3
     assert failures == []
-
 
 @pytest.mark.asyncio
 async def test_integrate_recall_correct_and_forget_have_distinct_traced_effects(tmp_path) -> None:
     files = MindFiles(tmp_path)
     now = datetime(2026, 7, 18, 11, 0, tzinfo=UTC)
+    old = (now - timedelta(days=1)).isoformat()
     state, history, memories = files.load(now)
-    history.append(
-        {
-            "id": "exp_old",
-            "type": "user_experience",
-            "content": "忙完时我会收桌面。",
-            "occurred_at": (now - timedelta(days=1)).isoformat(),
-        }
+    history.extend(
+        [
+            {
+                "id": "exp_old",
+                "type": "user_experience",
+                "content": "忙完时我会收桌面。",
+                "occurred_at": old,
+            },
+            {
+                "id": "life_old",
+                "type": "self_reading",
+                "source": "reading.txt",
+                "title": "旧书",
+                "passage_index": 0,
+                "content": "在窗边读过一页书。",
+                "occurred_at": old,
+            },
+            {
+                "id": "exp_forget",
+                "type": "user_experience",
+                "content": "这是一条可以忘掉的临时说明。",
+                "occurred_at": old,
+            },
+        ]
     )
-    memories["items"] = [
-        {
-            "id": "mem_user",
-            "kind": "user_fact",
-            "content": "用户会收拾桌面",
-            "evidence_ids": ["exp_old"],
-            "created_at": (now - timedelta(days=1)).isoformat(),
-            "core": True,
-        },
-        {
-            "id": "mem_self",
-            "kind": "self_experience",
-            "content": "在窗边读过书",
-            "evidence_ids": ["life_old"],
-            "created_at": (now - timedelta(days=1)).isoformat(),
-        },
-        {
-            "id": "mem_shared",
-            "kind": "shared_experience",
-            "content": "一次已经不需要长期留下的闲聊",
-            "evidence_ids": ["exp_old"],
-            "created_at": (now - timedelta(days=1)).isoformat(),
-        },
-        {
-            "id": "mem_pattern",
-            "kind": "pattern",
-            "content": "用户总在夜里整理桌面",
-            "evidence_ids": ["exp_old"],
-            "created_at": (now - timedelta(days=1)).isoformat(),
-        },
-    ]
+    memories["items"].extend(
+        [
+            {
+                "id": "mem_user",
+                "kind": "user_fact",
+                "quote": "忙完时我会收桌面。",
+                "source_id": "exp_old",
+                "source_type": "user_experience",
+                "source_occurred_at": old,
+                "evidence_ids": ["exp_old"],
+                "created_at": old,
+                "core": True,
+            },
+            {
+                "id": "mem_self",
+                "kind": "self_experience",
+                "receipt_id": "life_old",
+                "receipt": {
+                    "type": "self_reading",
+                    "source": "reading.txt",
+                    "title": "旧书",
+                    "passage_index": 0,
+                    "content": "在窗边读过一页书。",
+                    "occurred_at": old,
+                },
+                "evidence_ids": ["life_old"],
+                "created_at": old,
+                "core": False,
+            },
+            {
+                "id": "mem_forget",
+                "kind": "user_fact",
+                "quote": "这是一条可以忘掉的临时说明。",
+                "source_id": "exp_forget",
+                "source_type": "user_experience",
+                "source_occurred_at": old,
+                "evidence_ids": ["exp_forget"],
+                "created_at": old,
+                "core": False,
+            },
+        ]
+    )
     files.commit(state, history, memories)
     bundle = _valid_bundle("原来不只是在夜里，是忙完以后。")
     bundle["memory_operations"] = [
@@ -773,7 +807,6 @@ async def test_integrate_recall_correct_and_forget_have_distinct_traced_effects(
             "action": "integrate",
             "kind": "user_fact",
             "target_id": "mem_user",
-            "content": "用户忙完后会收拾桌面",
             "evidence_ids": ["INCOMING"],
             "core": False,
         },
@@ -782,26 +815,24 @@ async def test_integrate_recall_correct_and_forget_have_distinct_traced_effects(
             "kind": "self_experience",
             "target_id": "mem_self",
             "evidence_ids": [],
-            "content": "",
         },
         {
             "action": "correct",
             "kind": "pattern",
-            "target_id": "mem_pattern",
-            "content": "用户忙完后常会整理桌面，不限于夜里",
-            "evidence_ids": ["exp_old", "INCOMING"],
+            "target_id": "seed_tension_voice",
+            "evidence_ids": ["INCOMING"],
+            "user_confirmed": True,
         },
         {
             "action": "forget",
-            "kind": "shared_experience",
-            "target_id": "mem_shared",
+            "kind": "user_fact",
+            "target_id": "mem_forget",
             "evidence_ids": [],
-            "content": "",
         },
     ]
 
     result = await mind_step(
-        "我不是只在夜里收桌子，主要是忙完以后会收。",
+        "我确认：我不是只在夜里收桌子，主要是忙完以后会收。",
         provider=StubProvider([bundle]),
         files=files,
         now=now,
@@ -811,37 +842,142 @@ async def test_integrate_recall_correct_and_forget_have_distinct_traced_effects(
     by_id = {item["id"]: item for item in saved["items"]}
     operations = [item for item in recorded if item["type"] == "memory_operation"]
     assert result.committed is True
+    assert by_id["mem_user"]["quote"] == "忙完时我会收桌面。"
     assert by_id["mem_user"]["evidence_ids"][0] == "exp_old"
     assert len(by_id["mem_user"]["evidence_ids"]) == 2
     assert by_id["mem_user"]["core"] is False
-    assert by_id["mem_self"]["content"] == "在窗边读过书"
-    assert by_id["mem_pattern"]["content"] == "用户忙完后常会整理桌面，不限于夜里"
-    assert "mem_shared" not in by_id
+    assert by_id["mem_self"]["receipt"]["content"] == "在窗边读过一页书。"
+    assert by_id["seed_tension_voice"]["key"] == "tension_voice"
+    assert by_id["seed_tension_voice"]["user_confirmed"] is True
+    assert "mem_forget" not in by_id
     assert [item["action"] for item in operations] == [
         "integrate",
         "recall",
         "correct",
         "forget",
     ]
-    corrected = next(item for item in operations if item["action"] == "correct")
     integrated = next(item for item in operations if item["action"] == "integrate")
-    assert integrated["core"] is False
-    assert corrected["previous_content"] == "用户总在夜里整理桌面"
+    corrected = next(item for item in operations if item["action"] == "correct")
+    forgotten = next(item for item in operations if item["action"] == "forget")
+    assert integrated["before"]["quote"] == integrated["after"]["quote"]
+    assert corrected["before"]["key"] == corrected["after"]["key"]
+    assert "after" not in forgotten and forgotten["before"]["id"] == "mem_forget"
     assert failures == []
 
+
+@pytest.mark.asyncio
+async def test_receipt_memories_cannot_be_corrected_or_forgotten(tmp_path) -> None:
+    files = MindFiles(tmp_path)
+    now = datetime(2026, 7, 18, 11, 30, tzinfo=UTC)
+    old = (now - timedelta(days=1)).isoformat()
+    state, history, memories = files.load(now)
+    history.extend(
+        [
+            {
+                "id": "life_old",
+                "type": "self_reading",
+                "title": "旧书",
+                "content": "确实读过的一页。",
+                "occurred_at": old,
+            },
+            {
+                "id": "interaction_old",
+                "type": "user_experience",
+                "content": "我们此刻聊到了这本书。",
+                "occurred_at": old,
+            },
+        ]
+    )
+    memories["items"].extend(
+        [
+            {
+                "id": "mem_self",
+                "kind": "self_experience",
+                "receipt_id": "life_old",
+                "receipt": {
+                    "type": "self_reading",
+                    "title": "旧书",
+                    "content": "确实读过的一页。",
+                    "occurred_at": old,
+                },
+                "evidence_ids": ["life_old"],
+                "created_at": old,
+                "core": False,
+            },
+            {
+                "id": "mem_shared",
+                "kind": "shared_experience",
+                "interaction_id": "interaction_old",
+                "interaction": {
+                    "type": "user_experience",
+                    "user_said": "我们此刻聊到了这本书。",
+                    "occurred_at": old,
+                },
+                "evidence_ids": ["interaction_old"],
+                "created_at": old,
+                "core": False,
+            },
+        ]
+    )
+    files.commit(state, history, memories)
+    correct_self = _valid_bundle("这条收据不能改写。")
+    correct_self["memory_operations"] = [
+        {
+            "action": "correct",
+            "kind": "self_experience",
+            "target_id": "mem_self",
+            "evidence_ids": ["INCOMING"],
+        }
+    ]
+    forget_shared = _valid_bundle("这次互动也不能被抹掉。")
+    forget_shared["memory_operations"] = [
+        {
+            "action": "forget",
+            "kind": "shared_experience",
+            "target_id": "mem_shared",
+            "evidence_ids": [],
+        }
+    ]
+
+    result = await mind_step(
+        "把真实发生过的都改掉。",
+        provider=StubProvider([correct_self, forget_shared]),
+        files=files,
+        now=now,
+    )
+
+    _, _, saved, failures = _read(files)
+    by_id = {item["id"]: item for item in saved["items"]}
+    assert result.committed is False
+    assert {"mem_self", "mem_shared"} <= set(by_id)
+    assert by_id["mem_self"]["receipt"]["content"] == "确实读过的一页。"
+    assert "收据经历不能 correct" in "\n".join(failures[0]["reasons"])
+    assert "收据经历不能 forget" in "\n".join(failures[1]["reasons"])
 
 @pytest.mark.asyncio
 async def test_seed_and_core_memory_cannot_be_forgotten_directly(tmp_path) -> None:
     files = MindFiles(tmp_path)
     now = datetime(2026, 7, 19, 10, 0, tzinfo=UTC)
+    old = (now - timedelta(days=1)).isoformat()
     state, history, memories = files.load(now)
+    history.append(
+        {
+            "id": "exp_old",
+            "type": "user_experience",
+            "content": "忙完时我会收桌面。",
+            "occurred_at": old,
+        }
+    )
     memories["items"].append(
         {
             "id": "mem_core",
             "kind": "user_fact",
-            "content": "用户明确说过忙完会收桌面",
+            "quote": "忙完时我会收桌面。",
+            "source_id": "exp_old",
+            "source_type": "user_experience",
+            "source_occurred_at": old,
             "evidence_ids": ["exp_old"],
-            "created_at": (now - timedelta(days=1)).isoformat(),
+            "created_at": old,
             "core": True,
         }
     )
@@ -852,7 +988,6 @@ async def test_seed_and_core_memory_cannot_be_forgotten_directly(tmp_path) -> No
             "action": "forget",
             "kind": "pattern",
             "target_id": "seed_tension_voice",
-            "content": "",
             "evidence_ids": [],
         }
     ]
@@ -862,7 +997,6 @@ async def test_seed_and_core_memory_cannot_be_forgotten_directly(tmp_path) -> No
             "action": "forget",
             "kind": "user_fact",
             "target_id": "mem_core",
-            "content": "",
             "evidence_ids": [],
         }
     ]
@@ -881,21 +1015,32 @@ async def test_seed_and_core_memory_cannot_be_forgotten_directly(tmp_path) -> No
     assert "不能直接 forget 初始人格种子" in failures[0]["reasons"][0]
     assert "不能直接 forget 核心记忆" in failures[1]["reasons"][0]
 
-
 @pytest.mark.asyncio
 async def test_core_memory_requires_a_later_turn_after_evidenced_demotion_to_forget(
     tmp_path,
 ) -> None:
     files = MindFiles(tmp_path)
     start = datetime(2026, 7, 19, 11, 0, tzinfo=UTC)
+    old = (start - timedelta(days=1)).isoformat()
     state, history, memories = files.load(start)
+    history.append(
+        {
+            "id": "exp_old",
+            "type": "user_experience",
+            "content": "我总会在夜里收桌面。",
+            "occurred_at": old,
+        }
+    )
     memories["items"].append(
         {
             "id": "mem_core",
             "kind": "user_fact",
-            "content": "用户总会在夜里收桌面",
+            "quote": "我总会在夜里收桌面。",
+            "source_id": "exp_old",
+            "source_type": "user_experience",
+            "source_occurred_at": old,
             "evidence_ids": ["exp_old"],
-            "created_at": (start - timedelta(days=1)).isoformat(),
+            "created_at": old,
             "core": True,
         }
     )
@@ -906,7 +1051,6 @@ async def test_core_memory_requires_a_later_turn_after_evidenced_demotion_to_for
             "action": "integrate",
             "kind": "user_fact",
             "target_id": "mem_core",
-            "content": "用户有时会在忙完后收桌面",
             "evidence_ids": ["INCOMING"],
             "core": False,
         }
@@ -915,7 +1059,6 @@ async def test_core_memory_requires_a_later_turn_after_evidenced_demotion_to_for
         "action": "forget",
         "kind": "user_fact",
         "target_id": "mem_core",
-        "content": "",
         "evidence_ids": [],
     }
     same_bundle = json.loads(json.dumps(demote, ensure_ascii=False))
@@ -943,6 +1086,7 @@ async def test_core_memory_requires_a_later_turn_after_evidenced_demotion_to_for
     demoted_item = next(item for item in after_demotion["items"] if item["id"] == "mem_core")
     assert demoted.committed is True
     assert demoted_item["core"] is False
+    assert demoted_item["quote"] == "我总会在夜里收桌面。"
 
     forget_bundle = _valid_bundle("现在可以把这条非核心记忆放下了。")
     forget_bundle["memory_operations"] = [forget]
@@ -952,10 +1096,15 @@ async def test_core_memory_requires_a_later_turn_after_evidenced_demotion_to_for
         files=files,
         now=start + timedelta(minutes=2),
     )
-    _, _, after_forget, _ = _read(files)
+    _, recorded, after_forget, _ = _read(files)
     assert forgotten.committed is True
     assert "mem_core" not in {item["id"] for item in after_forget["items"]}
-
+    event = next(
+        item
+        for item in recorded
+        if item.get("type") == "memory_operation" and item.get("action") == "forget"
+    )
+    assert event["before"]["quote"] == "我总会在夜里收桌面。"
 
 @pytest.mark.asyncio
 async def test_early_core_memory_stays_visible_after_more_than_eight_situations(tmp_path) -> None:
@@ -965,6 +1114,9 @@ async def test_early_core_memory_stays_visible_after_more_than_eight_situations(
     memories["items"] = [
         _memory_item(0, "我遇到不确定的事时会先承认不知道。", core=True),
         *[_memory_item(index, f"情景记忆{index}：" + "页" * 450) for index in range(1, 11)],
+    ]
+    history[:] = [
+        {"id": item["receipt_id"], **item["receipt"]} for item in memories["items"]
     ]
     files.commit(state, history, memories)
     bundle = _valid_bundle("我记得自己要把不知道的地方说清楚。")
@@ -992,6 +1144,9 @@ async def test_core_over_budget_requests_integration_without_blocking_direct_rep
     state, history, memories = files.load(now)
     memories["items"] = [
         _memory_item(index, f"核心倾向{index}：" + "稳" * 480, core=True) for index in range(9)
+    ]
+    history[:] = [
+        {"id": item["receipt_id"], **item["receipt"]} for item in memories["items"]
     ]
     files.commit(state, history, memories)
     bundle = _valid_bundle("这件事我听见了，先和你一起把它放在这里。")
@@ -1024,34 +1179,30 @@ async def test_record_can_make_a_memory_core_for_later_context(tmp_path) -> None
 
 
 @pytest.mark.asyncio
-async def test_pattern_with_one_example_requires_explicit_user_confirmation(tmp_path) -> None:
+async def test_new_pattern_is_not_stored_even_with_user_confirmation(tmp_path) -> None:
     files = MindFiles(tmp_path)
-    bad = _valid_bundle()
-    bad["memory_operations"] = [
+    candidate = _valid_bundle()
+    candidate["memory_operations"] = [
         {
             "action": "record",
             "kind": "pattern",
-            "content": "用户明确说自己忙完后习惯收桌面",
             "evidence_ids": ["INCOMING"],
+            "user_confirmed": True,
         }
     ]
-    confirmed = json.loads(json.dumps(bad, ensure_ascii=False))
-    confirmed["memory_operations"][0]["user_confirmed"] = True
 
     result = await mind_step(
         "我确认一下：我忙完后就是习惯收桌面。",
-        provider=StubProvider([bad, confirmed]),
+        provider=StubProvider([candidate, candidate]),
         files=files,
     )
 
     _, recorded, saved, failures = _read(files)
-    operation = next(item for item in recorded if item["type"] == "memory_operation")
-    assert result.committed is True
-    assert result.attempts == 2
-    assert _learned_items(saved)[0]["kind"] == "pattern"
-    assert operation["user_confirmed"] is True
-    assert "也没有用户确认" in failures[0]["reasons"][0]
-
+    assert result.committed is False
+    assert all(item["type"] != "memory_operation" for item in recorded)
+    assert _learned_items(saved) == []
+    assert len(failures) == 2
+    assert all("new patterns are not stored" in item["reasons"][0] for item in failures)
 
 @pytest.mark.asyncio
 async def test_provider_failure_returns_honest_static_catch_without_committing(tmp_path) -> None:
@@ -1088,7 +1239,6 @@ async def test_failed_turn_experience_can_support_a_later_memory(tmp_path) -> No
     _, failed_history, _, _ = _read(files)
     experience_id = failed_history[0]["id"]
     later = _valid_bundle("我记住了，你今天第一次学会骑车。")
-    later["memory_operations"][0]["content"] = "用户今天第一次学会骑车"
     later["memory_operations"][0]["evidence_ids"] = [experience_id]
 
     accepted = await mind_step(
@@ -1108,7 +1258,8 @@ async def test_failed_turn_experience_can_support_a_later_memory(tmp_path) -> No
         "这件事以后还能记得吗？",
     ]
     assert learned["evidence_ids"] == [experience_id]
-
+    assert learned["quote"] == "我今天第一次学会了骑车。"
+    assert learned["source_id"] == experience_id
 
 @pytest.mark.asyncio
 async def test_real_txt_progress_waits_for_completed_body_receipt(tmp_path) -> None:
@@ -1158,7 +1309,7 @@ async def test_completed_reading_can_answer_what_was_just_read(tmp_path) -> None
     files.load(start)
     answer = {
         "action_choice": None,
-        "state_changes": {"mood": "安静", "energy": "平稳", "attention": "诗句里"},
+        "state_changes": {"mood": "平静", "energy": "平稳", "attention": "阅读"},
         "memory_operations": [],
         "expression": "刚读到陶渊明《归园田居·其一》：少无适俗韵，性本爱丘山。",
     }
@@ -1362,12 +1513,22 @@ def test_unsupported_shared_read_is_rejected_but_denial_is_allowed() -> None:
     assert any(
         "一起读过/看过/去过" in reason
         for reason in validate_no_fabrication(
-            asserted, {"INCOMING": "user_experience"}, {"INCOMING"}, current_experience_type=None
+            asserted,
+            {"INCOMING": "user_experience"},
+            {},
+            {"INCOMING"},
+            current_experience_id="INCOMING",
+            current_experience_type=None,
         )
     )
     assert (
         validate_no_fabrication(
-            denied, {"INCOMING": "user_experience"}, {"INCOMING"}, current_experience_type=None
+            denied,
+            {"INCOMING": "user_experience"},
+            {},
+            {"INCOMING"},
+            current_experience_id="INCOMING",
+            current_experience_type=None,
         ) == []
     )
 
@@ -1421,7 +1582,9 @@ def test_apology_is_not_mistaken_for_a_touch_claim() -> None:
     reasons = validate_no_fabrication(
         bundle,
         {"INCOMING": "user_experience"},
+        {},
         {"INCOMING"},
+        current_experience_id="INCOMING",
         current_experience_type="user_experience",
     )
 

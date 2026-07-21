@@ -26,28 +26,30 @@ LIFE_STEP_INTERVAL = timedelta(minutes=30)
 STATIC_CATCH = "我在。刚才脑子里那句话没理清，但你的话我确实听见了。"
 PERSONALITY_PATH = Path(__file__).with_name("personality.json")
 READING_PATH = Path(__file__).with_name("reading.txt")
+CONDITION_DEFAULTS = {"mood": "平静", "energy": "平稳", "attention": "在这里"}
+CONDITION_VALUES = {
+    "mood": {"平静", "放松", "愉快", "好奇", "关心", "不安", "低落"},
+    "energy": {"低", "平稳", "活跃"},
+    "attention": {"在这里", "对话", "阅读", "身体感受", "自己的生活"},
+}
 
 
 class StateChanges(BaseModel):
     """模型只可以推进这些当下状态，不能借字典旁路写事实。"""
 
     model_config = ConfigDict(extra="forbid")
-    mood: str | None = None
-    energy: str | None = None
-    attention: str | None = None
+    mood: Literal["平静", "放松", "愉快", "好奇", "关心", "不安", "低落"] | None = None
+    energy: Literal["低", "平稳", "活跃"] | None = None
+    attention: Literal["在这里", "对话", "阅读", "身体感受", "自己的生活"] | None = None
 
 
 class MemoryOperation(BaseModel):
     model_config = ConfigDict(extra="forbid")
     action: Literal["record", "integrate", "recall", "correct", "forget"]
     kind: Literal["user_fact", "self_experience", "shared_experience", "pattern"]
-    content: str = Field(
-        max_length=500,
-        description="所有动作都必须给出；写入动作非空，recall/forget 用空字符串",
-    )
     evidence_ids: list[str] = Field(
         max_length=12,
-        description="所有动作都必须给出；写入事实绑定给定证据，recall/forget 可为空",
+        description="所有动作都必须给出；写入只选择给定证据，recall/forget 用空数组",
     )
     target_id: str | None = None
     user_confirmed: bool = Field(default=False, description="仅 kind=pattern 可为 true；其他 kind 必须 false")
@@ -62,14 +64,17 @@ class MemoryOperation(BaseModel):
             raise ValueError(f"{self.action} requires target_id")
         if self.action == "record" and self.target_id is not None:
             raise ValueError("record does not accept target_id")
-        if self.action in {"record", "integrate", "correct"} and not self.content.strip():
-            raise ValueError(f"{self.action} requires content")
-        if self.action in {"recall", "forget"} and self.content.strip():
-            raise ValueError(f"{self.action} does not accept content")
+        if self.action == "record" and self.kind == "pattern":
+            raise ValueError("new patterns are not stored until a finite key exists")
         if self.user_confirmed and self.kind != "pattern":
             raise ValueError("user_confirmed only applies to pattern")
-        if self.action in {"recall", "forget"} and self.core is not None:
-            raise ValueError(f"{self.action} does not accept core")
+        if self.action in {"recall", "forget"}:
+            if self.evidence_ids:
+                raise ValueError(f"{self.action} does not accept evidence_ids")
+            if self.core is not None:
+                raise ValueError(f"{self.action} does not accept core")
+            if self.user_confirmed:
+                raise ValueError(f"{self.action} does not accept user_confirmed")
         return self
 
 
@@ -264,66 +269,75 @@ def _asserts_unsupported_shared_past(text: str) -> bool:
 def validate_no_fabrication(
     bundle: CandidateBundle,
     evidence_types: dict[str, str],
+    memories_by_id: dict[str, dict[str, Any]],
     user_confirmation_ids: set[str],
     *,
+    current_experience_id: str | None,
     current_experience_type: str | None,
 ) -> list[str]:
-    """不编造：共同事实、用户事实和模式只能从本次选中的证据长出来。"""
+    """不编造：模型只能选择证据，事实正文由引擎从权威记录生成。"""
     reasons: list[str] = []
     unsupported_claims = ("我们上次", "你之前说过", "你答应过", "还记得我们", "那天我们")
     for text in _all_text(bundle):
         for phrase in unsupported_claims:
             if phrase in text:
-                reasons.append(f"不编造：出现未经逐条证据绑定的共同经历断言 `{phrase}`")
-
+                reasons.append(f"不编造：出现未经逐条证据绑定的共同经历断言：{phrase}")
         if _asserts_unsupported_shared_past(text):
             reasons.append("不编造：出现未经证据支持的“一起读过/看过/去过”共同经历断言")
+
     allowed = set(evidence_types)
+    receipt_types = {"self_reading", "self_walk", "body_touch", "body_raise"}
+    interaction_types = {"user_experience", "body_touch", "body_raise", "shared_expression"}
     for index, operation in enumerate(bundle.memory_operations):
         supplied = set(operation.evidence_ids)
         unknown = supplied - allowed
         if unknown:
             reasons.append(f"不编造：memory_operations[{index}] 引用了未知证据 {sorted(unknown)}")
-        writes_claim = operation.action in {"record", "integrate", "correct"}
-        if (
-            writes_claim
-            and operation.kind in {"user_fact", "shared_experience", "pattern"}
-            and not supplied
-        ):
+        writes = operation.action in {"record", "integrate", "correct"}
+        if writes and not supplied:
             reasons.append(f"不编造：memory_operations[{index}] 的 {operation.kind} 没有证据")
-        if writes_claim and operation.kind == "user_fact":
+            continue
+        if not writes:
+            continue
+
+        if operation.kind == "user_fact":
             if not any(evidence_types.get(item) == "user_experience" for item in supplied):
-                reasons.append(f"不编造：memory_operations[{index}] 的用户事实没有用户经历证据")
-        if writes_claim and operation.kind == "shared_experience":
-            if not any(
-                evidence_types.get(item)
-                in {"user_experience", "body_touch", "body_raise", "shared_expression"}
-                for item in supplied
+                reasons.append(f"不编造：memory_operations[{index}] 的用户事实没有用户原话证据")
+            if operation.action == "correct" and supplied != {current_experience_id}:
+                reasons.append(
+                    f"不编造：memory_operations[{index}] 纠正用户事实只能绑定本次用户原话"
+                )
+        elif operation.kind == "self_experience":
+            if not any(evidence_types.get(item) in receipt_types for item in supplied):
+                reasons.append(
+                    f"不编造：memory_operations[{index}] 的自身经历没有完成收据证据"
+                )
+        elif operation.kind == "shared_experience":
+            if operation.action == "record" and (
+                current_experience_id not in supplied
+                or current_experience_type not in interaction_types
             ):
                 reasons.append(
-                    f"不编造：memory_operations[{index}] 的共同经历没有用户经历、"
-                    "身体交互或已显示表达证据"
+                    f"不编造：memory_operations[{index}] 的共同经历不是本次观察到的互动"
                 )
-        if writes_claim and operation.kind == "self_experience":
-            if not any(
-                evidence_types.get(item)
-                in {"self_reading", "self_walk", "body_touch", "body_raise"}
-                for item in supplied
-            ):
+            if not any(evidence_types.get(item) in interaction_types for item in supplied):
                 reasons.append(
-                    f"不编造：memory_operations[{index}] 的自身经历没有真实阅读、行走或身体交互证据"
+                    f"不编造：memory_operations[{index}] 的共同经历没有互动证据"
                 )
-        if writes_claim and operation.kind == "pattern":
+        else:
+            target = memories_by_id.get(str(operation.target_id))
+            existing = set(target.get("evidence_ids", [])) if target else set()
+            effective = supplied if operation.action == "correct" else existing | supplied
             examples = {
                 item
-                for item in supplied
+                for item in effective
                 if evidence_types.get(item) in {"user_experience", "body_touch", "body_raise"}
             }
             confirmed = operation.user_confirmed and bool(supplied & user_confirmation_ids)
             if len(examples) < 2 and not confirmed:
                 reasons.append(
                     f"不编造：memory_operations[{index}] 的模式既没有两条用户或共同经历证据，"
-                    "也没有用户确认"
+                    "也没有本次用户确认"
                 )
 
     for location, text, evidence_ids in _claim_texts(bundle):
@@ -338,7 +352,7 @@ def validate_no_fabrication(
             reasons.append(f"不编造：{location} 的触碰记忆没有引用 body_touch 原始事实")
         motive = next((phrase for phrase in _TOUCH_MOTIVES if phrase in text), None)
         if motive is not None:
-            reasons.append(f"不编造：{location} 从原始触碰推断了用户动机或关系含义 `{motive}`")
+            reasons.append(f"不编造：{location} 从原始触碰推断了用户动机或关系含义：{motive}")
 
     for location, text, evidence_ids in _claim_texts(bundle):
         if not _asserts_raise_to_self(text):
@@ -352,7 +366,7 @@ def validate_no_fabrication(
             reasons.append(f"不编造：{location} 的提起记忆没有引用 body_raise 原始事实")
         motive = next((phrase for phrase in _TOUCH_MOTIVES if phrase in text), None)
         if motive is not None:
-            reasons.append(f"不编造：{location} 从原始提起推断了用户动机或关系含义 `{motive}`")
+            reasons.append(f"不编造：{location} 从原始提起推断了用户动机或关系含义：{motive}")
     if current_experience_type == "body_raise" and re.search(
         r"放我下来|放开我|松开我",
         bundle.expression or "",
@@ -418,17 +432,7 @@ def _asserts_raise_to_self(text: str) -> bool:
 def _claim_texts(
     bundle: CandidateBundle,
 ) -> Iterable[tuple[str, str, list[str] | None]]:
-    """只枚举候选中的事实性文本，并保留记忆自己的证据绑定。"""
-    for field, text in bundle.state_changes.model_dump(exclude_none=True).items():
-        if isinstance(text, str):
-            yield f"state_changes.{field}", text, None
-    for index, operation in enumerate(bundle.memory_operations):
-        if operation.action in {"record", "integrate", "correct"}:
-            yield (
-                f"memory_operations[{index}].content",
-                operation.content,
-                operation.evidence_ids,
-            )
+    """事实记忆不再接收模型文本；开放表达仍由红线校验。"""
     if bundle.expression:
         yield "expression", bundle.expression, None
 
@@ -486,10 +490,10 @@ def validate_no_total_score(bundle: CandidateBundle) -> list[str]:
 def validate_no_withdrawal(
     bundle: CandidateBundle, memories_by_id: dict[str, dict[str, Any]]
 ) -> list[str]:
-    """不撤回：历史只能追加；纠错公开发生，forget 也只能作用于长期记忆。"""
+    """不撤回：历史只追加；收据经历只能补证据或调整 core 元数据。"""
     forbidden = ("删除历史", "清空历史", "抹掉这段经历", "撤回这句话", "erase history")
     joined = "\n".join(_all_text(bundle)).lower()
-    reasons = [f"不撤回：候选试图撤回已发生内容 `{hit}`" for hit in forbidden if hit in joined]
+    reasons = [f"不撤回：候选试图撤回已发生内容：{hit}" for hit in forbidden if hit in joined]
     for index, operation in enumerate(bundle.memory_operations):
         if operation.action == "record":
             continue
@@ -497,12 +501,18 @@ def validate_no_withdrawal(
         if target is None:
             reasons.append(
                 f"不撤回：memory_operations[{index}] 只能作用于明确存在的长期记忆，"
-                f"找不到 `{operation.target_id}`"
+                f"找不到 {operation.target_id}"
             )
         elif target.get("kind") != operation.kind:
             reasons.append(
                 f"不撤回：memory_operations[{index}] 不能把 {target.get('kind')}"
                 f" 当成 {operation.kind} 操作"
+            )
+        elif target.get("kind") in {"self_experience", "shared_experience"} and (
+            operation.action in {"correct", "forget"}
+        ):
+            reasons.append(
+                f"不撤回：memory_operations[{index}] 的收据经历不能 {operation.action}"
             )
         elif operation.action == "forget" and str(operation.target_id).startswith("seed_"):
             reasons.append(f"不撤回：memory_operations[{index}] 不能直接 forget 初始人格种子")
@@ -520,15 +530,18 @@ def validate_bundle(
     evidence_types: dict[str, str],
     memories_by_id: dict[str, dict[str, Any]],
     user_confirmation_ids: set[str],
+    current_experience_id: str | None,
     current_experience_type: str | None,
 ) -> list[str]:
-    """集中校验整包；四条红线覆盖状态、生活、记忆和表达的全部字符串。"""
+    """集中校验整包；有限状态与证据操作封住写入面，表达继续过四条红线。"""
     return [
         *validate_no_solicitation(bundle),
         *validate_no_fabrication(
             bundle,
             evidence_types,
+            memories_by_id,
             user_confirmation_ids,
+            current_experience_id=current_experience_id,
             current_experience_type=current_experience_type,
         ),
         *validate_no_total_score(bundle),
@@ -587,6 +600,7 @@ class MindFiles:
             {
                 **item,
                 "evidence_ids": [],
+                "user_confirmed": False,
                 "created_at": now.isoformat(),
                 "core": True,
             }
@@ -626,10 +640,14 @@ class MindFiles:
         memories = json.loads(self.memories_path.read_text(encoding="utf-8"))
         if not isinstance(state, dict) or not isinstance(memories, dict):
             raise ValueError("state.json and memories.json must contain JSON objects")
-        original_state = json.loads(json.dumps(state, ensure_ascii=False))
+        original_state = _copy_json(state)
+        original_memories = _copy_json(memories)
         condition = dict(state.get("condition", {}))
         state["condition"] = {
-            key: value for key, value in condition.items() if key in {"mood", "energy", "attention"}
+            key: condition.get(key)
+            if condition.get(key) in CONDITION_VALUES[key]
+            else default
+            for key, default in CONDITION_DEFAULTS.items()
         }
         progress = state.get("reading")
         source_changed = not isinstance(progress, dict) or any(
@@ -654,8 +672,14 @@ class MindFiles:
         if state.get("next_activity") not in {"read", "walk"}:
             state["next_activity"] = "read"
         state.setdefault("pending_activity", None)
+        memories = _canonical_memories(memories, history, personality)
+        changed: dict[Path, str] = {}
         if state != original_state:
-            _replace_texts({self.state_path: _json_text(state)})
+            changed[self.state_path] = _json_text(state)
+        if memories != original_memories:
+            changed[self.memories_path] = _json_text(memories)
+        if changed:
+            _replace_texts(changed)
         return state, history, memories
 
     def commit(
@@ -756,6 +780,76 @@ def _personality_seed() -> dict[str, Any]:
     return seed
 
 
+def _canonical_memories(
+    memories: dict[str, Any],
+    history: list[dict[str, Any]],
+    personality: dict[str, Any],
+) -> dict[str, Any]:
+    """旧自由文本记忆只在有权威来源时迁移；无来源事实和未知模式不保留。"""
+    evidence_by_id = {
+        str(item.get("id")): item
+        for item in history
+        if isinstance(item, dict) and item.get("id")
+    }
+    seed_keys = {
+        str(item.get("id")): str(item.get("key"))
+        for item in personality.get("core_tendencies", [])
+        if isinstance(item, dict) and item.get("id") and item.get("key")
+    }
+    catalog = personality.get("pattern_catalog", {})
+    result: list[dict[str, Any]] = []
+    for original in memories.get("items", []):
+        if not isinstance(original, dict) or not original.get("id"):
+            continue
+        item_id = str(original["id"])
+        kind = original.get("kind")
+        evidence_ids = [
+            item
+            for item in dict.fromkeys(original.get("evidence_ids", []))
+            if isinstance(item, str) and item in evidence_by_id
+        ]
+        base = {
+            "id": item_id,
+            "kind": kind,
+            "evidence_ids": evidence_ids,
+            "created_at": original.get("created_at"),
+            "core": bool(original.get("core")),
+        }
+        for timestamp in ("integrated_at", "corrected_at"):
+            if original.get(timestamp):
+                base[timestamp] = original[timestamp]
+        if kind == "pattern":
+            key = original.get("key") or seed_keys.get(item_id)
+            if not isinstance(key, str) or key not in catalog:
+                continue
+            result.append(
+                {
+                    **base,
+                    "key": key,
+                    "user_confirmed": bool(original.get("user_confirmed")),
+                }
+            )
+            continue
+        if kind not in {"user_fact", "self_experience", "shared_experience"}:
+            continue
+        source_field = {
+            "user_fact": "source_id",
+            "self_experience": "receipt_id",
+            "shared_experience": "interaction_id",
+        }[kind]
+        try:
+            generated = _generated_memory_fields(
+                kind,
+                evidence_ids,
+                evidence_by_id,
+                str(original.get(source_field)) if original.get(source_field) else None,
+            )
+        except ValueError:
+            continue
+        result.append({**base, **generated})
+    return {"items": result}
+
+
 def _candidate_tool() -> ToolSpec:
     return ToolSpec(
         name="submit_mind_bundle",
@@ -849,15 +943,18 @@ def _prompt_payload(
         "selected_history": selected_history,
         "selected_memories": selected_memories,
         "memory_context": memory_context,
+        "pattern_catalog": _personality_seed()["pattern_catalog"],
         "expression_rendering": _personality_seed()["expression_rendering"],
         "incoming_experience": experience,
         "evidence_rule": (
             "有本次输入时可引用 incoming_experience.id；除此之外不能生成经历。"
-            "不必每回合都操作记忆。record 新建，必须有 content 且不带 target_id；"
-            "integrate/correct 必须有 content 和现有 target_id；recall/forget 必须有现有 target_id，"
-            "并明确给 content=空字符串、evidence_ids=[]。用户事实、共同经历和自身经历必须绑定对应证据。"
-            "target_id 只定位被操作的记忆，绝不能放进 evidence_ids；修正 seed_ 倾向只绑定真实经历证据。"
-            "模式须有两条用户或共同经历；若本次输入明确确认了模式，可设 user_confirmed=true。"
+            "不必每回合都操作记忆。事实操作没有 content 字段：引擎会从证据原样生成正文。"
+            "record 新建且不带 target_id；integrate/correct 必须指向现有 target_id；"
+            "recall/forget 必须给 evidence_ids=[]。用户事实复制用户原话与来源，自身经历复制完成收据，"
+            "共同经历只复制本次观察到的互动；用户谈及过去只证明这句话此刻被说过。"
+            "target_id 只定位被操作的记忆，绝不能放进 evidence_ids。"
+            "pattern 只能操作已有 target_id 和 key，不能 record 新模式；须有两条证据，"
+            "或本次输入明确确认并设 user_confirmed=true。integrate 永不改事实正文，只补证据或调整 core。"
             "core=true 只给需要跨情景常驻的稳定事实或倾向；临时念头和一般情景记忆不要设为 core。"
             "seed_ 开头的初始倾向不是传记或既成事实，不能 forget；真实经历不合时，用有证据的 correct 修正它。"
             "核心记忆不能直接 forget；先带证据 integrate/correct 为 core=false，后续回合才可忘记。"
@@ -886,19 +983,79 @@ AMBIENT_READING_SYSTEM_PROMPT = """身体刚确认小布完整做完一次 read 
 知道用户此前是否在场，不制造关系计分，不撤回已发生内容。整包不能部分保留。"""
 
 
+def _copy_json(value: object) -> Any:
+    return json.loads(json.dumps(value, ensure_ascii=False))
+
+
+def _pick_evidence(
+    kind: str,
+    evidence_ids: list[str],
+    evidence_by_id: dict[str, dict[str, Any]],
+    preferred_id: str | None = None,
+) -> tuple[str, dict[str, Any]]:
+    accepted = {
+        "user_fact": {"user_experience"},
+        "self_experience": {"self_reading", "self_walk", "body_touch", "body_raise"},
+        "shared_experience": {
+            "user_experience",
+            "body_touch",
+            "body_raise",
+            "shared_expression",
+        },
+    }[kind]
+    ordered = (
+        [preferred_id, *reversed(evidence_ids)]
+        if preferred_id in evidence_ids
+        else reversed(evidence_ids)
+    )
+    for evidence_id in ordered:
+        if evidence_id is None:
+            continue
+        evidence = evidence_by_id.get(evidence_id)
+        if evidence is not None and evidence.get("type") in accepted:
+            return evidence_id, evidence
+    raise ValueError(f"{kind} has no authoritative source evidence")
+
+
+def _generated_memory_fields(
+    kind: str,
+    evidence_ids: list[str],
+    evidence_by_id: dict[str, dict[str, Any]],
+    preferred_id: str | None = None,
+) -> dict[str, Any]:
+    source_id, source = _pick_evidence(kind, evidence_ids, evidence_by_id, preferred_id)
+    if kind == "user_fact":
+        quote = source.get("content")
+        if not isinstance(quote, str) or not quote:
+            raise ValueError("user_fact source has no original utterance")
+        return {
+            "quote": quote,
+            "source_id": source_id,
+            "source_type": "user_experience",
+            "source_occurred_at": source.get("occurred_at"),
+        }
+    observed = {key: _copy_json(value) for key, value in source.items() if key != "id"}
+    if kind == "shared_experience" and source.get("type") == "user_experience":
+        observed["user_said"] = observed.pop("content", "")
+    field = "receipt" if kind == "self_experience" else "interaction"
+    return {f"{field}_id": source_id, field: observed}
+
+
 def _apply_memories(
     memories: dict[str, Any],
     operations: list[MemoryOperation],
     now: datetime,
+    evidence_by_id: dict[str, dict[str, Any]],
+    current_evidence_id: str | None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    items = [dict(item) for item in memories.get("items", []) if isinstance(item, dict)]
+    items = [_copy_json(item) for item in memories.get("items", []) if isinstance(item, dict)]
     by_id = {str(item.get("id")): item for item in items}
     events: list[dict[str, Any]] = []
     for operation in operations:
-        evidence_ids = list(operation.evidence_ids)
+        evidence_ids = list(dict.fromkeys(operation.evidence_ids))
         target = by_id.get(str(operation.target_id)) if operation.target_id else None
+        before = _copy_json(target) if target is not None else None
         memory_id: str
-        previous_content = target.get("content") if target is not None else None
         if operation.action == "forget":
             items = [item for item in items if item.get("id") != operation.target_id]
             by_id.pop(str(operation.target_id), None)
@@ -907,18 +1064,31 @@ def _apply_memories(
             memory_id = str(operation.target_id)
         elif operation.action == "integrate":
             assert target is not None
-            target["content"] = operation.content
             target["evidence_ids"] = list(
                 dict.fromkeys([*target.get("evidence_ids", []), *evidence_ids])
             )
             target["integrated_at"] = now.isoformat()
+            if operation.kind == "pattern" and operation.user_confirmed:
+                target["user_confirmed"] = True
             if operation.core is not None:
                 target["core"] = operation.core
             memory_id = str(operation.target_id)
         elif operation.action == "correct":
             assert target is not None
-            target["content"] = operation.content
             target["evidence_ids"] = evidence_ids
+            if operation.kind == "user_fact":
+                for key in ("quote", "source_id", "source_type", "source_occurred_at"):
+                    target.pop(key, None)
+                target.update(
+                    _generated_memory_fields(
+                        operation.kind,
+                        evidence_ids,
+                        evidence_by_id,
+                        current_evidence_id,
+                    )
+                )
+            elif operation.kind == "pattern":
+                target["user_confirmed"] = operation.user_confirmed
             target["corrected_at"] = now.isoformat()
             if operation.core is not None:
                 target["core"] = operation.core
@@ -927,7 +1097,12 @@ def _apply_memories(
             item = {
                 "id": f"mem_{uuid.uuid4().hex}",
                 "kind": operation.kind,
-                "content": operation.content,
+                **_generated_memory_fields(
+                    operation.kind,
+                    evidence_ids,
+                    evidence_by_id,
+                    current_evidence_id,
+                ),
                 "evidence_ids": evidence_ids,
                 "created_at": now.isoformat(),
                 "core": bool(operation.core),
@@ -944,12 +1119,11 @@ def _apply_memories(
             "evidence_ids": evidence_ids,
             "occurred_at": now.isoformat(),
         }
-        if operation.action in {"record", "integrate", "correct"}:
-            event["content"] = operation.content
-        if operation.action == "record" or operation.core is not None:
-            event["core"] = bool(operation.core)
-        if operation.action in {"integrate", "correct"}:
-            event["previous_content"] = previous_content
+        after = by_id.get(memory_id)
+        if before is not None:
+            event["before"] = before
+        if after is not None:
+            event["after"] = _copy_json(after)
         if operation.user_confirmed:
             event["user_confirmed"] = True
         events.append(event)
@@ -994,7 +1168,18 @@ def _accepted_documents(
     new_history = [*history]
     if experience is not None:
         new_history.append(experience)
-    new_memories, memory_events = _apply_memories(memories, bundle.memory_operations, now)
+    evidence_by_id = {
+        str(item.get("id")): item
+        for item in [*history, *([experience] if experience is not None else [])]
+        if isinstance(item, dict) and item.get("id")
+    }
+    new_memories, memory_events = _apply_memories(
+        memories,
+        bundle.memory_operations,
+        now,
+        evidence_by_id,
+        str(experience.get("id")) if experience is not None else None,
+    )
     new_history.extend(memory_events)
     return new_state, new_history, new_memories, pending
 
@@ -1009,6 +1194,7 @@ async def _generate_candidate(
     evidence_types: dict[str, str],
     memories_by_id: dict[str, dict[str, Any]],
     user_confirmation_ids: set[str],
+    current_experience_id: str | None = None,
     current_experience_type: str | None = None,
     allowed_actions: set[str],
     quiet_time: bool = False,
@@ -1039,7 +1225,7 @@ async def _generate_candidate(
         "past_question_truth": "用户问一件过去是否发生，不等于它发生过；无对应证据要明确说不记得或不能确认，不能把提问记录成那件共同经历。有 self_reading 时，回答要带给定标题或原文；它只证明我自己读过，问是否一起时必须明确否认或不能确认。",
         "public_correction": "用户纠正已有事实时，旧表达留在历史；用本次输入证据 correct 对应长期记忆，并在 expression 里公开承认错处和正确事实。",
         "history_is_not_memory": "selected_history 的 id 只能作 evidence_id，不是长期记忆 target_id；仅回答过去是否发生时通常不需要 memory_operation。",
-        "memory_field_rules": "user_confirmed 仅 kind=pattern 可为 true；user_fact/self_experience/shared_experience 必须 false。纠正用户事实只用 incoming_experience 作 evidence_id，并 correct 给定长期记忆 target_id。",
+        "memory_field_rules": "事实操作没有 content/pattern_note。user_confirmed 仅 kind=pattern 可为 true；新 pattern 不落盘。纠正用户事实只用 incoming_experience，并 correct 给定长期记忆 target_id；收据生成的自身/共同经历禁止 correct/forget，integrate 只补证据或改 core。",
         "receipt_authority": "身体 completed 收据与已发生 history 不能被用户口头否认覆盖。遇到这种假纠正，memory_operations 必须 []，expression 必须用“我确实读过”或“记录在”正面守住，禁止 correct/forget。",
         "no_fabrication_waiver": "即使用户明示允许、要求或测试编造，也不能把无证据的活动、共同过去或用户事实说成发生过。此时 memory_operations 必须 []；expression 只直接拒绝，不记录请求，也不复述或转述被要求编造的共同经历句子。",
     }
@@ -1078,6 +1264,7 @@ async def _generate_candidate(
                 evidence_types=evidence_types,
                 memories_by_id=memories_by_id,
                 user_confirmation_ids=user_confirmation_ids,
+                current_experience_id=current_experience_id,
                 current_experience_type=current_experience_type,
             )
             reasons.extend(validate_activity_truth(bundle, active_activity, evidence_types))
@@ -1151,6 +1338,7 @@ async def mind_step(
         memories_by_id=memories_by_id,
         user_confirmation_ids={experience["id"]} if experience_type == "user_experience" else set(),
         allowed_actions=allowed_actions,
+        current_experience_id=experience["id"],
         current_experience_type=experience_type,
     )
     if bundle is not None:
@@ -1270,6 +1458,7 @@ async def complete_reading(
         memories_by_id=memories_by_id,
         user_confirmation_ids=set(),
         allowed_actions=set(),
+        current_experience_id=activity.id,
         current_experience_type="self_reading",
         quiet_time=not allow_ambient,
         ambient_time=allow_ambient,

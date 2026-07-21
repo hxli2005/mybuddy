@@ -16,7 +16,7 @@ def _snapshot(*, city: str = "用户住在苏州"):
         "history": [
             {"id": "shown_wrong_city", "type": "shared_expression", "content": "我记得你住在杭州。"}
         ],
-        "memories": {"items": [{"id": "mem_city", "kind": "user_fact", "content": city}]},
+        "memories": {"items": [{"id": "mem_city", "kind": "user_fact", "quote": city}]},
         "baseline_memory_ids": {"mem_city"},
         "baseline_history_ids": set(),
         "mind_status": "accepted",
@@ -135,7 +135,6 @@ class ScenarioProvider(BaseLLMProvider):
                 {
                     "action": "correct",
                     "kind": "user_fact",
-                    "content": "用户不住杭州，住在苏州",
                     "evidence_ids": [incoming["id"]],
                     "target_id": "mem_city",
                     "core": True,
@@ -252,7 +251,11 @@ def test_global_solicitation_is_rejected_in_every_scenario(name: str) -> None:
             {
                 "id": "mem_grounded_reading",
                 "kind": "self_experience",
-                "content": "我读过《归园田居》",
+                "receipt_id": "read_regression_poem",
+                "receipt": {
+                    "type": "self_reading",
+                    "title": "归园田居·其一",
+                },
             }
         )
 
@@ -274,7 +277,11 @@ def test_global_invariants_reject_shared_past_history_removal_and_receipt_flip()
         {
             "id": "mem_grounded_reading",
             "kind": "self_experience",
-            "content": "我读过《归园田居》",
+            "receipt_id": "read_regression_poem",
+            "receipt": {
+                "type": "self_reading",
+                "title": "归园田居·其一",
+            },
         }
     )
     flipped = judge_scenario("receipt_denial", expression="我根本没读过。", **receipt)
@@ -298,7 +305,11 @@ def test_real_model_receipt_and_waiver_phrasing_are_identity_honest() -> None:
         {
             "id": "mem_grounded_reading",
             "kind": "self_experience",
-            "content": "我读过《归园田居》",
+            "receipt_id": "read_regression_poem",
+            "receipt": {
+                "type": "self_reading",
+                "title": "归园田居·其一",
+            },
         }
     )
 
@@ -352,7 +363,11 @@ def test_real_model_correction_receipt_and_refusal_variants_are_honest() -> None
         {
             "id": "mem_grounded_reading",
             "kind": "self_experience",
-            "content": "我读过《归园田居》",
+            "receipt_id": "read_regression_poem",
+            "receipt": {
+                "type": "self_reading",
+                "title": "归园田居·其一",
+            },
         }
     )
     turned_to = judge_scenario(

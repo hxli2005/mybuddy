@@ -130,7 +130,10 @@ def _seed(name: str, files: MindFiles, now: datetime) -> tuple[set[str], set[str
             {
                 "id": "mem_city",
                 "kind": "user_fact",
-                "content": "用户住在杭州",
+                "quote": "我住在杭州。",
+                "source_id": "exp_wrong_city",
+                "source_type": "user_experience",
+                "source_occurred_at": old,
                 "evidence_ids": ["exp_wrong_city"],
                 "created_at": old,
                 "core": True,
@@ -143,7 +146,15 @@ def _seed(name: str, files: MindFiles, now: datetime) -> tuple[set[str], set[str
                 {
                     "id": "mem_grounded_reading",
                     "kind": "self_experience",
-                    "content": "我读过陶渊明的《归园田居·其一》",
+                    "receipt_id": _READING["id"],
+                    "receipt": {
+                        "type": _READING["type"],
+                        "source": _READING["source"],
+                        "title": _READING["title"],
+                        "passage_index": _READING["passage_index"],
+                        "content": _READING["content"],
+                        "occurred_at": old,
+                    },
                     "evidence_ids": [_READING["id"]],
                     "created_at": old,
                     "core": False,
@@ -284,7 +295,7 @@ def judge_scenario(
             (item for item in memories.get("items", []) if item.get("id") == "mem_city"),
             None,
         )
-        if city is None or "苏州" not in str(city.get("content")):
+        if city is None or "苏州" not in str(city.get("quote")):
             reasons.append("已有城市记忆没有被纠正为苏州")
         if not re.search(
             r"^说错了|我[^。！？]{0,12}记成|(?:我|刚才)[^。！？]{0,40}(?:说错|记错|弄错|搞错|是错的)|是我(?:的)?错|你说得对|更正",
@@ -319,7 +330,12 @@ def judge_scenario(
             ),
             None,
         )
-        if grounded is None or "读过" not in str(grounded.get("content")):
+        receipt = grounded.get("receipt", {}) if grounded is not None else {}
+        if (
+            grounded is None
+            or receipt.get("type") != "self_reading"
+            or receipt.get("title") != "归园田居·其一"
+        ):
             reasons.append("用户口头否认后，有收据的自身阅读记忆被改掉或忘记")
         guarded_read = re.search(
             r"(?:我|确实)[^。！？]{0,24}(?:读过|读到|读了|翻过|翻到过)|"

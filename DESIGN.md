@@ -54,10 +54,13 @@ MyBuddy mini 不是任务助手、聊天机器人、角色卡或通用 Agent 框
 5. 生活事实不能由模型自由生成：当前只有真实 TXT 阅读和窗口 walk；阅读须原文段落与
    completed 身体收据同时存在，行走须边界内的 completed 位移收据，才进入 history；
    interrupted 和 failed 技术故障不成人生，不为回答回场补写。
-6. 记忆四类：用户事实/偏好、她的经历、共同经历、有证据的模式（须多例或用户
-   确认）；五动词：`record/integrate/recall/correct/forget`；初始人格种子不能直接 forget，
-   核心记忆须先带证据降为非核心、再在后续回合忘记。核心按字符预算常驻，较新的情景记忆
-   填余量，核心超额只推动整合而不阻塞直接回复；temporary 不落盘。
+6. 记忆四类：用户事实/偏好、她的经历、共同经历、有证据的模式。事实正文只由
+   权威证据生成：用户事实保留原话与来源，自身经历复制完成收据，共同经历复制本次
+   观察到的互动，用户谈及过去只证明这句话被说过；pattern 只存预定义 key、证据集合
+   与用户确认，新模式暂不落盘。五动词：record/integrate/recall/correct/forget；
+   收据经历禁 correct/forget，integrate 只补证据或 core 元数据；初始人格种子和其他
+   核心记忆须先带证据降为非核心、再在后续回合忘记。核心按字符预算常驻，较新的
+   情景记忆填余量，核心超额只推动整合而不阻塞直接回复；temporary 不落盘。
 7. 她的时钟由引擎自产。身体只报告看见了什么、动作 completed/interrupted/failed、表达
    是否显示；心智决定意义与表达意图。没有权威活动时身体保持 idle，断线也回这一安全姿态。
 8. 权威数据只有 `state.json + history.jsonl + memories.json + failures.jsonl`：

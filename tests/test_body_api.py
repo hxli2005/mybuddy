@@ -31,13 +31,11 @@ class StubProvider(BaseLLMProvider):
                         "state_changes": {
                             "mood": "放松",
                             "energy": "平稳",
-                            "attention": "看着刚读到的句子"
+                            "attention": "阅读"
                             if is_reading
-                            else "感觉到触碰"
-                            if is_touch
-                            else "刚被提起来又放下"
-                            if is_raise
-                            else "听你说话",
+                            else "身体感受"
+                            if is_touch or is_raise
+                            else "对话",
                         },
                         "memory_operations": []
                         if is_touch
@@ -45,7 +43,6 @@ class StubProvider(BaseLLMProvider):
                             {
                                 "action": "record",
                                 "kind": "self_experience",
-                                "content": "用户刚才把我提起来移动后正常放下",
                                 "evidence_ids": [incoming["id"]],
                                 "target_id": None,
                             }
@@ -55,9 +52,6 @@ class StubProvider(BaseLLMProvider):
                             {
                                 "action": "record",
                                 "kind": "self_experience" if is_reading else "user_fact",
-                                "content": "读到羁鸟恋旧林时有一点想回到自在处"
-                                if is_reading
-                                else "用户今天终于忙完了",
                                 "evidence_ids": [incoming["id"]],
                                 "target_id": None,
                             }
@@ -147,7 +141,7 @@ def test_expression_is_non_destructive_and_event_id_is_idempotent(api) -> None:
     assert repeated.json()["expression"] == expression
     assert _history(data_dir) == before_shown
     assert provider.calls == 1
-    assert expression["text"] not in [item["content"] for item in before_shown]
+    assert expression["text"] not in [item.get("content") for item in before_shown]
 
     confirmed = client.post("/api/body/step", json={"shown_id": expression["id"], "event": event})
     assert confirmed.status_code == 200
@@ -326,7 +320,17 @@ def test_cross_day_unshown_ambient_is_discarded_without_erasing_life(api) -> Non
     now = datetime.now(UTC).astimezone()
     state, history, memories = files.load(now)
     history.append({"id": "life-kept", "type": "self_reading", "content": "昨晚读完一页。"})
-    memories["items"] = [{"id": "memory-kept", "kind": "self_experience"}]
+    memories["items"] = [
+        {
+            "id": "memory-kept",
+            "kind": "self_experience",
+            "receipt_id": "life-kept",
+            "receipt": {"type": "self_reading", "content": "昨晚读完一页。"},
+            "evidence_ids": ["life-kept"],
+            "created_at": now.isoformat(),
+            "core": False,
+        }
+    ]
     state["pending_expression"] = {
         "id": "expr-stale",
         "text": "我刚读完这一页。",
