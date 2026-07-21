@@ -180,6 +180,9 @@ class BodyBridge:
                 "content": expression.text,
                 "expression_id": expression.id,
                 "expression_kind": expression.kind,
+                "expression_act": expression.act,
+                "expression_evidence_ids": expression.evidence_ids,
+                "expression_target_id": expression.target_id,
                 "occurred_at": now.isoformat(),
             }
         )

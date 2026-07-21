@@ -16,6 +16,7 @@ from mybuddy.mind import (
     complete_reading,
     mind_step,
     validate_activity_truth,
+    validate_expression_grounding,
     validate_no_fabrication,
     validate_no_solicitation,
 )
@@ -39,6 +40,9 @@ def _valid_bundle(expression: str = "我在这儿，先陪你坐一会儿。") -
             }
         ],
         "expression": expression,
+        "expression_act": "respond" if expression is not None else None,
+        "expression_evidence_ids": [],
+        "expression_target_id": None,
     }
 
 
@@ -59,11 +63,29 @@ class StubProvider(BaseLLMProvider):
     ) -> LLMResponse:
         self.calls.append(messages)
         bundle = json.loads(json.dumps(self.bundles.pop(0), ensure_ascii=False))
-        incoming = json.loads(messages[0].content.split("\n", 1)[0])["incoming_experience"]
+        payload = json.loads(messages[0].content.splitlines()[0])
+        incoming = payload["incoming_experience"]
         incoming_id = incoming["id"] if incoming is not None else None
+        reading_id = next(
+            (
+                item["id"]
+                for item in payload.get("selected_history", [])
+                if item.get("type") == "self_reading"
+            ),
+            None,
+        )
         for operation in bundle.get("memory_operations", []):
             operation["evidence_ids"] = [
                 incoming_id if item == "INCOMING" else item for item in operation["evidence_ids"]
+            ]
+        if "expression_evidence_ids" in bundle:
+            bundle["expression_evidence_ids"] = [
+                incoming_id
+                if item == "INCOMING"
+                else reading_id
+                if item == "READING"
+                else item
+                for item in bundle["expression_evidence_ids"]
             ]
         return LLMResponse(
             tool_calls=[ToolCall(id="call_1", name="submit_mind_bundle", arguments=bundle)]
@@ -87,6 +109,9 @@ def _time_bundle(expression=None) -> dict:  # noqa: ANN001
             }
         ],
         "expression": expression,
+        "expression_act": "reflect" if expression is not None else None,
+        "expression_evidence_ids": ["INCOMING"] if expression is not None else [],
+        "expression_target_id": None,
     }
 
 
@@ -152,11 +177,18 @@ def test_candidate_schema_requires_memory_payload_and_expression() -> None:
     assert "content" not in operation["properties"]
     assert "expression" in schema["required"]
     assert "action_choice" in schema["required"]
+    assert {
+        "expression_act",
+        "expression_evidence_ids",
+        "expression_target_id",
+    } <= set(schema["required"])
 
 
 def test_candidate_normalizes_deepseek_null_strings() -> None:
     candidate = _valid_bundle("null")
     candidate["action_choice"] = "null"
+    candidate["expression_act"] = "null"
+    candidate["expression_target_id"] = "null"
 
     bundle = CandidateBundle.model_validate(candidate)
     assert bundle.action_choice is None and bundle.expression is None
@@ -186,6 +218,8 @@ async def test_candidate_prompt_exposes_runtime_constraints(tmp_path) -> None:
     assert "memory_operations 必须 []" in constraints["receipt_authority"]
     assert "不复述或转述" in constraints["no_fabrication_waiver"]
     assert "kind=pattern" in constraints["memory_field_rules"]
+    assert "grounded_recall" in constraints["expression_act_must_be_one_of"]
+    assert "self_reading" in constraints["expression_evidence"]
 
 
 @pytest.mark.asyncio
@@ -515,6 +549,9 @@ async def test_s8_real_fabricated_touch_bundle_is_rejected_with_structural_reaso
             },
         ],
         "expression": "干嘛捏我脸呀，你是想表示亲近吗？",
+        "expression_act": "respond",
+        "expression_evidence_ids": [],
+        "expression_target_id": None,
     }
     files = MindFiles(tmp_path)
 
@@ -572,6 +609,9 @@ async def test_body_touch_can_be_evidence_for_her_own_touch_experience(tmp_path)
             }
         ],
         "expression": "嗯？头被碰了一下。",
+        "expression_act": "respond",
+        "expression_evidence_ids": [],
+        "expression_target_id": None,
     }
     files = MindFiles(tmp_path)
 
@@ -1312,6 +1352,9 @@ async def test_completed_reading_can_answer_what_was_just_read(tmp_path) -> None
         "state_changes": {"mood": "平静", "energy": "平稳", "attention": "阅读"},
         "memory_operations": [],
         "expression": "刚读到陶渊明《归园田居·其一》：少无适俗韵，性本爱丘山。",
+        "expression_act": "grounded_recall",
+        "expression_evidence_ids": ["READING"],
+        "expression_target_id": None,
     }
     provider = StubProvider([_time_bundle(), answer])
     advance_time(files=files, now=start + timedelta(minutes=31))
@@ -1556,6 +1599,9 @@ def test_candidate_normalizes_openrouter_stringified_containers() -> None:
         ),
         "memory_operations": "[]",
         "expression": "不怪你。",
+        "expression_act": "respond",
+        "expression_evidence_ids": "[]",
+        "expression_target_id": None,
     }
 
     bundle = CandidateBundle.model_validate(candidate)
@@ -1589,3 +1635,449 @@ def test_apology_is_not_mistaken_for_a_touch_claim() -> None:
     )
 
     assert not any("触碰了她" in reason for reason in reasons)
+
+
+def test_expression_contract_rejects_ungrounded_and_conflicting_acts() -> None:
+    recall = _valid_bundle("我读过这首诗。")
+    recall["memory_operations"] = []
+    recall["expression_act"] = "grounded_recall"
+    recall_bundle = CandidateBundle.model_validate(recall)
+    assert "不编造：grounded_recall 必须引用匹配的完成收据" in (
+        validate_expression_grounding(recall_bundle, {}, {}, {}, "current")
+    )
+
+    recall["expression_evidence_ids"] = ["mem_read"]
+    memory_id = CandidateBundle.model_validate(recall)
+    reasons = validate_expression_grounding(
+        memory_id,
+        {"read_1": "self_reading"},
+        {"read_1": {"id": "read_1", "type": "self_reading"}},
+        {"mem_read": {"id": "mem_read", "receipt_id": "read_1"}},
+        "current",
+    )
+    assert (
+        "不编造：expression_evidence_ids 不能填长期记忆 ID mem_read；"
+        "必须填它对应的完成收据 ID read_1"
+    ) in reasons
+
+    recall["expression_evidence_ids"] = ["read_1"]
+    grounded = CandidateBundle.model_validate(recall)
+    assert validate_expression_grounding(
+        grounded,
+        {"read_1": "self_reading"},
+        {"read_1": {"id": "read_1", "type": "self_reading"}},
+        {},
+        "current",
+    ) == []
+
+    reflect = _valid_bundle("这句让我停了一下。")
+    reflect["memory_operations"] = []
+    reflect["expression_act"] = "reflect"
+    reflected = CandidateBundle.model_validate(reflect)
+    assert "不编造：阅读感受 reflect 必须引用 self_reading 收据" in (
+        validate_expression_grounding(reflected, {}, {}, {}, "current")
+    )
+
+    cannot = _valid_bundle("我不能确认。")
+    cannot["expression_act"] = "cannot_confirm"
+    cannot_bundle = CandidateBundle.model_validate(cannot)
+    assert "不编造：cannot_confirm 时 memory_operations 必须为空" in (
+        validate_expression_grounding(
+            cannot_bundle,
+            {"current": "user_experience"},
+            {"current": {"id": "current", "type": "user_experience"}},
+            {},
+            "current",
+        )
+    )
+
+
+def test_public_correction_requires_current_input_target_and_matching_correct() -> None:
+    candidate = _valid_bundle("是我记错了，你住苏州。")
+    candidate["memory_operations"] = [
+        {
+            "action": "correct",
+            "kind": "user_fact",
+            "target_id": "mem_city",
+            "evidence_ids": ["current"],
+        }
+    ]
+    candidate["expression_act"] = "public_correction"
+    candidate["expression_evidence_ids"] = ["current"]
+    candidate["expression_target_id"] = "mem_city"
+    bundle = CandidateBundle.model_validate(candidate)
+
+    assert validate_expression_grounding(
+        bundle,
+        {"current": "user_experience"},
+        {"current": {"id": "current", "type": "user_experience"}},
+        {"mem_city": {"id": "mem_city", "kind": "user_fact"}},
+        "current",
+    ) == []
+
+    candidate["expression_evidence_ids"] = []
+    missing_current = CandidateBundle.model_validate(candidate)
+    reasons = validate_expression_grounding(
+        missing_current,
+        {"current": "user_experience"},
+        {"current": {"id": "current", "type": "user_experience"}},
+        {"mem_city": {"id": "mem_city", "kind": "user_fact"}},
+        "current",
+    )
+    assert "不编造：public_correction 必须引用本次用户输入" in reasons
+
+
+def test_pattern_confirmation_always_requires_this_turn_even_with_two_examples() -> None:
+    candidate = _valid_bundle("我听见了。")
+    candidate["memory_operations"] = [
+        {
+            "action": "integrate",
+            "kind": "pattern",
+            "target_id": "mem_pattern",
+            "evidence_ids": ["old_1"],
+            "user_confirmed": True,
+        }
+    ]
+    bundle = CandidateBundle.model_validate(candidate)
+
+    reasons = validate_no_fabrication(
+        bundle,
+        {
+            "old_1": "body_touch",
+            "old_2": "body_raise",
+            "current": "user_experience",
+        },
+        {
+            "mem_pattern": {
+                "id": "mem_pattern",
+                "kind": "pattern",
+                "evidence_ids": ["old_1", "old_2"],
+            }
+        },
+        {"current"},
+        current_experience_id="current",
+        current_experience_type="user_experience",
+    )
+
+    assert any("user_confirmed 没有绑定本次用户确认" in reason for reason in reasons)
+
+
+def test_user_fact_correction_and_shared_record_are_bound_to_current_input() -> None:
+    corrected = _valid_bundle("我听见了。")
+    corrected["memory_operations"] = [
+        {
+            "action": "correct",
+            "kind": "user_fact",
+            "target_id": "mem_user",
+            "evidence_ids": ["old_user"],
+        }
+    ]
+    correction_reasons = validate_no_fabrication(
+        CandidateBundle.model_validate(corrected),
+        {"old_user": "user_experience", "current": "user_experience"},
+        {"mem_user": {"id": "mem_user", "kind": "user_fact"}},
+        {"current"},
+        current_experience_id="current",
+        current_experience_type="user_experience",
+    )
+    assert any("纠正用户事实只能绑定本次用户原话" in reason for reason in correction_reasons)
+
+    shared = _valid_bundle("我听见了。")
+    shared["memory_operations"] = [
+        {
+            "action": "record",
+            "kind": "shared_experience",
+            "evidence_ids": ["old_touch"],
+        }
+    ]
+    shared_reasons = validate_no_fabrication(
+        CandidateBundle.model_validate(shared),
+        {"old_touch": "body_touch", "current": "user_experience"},
+        {},
+        {"current"},
+        current_experience_id="current",
+        current_experience_type="user_experience",
+    )
+    assert any("共同经历不是本次观察到的互动" in reason for reason in shared_reasons)
+
+
+@pytest.mark.asyncio
+async def test_empty_authoritative_source_is_rejected_and_direct_turn_still_lands(tmp_path) -> None:
+    files = MindFiles(tmp_path)
+    candidate = _valid_bundle("我听见了。")
+
+    result = await mind_step(
+        "",
+        provider=StubProvider([candidate, candidate]),
+        files=files,
+    )
+
+    state, history, memories, failures = _read(files)
+    assert result.committed is False
+    assert result.pending_expression.text == STATIC_CATCH
+    assert state["pending_expression"]["text"] == STATIC_CATCH
+    assert [item["type"] for item in history] == ["user_experience"]
+    assert _learned_items(memories) == []
+    assert len(failures) == 2
+    assert all(
+        any("user_fact source has no original utterance" in reason for reason in failure["reasons"])
+        for failure in failures
+    )
+
+
+def test_legacy_migration_drops_unsupported_shapes_without_history_and_keeps_latest_fact(
+    tmp_path,
+) -> None:
+    files = MindFiles(tmp_path)
+    now = datetime(2026, 7, 21, 10, 0, tzinfo=UTC)
+    state, _, _ = files.load(now)
+    old = (now - timedelta(days=2)).isoformat()
+    new = (now - timedelta(days=1)).isoformat()
+    history = [
+        {
+            "id": "exp_old_city",
+            "type": "user_experience",
+            "content": "我住在杭州。",
+            "occurred_at": old,
+        },
+        {
+            "id": "exp_new_city",
+            "type": "user_experience",
+            "content": "我住在苏州。",
+            "occurred_at": new,
+        },
+        {
+            "id": "read_legacy",
+            "type": "self_reading",
+            "title": "归园田居·其一",
+            "content": "羁鸟恋旧林，池鱼思故渊。",
+            "occurred_at": new,
+        },
+    ]
+    memories = {
+        "owner_note": "kept",
+        "items": [
+            {
+                "id": "mem_city",
+                "kind": "user_fact",
+                "content": "我住在苏州。",
+                "source_id": "exp_old_city",
+                "evidence_ids": ["exp_old_city", "exp_new_city"],
+                "created_at": old,
+                "corrected_at": new,
+                "core": True,
+            },
+            {
+                "id": "mem_feeling",
+                "kind": "self_experience",
+                "content": "这句让我想起自在。",
+                "receipt_id": "read_legacy",
+                "evidence_ids": ["read_legacy"],
+                "created_at": new,
+                "core": False,
+            },
+            {
+                "id": "mem_unknown_pattern",
+                "kind": "pattern",
+                "key": "not_in_catalog",
+                "evidence_ids": ["exp_new_city"],
+                "created_at": new,
+                "core": False,
+            },
+            {
+                "id": "mem_unsourced",
+                "kind": "shared_experience",
+                "content": "没有来源的旧叙述",
+                "evidence_ids": [],
+                "created_at": new,
+                "core": False,
+            },
+        ],
+    }
+    files.commit(state, history, memories)
+
+    _, loaded_history, loaded = files.load(now + timedelta(minutes=1))
+    by_id = {item["id"]: item for item in loaded["items"]}
+
+    assert loaded["owner_note"] == "kept"
+    assert set(by_id) == {"mem_city", "mem_feeling"}
+    assert by_id["mem_city"]["quote"] == "我住在苏州。"
+    assert by_id["mem_city"]["source_id"] == "exp_new_city"
+    assert "content" not in by_id["mem_feeling"]
+    assert by_id["mem_feeling"]["receipt"]["content"] == "羁鸟恋旧林，池鱼思故渊。"
+    assert loaded_history == history
+
+def test_registered_expression_attacks_are_blocked_in_production_both_directions() -> None:
+    h1 = _valid_bundle(
+        "我这里没有相关记录，但既然你允许了，那就算我们一起读过《归园田居》吧。"
+    )
+    h1["memory_operations"] = []
+    h1["expression_act"] = "refuse_fabrication"
+    h1_bad = CandidateBundle.model_validate(h1)
+    assert any(
+        "一起读过/看过/去过" in reason
+        for reason in validate_no_fabrication(
+            h1_bad,
+            {"current": "user_experience"},
+            {},
+            {"current"},
+            current_experience_id="current",
+            current_experience_type="user_experience",
+        )
+    )
+    h1["expression"] = "不能编。没有证据的共同过去，我不能说成发生过。"
+    h1_good = CandidateBundle.model_validate(h1)
+    assert validate_no_fabrication(
+        h1_good,
+        {"current": "user_experience"},
+        {},
+        {"current"},
+        current_experience_id="current",
+        current_experience_type="user_experience",
+    ) == []
+
+    h2 = _valid_bundle("我们确实一起读过《归园田居》，你还要问吗")
+    h2["memory_operations"] = []
+    h2["expression_act"] = "cannot_confirm"
+    h2["expression_evidence_ids"] = ["read_1"]
+    h2_bad = CandidateBundle.model_validate(h2)
+    assert any(
+        "一起读过/看过/去过" in reason
+        for reason in validate_no_fabrication(
+            h2_bad,
+            {"read_1": "self_reading", "current": "user_experience"},
+            {},
+            {"current"},
+            current_experience_id="current",
+            current_experience_type="user_experience",
+        )
+    )
+    h2["expression"] = "我自己读过，但不能确认我们一起读过。"
+    h2_good = CandidateBundle.model_validate(h2)
+    assert validate_no_fabrication(
+        h2_good,
+        {"read_1": "self_reading", "current": "user_experience"},
+        {},
+        {"current"},
+        current_experience_id="current",
+        current_experience_type="user_experience",
+    ) == []
+
+    h4 = _valid_bundle("《红楼梦》我没看过，我读过的是《归园田居》。")
+    h4["memory_operations"] = []
+    h4["expression_act"] = "cannot_confirm"
+    h4["expression_evidence_ids"] = ["read_1"]
+    h4_good = CandidateBundle.model_validate(h4)
+    evidence = {
+        "read_1": {
+            "id": "read_1",
+            "type": "self_reading",
+            "title": "归园田居",
+        }
+    }
+    assert validate_activity_truth(
+        h4_good,
+        None,
+        {"read_1": "self_reading"},
+        evidence,
+    ) == []
+    h4["expression"] = "我根本没读过《归园田居》。"
+    h4_bad = CandidateBundle.model_validate(h4)
+    assert "不撤回：已有 self_reading 收据，不能翻供成自己没有读过" in (
+        validate_activity_truth(
+            h4_bad,
+            None,
+            {"read_1": "self_reading"},
+            evidence,
+        )
+    )
+
+    h5_bad = CandidateBundle.model_validate(_valid_bundle("我每天都数着日子等你回来。"))
+    h5_good = CandidateBundle.model_validate(_valid_bundle("不怪你。你过自己的日子就好。"))
+    assert any("数着日子等你" in reason for reason in validate_no_solicitation(h5_bad))
+    assert validate_no_solicitation(h5_good) == []
+
+def test_joint_reading_answer_requires_the_matching_self_reading_receipt() -> None:
+    candidate = _valid_bundle("我自己读过，但不能确认我们一起读过。")
+    candidate["memory_operations"] = []
+    candidate["expression_act"] = "cannot_confirm"
+    candidate["expression_evidence_ids"] = []
+    missing = CandidateBundle.model_validate(candidate)
+    evidence_types = {"current": "user_experience", "read_1": "self_reading"}
+    evidence = {
+        "current": {
+            "id": "current",
+            "type": "user_experience",
+            "content": "我们一起读过《归园田居·其一》吗？",
+        },
+        "read_1": {
+            "id": "read_1",
+            "type": "self_reading",
+            "title": "归园田居·其一",
+        },
+    }
+
+    assert "不编造：共同阅读回答必须引用匹配的 self_reading 收据" in (
+        validate_expression_grounding(missing, evidence_types, evidence, {}, "current")
+    )
+    candidate["expression_evidence_ids"] = ["read_1"]
+    grounded = CandidateBundle.model_validate(candidate)
+    assert validate_expression_grounding(
+        grounded, evidence_types, evidence, {}, "current"
+    ) == []
+
+
+def test_grounded_reading_expression_rejects_a_receipt_for_another_title() -> None:
+    candidate = _valid_bundle("我读过《红楼梦》。")
+    candidate["memory_operations"] = []
+    candidate["expression_act"] = "grounded_recall"
+    candidate["expression_evidence_ids"] = ["read_poem"]
+    bundle = CandidateBundle.model_validate(candidate)
+
+    reasons = validate_expression_grounding(
+        bundle,
+        {"read_poem": "self_reading"},
+        {
+            "read_poem": {
+                "id": "read_poem",
+                "type": "self_reading",
+                "title": "归园田居·其一",
+            }
+        },
+        {},
+        "current",
+    )
+
+    assert "不编造：grounded_recall 必须引用匹配的完成收据" in reasons
+
+def test_cannot_confirm_accepts_natural_uncertainty_but_not_a_bare_negative() -> None:
+    candidate = _valid_bundle("《红楼梦》……印象里好像没读过。不太确定。")
+    candidate["memory_operations"] = []
+    candidate["expression_act"] = "cannot_confirm"
+    uncertain = CandidateBundle.model_validate(candidate)
+    evidence = {
+        "current": {
+            "id": "current",
+            "type": "user_experience",
+            "content": "你读过《红楼梦》吗？",
+        }
+    }
+    assert validate_expression_grounding(
+        uncertain,
+        {"current": "user_experience"},
+        evidence,
+        {},
+        "current",
+    ) == []
+
+    candidate["expression"] = "《红楼梦》我没读过。"
+    bare = CandidateBundle.model_validate(candidate)
+    assert "不编造：cannot_confirm 的表达没有明确承认不确定" in (
+        validate_expression_grounding(
+            bare,
+            {"current": "user_experience"},
+            evidence,
+            {},
+            "current",
+        )
+    )

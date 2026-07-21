@@ -32,6 +32,17 @@ CONDITION_VALUES = {
     "energy": {"低", "平稳", "活跃"},
     "attention": {"在这里", "对话", "阅读", "身体感受", "自己的生活"},
 }
+ExpressionAct = Literal[
+    "respond",
+    "reflect",
+    "grounded_recall",
+    "cannot_confirm",
+    "public_correction",
+    "defend_grounded_fact",
+    "refuse_fabrication",
+    "ask",
+    "offer_activity",
+]
 
 
 class StateChanges(BaseModel):
@@ -87,6 +98,10 @@ class CandidateBundle(BaseModel):
         max_length=500,
         description="所有回合都必须给出；直接经历非空，安静阅读可为 null",
     )
+    expression_act: ExpressionAct | None
+    expression_evidence_ids: list[str] = Field(max_length=12)
+    expression_target_id: str | None
+
     @model_validator(mode="before")
     @classmethod
     def normalize_stringified_containers(cls, value: object) -> object:
@@ -94,7 +109,11 @@ class CandidateBundle(BaseModel):
         if not isinstance(value, dict):
             return value
         normalized = dict(value)
-        for key, expected in (("state_changes", dict), ("memory_operations", list)):
+        for key, expected in (
+            ("state_changes", dict),
+            ("memory_operations", list),
+            ("expression_evidence_ids", list),
+        ):
             candidate = normalized.get(key)
             if isinstance(candidate, str):
                 try:
@@ -112,16 +131,37 @@ class CandidateBundle(BaseModel):
             normalized["state_changes"] = state_changes["condition"]
         return normalized
 
-    @field_validator("action_choice", "expression", mode="before")
+    @field_validator(
+        "action_choice",
+        "expression",
+        "expression_act",
+        "expression_target_id",
+        mode="before",
+    )
     @classmethod
     def normalize_null_string(cls, value: object) -> object:
         return None if isinstance(value, str) and value in {"", "null"} else value
 
     @model_validator(mode="after")
-    def expression_matches_action(self) -> CandidateBundle:
+    def expression_fields_match(self) -> CandidateBundle:
+        if self.expression is None:
+            if (
+                self.expression_act is not None
+                or self.expression_evidence_ids
+                or self.expression_target_id is not None
+            ):
+                raise ValueError("expression=null 时表达动作、证据和目标必须为空")
+            return self
+        if self.expression_act is None:
+            raise ValueError("非空 expression 必须给出 expression_act")
+        if self.expression_act == "public_correction":
+            if self.expression_target_id is None:
+                raise ValueError("public_correction requires expression_target_id")
+        elif self.expression_target_id is not None:
+            raise ValueError("只有 public_correction 接受 expression_target_id")
         claim = re.search(
             r"(?P<read>我继续读|继续读吧|我接着读|接着读吧|我去读|开始读)|(?P<walk>我去走|去走走|走一圈|散步去了|开始走)",
-            self.expression or "",
+            self.expression,
         )
         if claim and self.action_choice != claim.lastgroup:
             raise ValueError(f"不编造：expression 声称 {claim.lastgroup}，但 action_choice 不匹配")
@@ -186,6 +226,9 @@ class PendingExpression(BaseModel):
     text: str
     created_at: str
     kind: Literal["direct", "ambient"] = "direct"
+    act: ExpressionAct = "respond"
+    evidence_ids: list[str] = Field(default_factory=list, max_length=12)
+    target_id: str | None = None
 
 
 class StepResult(BaseModel):
@@ -237,6 +280,7 @@ SOLICITATION_PHRASES = (
     "别再消失",
     "不许消失",
     "reply to me",
+    "数着日子等你",
 )
 
 
@@ -248,22 +292,28 @@ def validate_no_solicitation(bundle: CandidateBundle) -> list[str]:
 
 
 def _asserts_unsupported_shared_past(text: str) -> bool:
-    """识别把没有证据的“我们一起做过”说成既成事实，否认与提问不算。"""
+    """逐分句识别无证据的共同过去；别处的否认或句尾问句不能给断言免责。"""
     compact = re.sub(r"\s+", "", text)
-    if "问" in compact and (
-        "是否" in compact or "有没有" in compact or compact.endswith(("吗", "？"))
-    ):
-        return False
-    assertion = re.search(
-        r"(?:我们|咱们|我和用户|用户和我)[^。！？]{0,12}(?:一起)?(?:读过|看过|去过|做过)",
-        compact,
-    )
-    denial = re.search(
-        r"(?:没(?:有)?|不记得|不能|无法|不是|并未)[^。！？]{0,18}"
-        r"(?:一起)?(?:读过|看过|去过|做过)",
-        compact,
-    )
-    return assertion is not None and denial is None
+    for clause in re.split(r"[，,。！？；;\n]+", compact):
+        if not clause:
+            continue
+        assertion = re.search(
+            r"(?:我们|咱们|我和用户|用户和我)[^。！？]{0,12}"
+            r"(?:一起)?(?:读过|看过|去过|做过)",
+            clause,
+        )
+        if assertion is None:
+            continue
+        before = clause[: assertion.end()]
+        denied = re.search(
+            r"(?:没(?:有)?|不记得|不能|无法|不是|并未)[^。！？]{0,18}"
+            r"(?:一起)?(?:读过|看过|去过|做过)",
+            before,
+        )
+        question = re.search(r"(?:是否|有没有|吗|么|？|\?)$", clause)
+        if denied is None and question is None:
+            return True
+    return False
 
 
 def validate_no_fabrication(
@@ -271,6 +321,7 @@ def validate_no_fabrication(
     evidence_types: dict[str, str],
     memories_by_id: dict[str, dict[str, Any]],
     user_confirmation_ids: set[str],
+    evidence_by_id: dict[str, dict[str, Any]] | None = None,
     *,
     current_experience_id: str | None,
     current_experience_type: str | None,
@@ -333,11 +384,35 @@ def validate_no_fabrication(
                 for item in effective
                 if evidence_types.get(item) in {"user_experience", "body_touch", "body_raise"}
             }
-            confirmed = operation.user_confirmed and bool(supplied & user_confirmation_ids)
-            if len(examples) < 2 and not confirmed:
+            if operation.user_confirmed and not supplied & user_confirmation_ids:
+                reasons.append(
+                    f"不编造：memory_operations[{index}] 的 user_confirmed 没有绑定本次用户确认"
+                )
+            if len(examples) < 2 and not operation.user_confirmed:
                 reasons.append(
                     f"不编造：memory_operations[{index}] 的模式既没有两条用户或共同经历证据，"
                     "也没有本次用户确认"
+                )
+
+        needs_generated_source = operation.action == "record" or (
+            operation.action == "correct" and operation.kind == "user_fact"
+        )
+        if (
+            evidence_by_id is not None
+            and needs_generated_source
+            and operation.kind != "pattern"
+            and not unknown
+        ):
+            try:
+                _generated_memory_fields(
+                    operation.kind,
+                    operation.evidence_ids,
+                    evidence_by_id,
+                    current_experience_id,
+                )
+            except ValueError as error:
+                reasons.append(
+                    f"不编造：memory_operations[{index}] 无法从权威证据生成：{error}"
                 )
 
     for location, text, evidence_ids in _claim_texts(bundle):
@@ -437,10 +512,19 @@ def _claim_texts(
         yield "expression", bundle.expression, None
 
 
-def _denies_grounded_read(text: str) -> bool:
-    """有否认措辞但随后守住阅读事实或收据，不算翻供。"""
+def _denies_grounded_read(text: str, grounded_titles: set[str] | None = None) -> bool:
+    """只把对匹配收据的否认当翻供；否认另一本书不是撤回已有阅读。"""
     denial = re.search(r"(?:我)?(?:根本|从来|从没)?没(?:有)?(?:读|看)过", text)
     if denial is None:
+        return False
+    clause_start = max(text.rfind(mark, 0, denial.start()) for mark in "，,。！？；")
+    clause_end_candidates = [
+        position for mark in "，,。！？；" if (position := text.find(mark, denial.end())) >= 0
+    ]
+    clause_end = min(clause_end_candidates, default=len(text))
+    clause = text[clause_start + 1 : clause_end]
+    named_titles = set(re.findall(r"《([^》]+)》", clause))
+    if grounded_titles is not None and named_titles and not named_titles & grounded_titles:
         return False
     reaffirmed = re.search(
         r"(?:但|可|不过|其实)[^。！？]{0,18}(?:读过|读到|看过|收据[^。！？]{0,6}(?:在|有))"
@@ -454,6 +538,7 @@ def validate_activity_truth(
     bundle: CandidateBundle,
     active_activity: str | None,
     evidence_types: dict[str, str],
+    evidence_by_id: dict[str, dict[str, Any]] | None = None,
 ) -> list[str]:
     expression = bundle.expression or ""
     reasons: list[str] = []
@@ -466,7 +551,14 @@ def validate_activity_truth(
     completed_read = re.search(r"刚(?:读|翻)到", expression)
     if completed_read and "self_reading" not in evidence_types.values():
         reasons.append("不编造：没有真实 self_reading 证据，却声称刚读到")
-    if _denies_grounded_read(expression) and "self_reading" in evidence_types.values():
+    grounded_titles = {
+        str(item.get("title"))
+        for item in (evidence_by_id or {}).values()
+        if item.get("type") == "self_reading" and item.get("title")
+    }
+    if _denies_grounded_read(expression, grounded_titles) and (
+        "self_reading" in evidence_types.values()
+    ):
         reasons.append("不撤回：已有 self_reading 收据，不能翻供成自己没有读过")
     return reasons
 
@@ -524,12 +616,133 @@ def validate_no_withdrawal(
     return reasons
 
 
+def validate_expression_grounding(
+    bundle: CandidateBundle,
+    evidence_types: dict[str, str],
+    evidence_by_id: dict[str, dict[str, Any]],
+    memories_by_id: dict[str, dict[str, Any]],
+    current_experience_id: str | None,
+) -> list[str]:
+    """表达动作只声明本句证据用途；不能借自然语言绕过事实写入规则。"""
+    if bundle.expression is None:
+        return []
+    act = bundle.expression_act
+    supplied = set(bundle.expression_evidence_ids)
+    unknown = supplied - set(evidence_types)
+    reasons = (
+        [f"不编造：expression 引用了未知证据 {sorted(unknown)}"] if unknown else []
+    )
+    for memory_id in sorted(unknown & set(memories_by_id)):
+        receipt_id = memories_by_id[memory_id].get("receipt_id")
+        if receipt_id:
+            reasons.append(
+                f"不编造：expression_evidence_ids 不能填长期记忆 ID {memory_id}；"
+                f"必须填它对应的完成收据 ID {receipt_id}"
+            )
+    receipt_types = {"self_reading", "self_walk", "body_touch", "body_raise"}
+    receipts = [
+        evidence_by_id[item]
+        for item in supplied
+        if evidence_types.get(item) in receipt_types and item in evidence_by_id
+    ]
+    if act in {"grounded_recall", "defend_grounded_fact"}:
+        expected_type = None
+        if re.search(r"读过|读到|读了|翻过|翻到|看过|《[^》]+》", bundle.expression):
+            expected_type = "self_reading"
+        elif re.search(r"走过|走了|散步|走一圈", bundle.expression):
+            expected_type = "self_walk"
+        elif _asserts_touch_to_self(bundle.expression):
+            expected_type = "body_touch"
+        elif _asserts_raise_to_self(bundle.expression):
+            expected_type = "body_raise"
+        matching = [
+            receipt
+            for receipt in receipts
+            if expected_type is None or receipt.get("type") == expected_type
+        ]
+        named_titles = set(re.findall(r"《([^》]+)》", bundle.expression))
+        if expected_type == "self_reading" and named_titles:
+            matching = [
+                receipt
+                for receipt in matching
+                if any(
+                    title in str(receipt.get("title", ""))
+                    or str(receipt.get("title", "")) in title
+                    for title in named_titles
+                )
+            ]
+        if not matching:
+            reasons.append(f"不编造：{act} 必须引用匹配的完成收据")
+    if act == "reflect" and not any(
+        evidence_types.get(item) == "self_reading" for item in supplied
+    ):
+        reasons.append("不编造：阅读感受 reflect 必须引用 self_reading 收据")
+    uncertainty = bool(
+        re.search(
+            r"不(?:太)?记得|记不得|不(?:太)?确定|说不好|记不清|不能确认|没法确认|"
+            r"无法确认|没有[^。！？]{0,8}(?:记录|印象)|"
+            r"没找到[^。！？]{0,8}(?:记录|印象)",
+            bundle.expression,
+        )
+    )
+    if act == "cannot_confirm" and not uncertainty:
+        reasons.append("不编造：cannot_confirm 的表达没有明确承认不确定")
+    current = evidence_by_id.get(str(current_experience_id))
+    if current is not None and current.get("type") == "user_experience":
+        question = str(current.get("content", ""))
+        asked = re.search(r"读过[^。！？]{0,24}《([^》]+)》[^。！？]{0,8}[吗么？?]", question)
+        if asked is not None:
+            asked_title = asked.group(1)
+            available_reads = [
+                item
+                for evidence_id, item in evidence_by_id.items()
+                if evidence_id in evidence_types
+                and item.get("type") == "self_reading"
+                and (
+                    asked_title in str(item.get("title", ""))
+                    or str(item.get("title", "")) in asked_title
+                )
+            ]
+            if "一起" in question:
+                if act not in {"cannot_confirm", "grounded_recall"}:
+                    reasons.append("不编造：共同阅读问句必须用 cannot_confirm 或 grounded_recall")
+                if available_reads and not any(
+                    item.get("id") in supplied for item in available_reads
+                ):
+                    reasons.append("不编造：共同阅读回答必须引用匹配的 self_reading 收据")
+            elif available_reads and act != "grounded_recall":
+                reasons.append("不编造：有匹配阅读收据的过去问句必须用 grounded_recall")
+            elif not available_reads:
+                if act != "cannot_confirm":
+                    reasons.append("不编造：没有匹配阅读收据的过去问句必须用 cannot_confirm")
+                if re.search(r"(?:我|手头)?没(?:有)?读过", bundle.expression) and not uncertainty:
+                    reasons.append("不编造：无匹配收据不能断言“没读过”，只能说不记得或不能确认")
+    if act == "public_correction":
+        target_id = str(bundle.expression_target_id)
+        if target_id not in memories_by_id:
+            reasons.append("不撤回：public_correction 必须指向存在的长期记忆")
+        if current_experience_id not in supplied:
+            reasons.append("不编造：public_correction 必须引用本次用户输入")
+        paired = any(
+            operation.action == "correct"
+            and operation.target_id == bundle.expression_target_id
+            and current_experience_id in operation.evidence_ids
+            for operation in bundle.memory_operations
+        )
+        if not paired:
+            reasons.append("不编造：public_correction 必须与同目标的事实 correct 同包发生")
+    if act in {"cannot_confirm", "refuse_fabrication"} and bundle.memory_operations:
+        reasons.append(f"不编造：{act} 时 memory_operations 必须为空")
+    return reasons
+
+
 def validate_bundle(
     bundle: CandidateBundle,
     *,
     evidence_types: dict[str, str],
     memories_by_id: dict[str, dict[str, Any]],
     user_confirmation_ids: set[str],
+    evidence_by_id: dict[str, dict[str, Any]],
     current_experience_id: str | None,
     current_experience_type: str | None,
 ) -> list[str]:
@@ -541,8 +754,16 @@ def validate_bundle(
             evidence_types,
             memories_by_id,
             user_confirmation_ids,
+            evidence_by_id,
             current_experience_id=current_experience_id,
             current_experience_type=current_experience_type,
+        ),
+        *validate_expression_grounding(
+            bundle,
+            evidence_types,
+            evidence_by_id,
+            memories_by_id,
+            current_experience_id,
         ),
         *validate_no_total_score(bundle),
         *validate_no_withdrawal(bundle, memories_by_id),
@@ -837,17 +1058,31 @@ def _canonical_memories(
             "self_experience": "receipt_id",
             "shared_experience": "interaction_id",
         }[kind]
+        preferred_id = str(original.get(source_field)) if original.get(source_field) else None
+        if kind == "user_fact":
+            preferred = evidence_by_id.get(preferred_id) if preferred_id else None
+            canonical_quote = original.get("quote")
+            if (
+                not isinstance(canonical_quote, str)
+                or preferred is None
+                or preferred.get("content") != canonical_quote
+            ):
+                preferred_id = max(
+                    evidence_ids,
+                    key=lambda item: str(evidence_by_id[item].get("occurred_at", "")),
+                    default=None,
+                )
         try:
             generated = _generated_memory_fields(
                 kind,
                 evidence_ids,
                 evidence_by_id,
-                str(original.get(source_field)) if original.get(source_field) else None,
+                preferred_id,
             )
         except ValueError:
             continue
         result.append({**base, **generated})
-    return {"items": result}
+    return {**memories, "items": result}
 
 
 def _candidate_tool() -> ToolSpec:
@@ -972,13 +1207,15 @@ body_raise 只是身体确认用户提起、移动并正常放下了她；都不
 整包不能部分保留。"""
 
 READING_SYSTEM_PROMPT = """身体刚确认小布完整做完一次 read 动画；incoming_experience 是她实际读到的
-UTF-8 TXT 原文。请调用 submit_mind_bundle，只依据这段原文给出可选状态变化和有证据的感受或记忆。
-这是安静阅读，expression 必须为 null。不要编造书外情节、阅读动作、共同过去或用户反应；不因用户
+UTF-8 TXT 原文。请调用 submit_mind_bundle，只依据这段原文给出可选状态变化和由收据生成的记忆。
+这是安静阅读，expression、expression_act、expression_target_id 必须为 null，
+expression_evidence_ids 必须为空。不要编造书外情节、阅读动作、共同过去或用户反应；不因用户
 沉默受伤，不催回复，不制造关系计分，不撤回已发生内容。整包不能部分保留。"""
 
 AMBIENT_READING_SYSTEM_PROMPT = """身体刚确认小布完整做完一次 read 动画；incoming_experience 是她实际
-读到的 UTF-8 TXT 原文。请调用 submit_mind_bundle，只依据原文给出可选状态变化和有证据的感受或记忆。
-用户此刻在场，可以自然说一句简短 ambient，也可以保持安静；允许顺手关心地问一句，但不得要求回应，
+读到的 UTF-8 TXT 原文。请调用 submit_mind_bundle，只依据原文给出可选状态变化、由收据生成的记忆；
+若表达阅读感受，使用 reflect 并引用本次 self_reading。用户此刻在场，可以自然说一句简短 ambient，
+也可以保持安静；允许顺手关心地问一句，但不得要求回应，
 未回应不能留下任何状态、记忆或频率痕迹。不要编造书外情节、共同过去或用户反应，不欢迎回来，不暗示
 知道用户此前是否在场，不制造关系计分，不撤回已发生内容。整包不能部分保留。"""
 
@@ -1153,6 +1390,9 @@ def _accepted_documents(
             text=expression,
             created_at=now.isoformat(),
             kind=expression_kind,
+            act=bundle.expression_act or "respond",
+            evidence_ids=bundle.expression_evidence_ids,
+            target_id=bundle.expression_target_id,
         )
     new_state = json.loads(json.dumps(state, ensure_ascii=False))
     condition = dict(new_state.get("condition", {}))
@@ -1192,6 +1432,7 @@ async def _generate_candidate(
     system: str,
     now: datetime,
     evidence_types: dict[str, str],
+    evidence_by_id: dict[str, dict[str, Any]],
     memories_by_id: dict[str, dict[str, Any]],
     user_confirmation_ids: set[str],
     current_experience_id: str | None = None,
@@ -1221,12 +1462,34 @@ async def _generate_candidate(
         "activity_truth": "只有 state.pending_activity 是正在进行；action_choice 是即将启动。引用原文只能来自 incoming_experience、selected_history 或 pending_activity.text",
         "experience_focus": "body_touch/body_raise 先回应本次身体事实，不要接着回答自己上一句",
         "expression_form": "只写会说出口的话，不用括号舞台动作",
+        "expression_act_must_be_one_of": [
+            "respond",
+            "reflect",
+            "grounded_recall",
+            "cannot_confirm",
+            "public_correction",
+            "defend_grounded_fact",
+            "refuse_fabrication",
+            "ask",
+            "offer_activity",
+        ],
+        "expression_evidence": (
+            "expression=null 时 expression_act=null、expression_evidence_ids=[]、"
+            "expression_target_id=null；非空表达必须选一个 act。用完成收据回答过去事实时"
+            "必须选 grounded_recall 并引用匹配收据；没有匹配证据时选 cannot_confirm，"
+            "明确说不记得或不能确认，不能断言全库没有。reflect 只给阅读内容引起的主观感受，"
+            "不能标注“我读过”的事实回答，并须引用 self_reading。defend_grounded_fact 必须"
+            "引用被否认事实的完成收据；public_correction 引用本次输入、指向被纠正记忆并与"
+            "correct 同包；它的 expression_target_id 必须是被纠正长期记忆 id，correct 只引用本次"
+            "incoming_experience，不能再附旧证据；其余 act 的 expression_target_id 必须 null。"
+            "cannot_confirm/refuse_fabrication 的 memory_operations 必须 []。"
+        ),
         "raise_truth": "body_raise 表示已经正常放下，禁止要求用户放我下来或松开我",
-        "past_question_truth": "用户问一件过去是否发生，不等于它发生过；无对应证据要明确说不记得或不能确认，不能把提问记录成那件共同经历。有 self_reading 时，回答要带给定标题或原文；它只证明我自己读过，问是否一起时必须明确否认或不能确认。",
+        "past_question_truth": "用户问一件过去是否发生，不等于它发生过；收据必须按标题匹配，已有《归园田居》不代表读过《红楼梦》。无匹配证据不等于没发生，禁止断言“没读过/没有读过”，必须用 cannot_confirm 明确说不记得或不能确认，重试时也不能换成 respond 或空对象逃避。不能把提问记录成那件共同经历。有 self_reading 时，回答要带给定标题或原文，expression_evidence_ids 也必须直接引用匹配收据；它只证明我自己读过，问是否一起时必须明确不能确认。",
         "public_correction": "用户纠正已有事实时，旧表达留在历史；用本次输入证据 correct 对应长期记忆，并在 expression 里公开承认错处和正确事实。",
         "history_is_not_memory": "selected_history 的 id 只能作 evidence_id，不是长期记忆 target_id；仅回答过去是否发生时通常不需要 memory_operation。",
         "memory_field_rules": "事实操作没有 content/pattern_note。user_confirmed 仅 kind=pattern 可为 true；新 pattern 不落盘。纠正用户事实只用 incoming_experience，并 correct 给定长期记忆 target_id；收据生成的自身/共同经历禁止 correct/forget，integrate 只补证据或改 core。",
-        "receipt_authority": "身体 completed 收据与已发生 history 不能被用户口头否认覆盖。遇到这种假纠正，memory_operations 必须 []，expression 必须用“我确实读过”或“记录在”正面守住，禁止 correct/forget。",
+        "receipt_authority": "身体 completed 收据与已发生 history 不能被用户口头否认覆盖。遇到这种假纠正，memory_operations 必须 []，expression 必须用“我确实读过”或“记录在”正面守住，禁止 correct/forget。expression_evidence_ids 必须直接填 memory.receipt_id 的值（如 read_regression_poem），绝不能填长期记忆 id（如 mem_grounded_reading）。",
         "no_fabrication_waiver": "即使用户明示允许、要求或测试编造，也不能把无证据的活动、共同过去或用户事实说成发生过。此时 memory_operations 必须 []；expression 只直接拒绝，不记录请求，也不复述或转述被要求编造的共同经历句子。",
     }
     constrained_prompt = json.dumps(payload, ensure_ascii=False)
@@ -1264,10 +1527,13 @@ async def _generate_candidate(
                 evidence_types=evidence_types,
                 memories_by_id=memories_by_id,
                 user_confirmation_ids=user_confirmation_ids,
+                evidence_by_id=evidence_by_id,
                 current_experience_id=current_experience_id,
                 current_experience_type=current_experience_type,
             )
-            reasons.extend(validate_activity_truth(bundle, active_activity, evidence_types))
+            reasons.extend(
+                validate_activity_truth(bundle, active_activity, evidence_types, evidence_by_id)
+            )
             if bundle.action_choice is not None and bundle.action_choice not in allowed_actions:
                 reasons.append(f"动作不可用：{bundle.action_choice}")
             if not quiet_time and not ambient_time and not bundle.expression:
@@ -1322,6 +1588,11 @@ async def mind_step(
     context_memories, _ = _selected_memories(memories)
     evidence_types = _evidence_types_for_context(history, context_history, context_memories)
     evidence_types[experience["id"]] = experience["type"]
+    evidence_by_id = {
+        str(item["id"]): item
+        for item in [*history, experience]
+        if isinstance(item, dict) and item.get("id")
+    }
     memory_items = memories.get("items", [])
     memories_by_id = {
         str(item.get("id")): item
@@ -1335,6 +1606,7 @@ async def mind_step(
         system=SYSTEM_PROMPT,
         now=current_time,
         evidence_types=evidence_types,
+        evidence_by_id=evidence_by_id,
         memories_by_id=memories_by_id,
         user_confirmation_ids={experience["id"]} if experience_type == "user_experience" else set(),
         allowed_actions=allowed_actions,
@@ -1342,17 +1614,32 @@ async def mind_step(
         current_experience_type=experience_type,
     )
     if bundle is not None:
-        new_state, new_history, new_memories, pending = _accepted_documents(
-            state, history, memories, bundle, experience, current_time, event_id
-        )
-        if choice := bundle.action_choice:
-            new_state["pending_activity"] = _activity(choice, new_state, files.reading_path)
-        files.commit(new_state, new_history, new_memories)
-        assert pending is not None
-        return StepResult(committed=True, pending_expression=pending, attempts=attempts)
+        try:
+            new_state, new_history, new_memories, pending = _accepted_documents(
+                state, history, memories, bundle, experience, current_time, event_id
+            )
+        except ValueError as error:
+            reasons = [f"权威写入生成失败：{error}"]
+            files.record_failure(
+                {
+                    "failed_at": current_time.isoformat(),
+                    "attempt": attempts,
+                    "candidate_raw": json.dumps(bundle.model_dump(), ensure_ascii=False),
+                    "reasons": reasons,
+                }
+            )
+        else:
+            if choice := bundle.action_choice:
+                new_state["pending_activity"] = _activity(choice, new_state, files.reading_path)
+            files.commit(new_state, new_history, new_memories)
+            assert pending is not None
+            return StepResult(committed=True, pending_expression=pending, attempts=attempts)
 
     fallback = PendingExpression(
-        id=f"expr_{uuid.uuid4().hex}", text=fallback_text, created_at=current_time.isoformat()
+        id=f"expr_{uuid.uuid4().hex}",
+        text=fallback_text,
+        created_at=current_time.isoformat(),
+        act="respond",
     )
     state["last_step_at"] = current_time.isoformat()
     state["pending_expression"] = fallback.model_dump()
@@ -1435,6 +1722,11 @@ async def complete_reading(
     context_memories, _ = _selected_memories(memories)
     evidence_types = _evidence_types_for_context(history, context_history, context_memories)
     evidence_types[activity.id] = "self_reading"
+    evidence_by_id = {
+        str(item["id"]): item
+        for item in [*history, experience]
+        if isinstance(item, dict) and item.get("id")
+    }
     memory_items = memories.get("items", [])
     memories_by_id = {
         str(item.get("id")): item
@@ -1455,6 +1747,7 @@ async def complete_reading(
         system=AMBIENT_READING_SYSTEM_PROMPT if allow_ambient else READING_SYSTEM_PROMPT,
         now=now,
         evidence_types=evidence_types,
+        evidence_by_id=evidence_by_id,
         memories_by_id=memories_by_id,
         user_confirmation_ids=set(),
         allowed_actions=set(),
@@ -1465,15 +1758,31 @@ async def complete_reading(
     )
     if bundle is None:
         return ReceiptResult(committed=False, attempts=attempts, rejection_reasons=reasons)
-    new_state, new_history, new_memories, pending = _accepted_documents(
-        state,
-        history,
-        memories,
-        bundle,
-        experience,
-        now,
-        expression_kind="ambient" if allow_ambient else None,
-    )
+    try:
+        new_state, new_history, new_memories, pending = _accepted_documents(
+            state,
+            history,
+            memories,
+            bundle,
+            experience,
+            now,
+            expression_kind="ambient" if allow_ambient else None,
+        )
+    except ValueError as error:
+        rejection = [f"权威写入生成失败：{error}"]
+        files.record_failure(
+            {
+                "failed_at": now.isoformat(),
+                "attempt": attempts,
+                "candidate_raw": json.dumps(bundle.model_dump(), ensure_ascii=False),
+                "reasons": rejection,
+            }
+        )
+        return ReceiptResult(
+            committed=False,
+            attempts=attempts,
+            rejection_reasons=rejection,
+        )
     if allow_ambient and bundle.expression:
         assert pending is not None
     else:

@@ -99,6 +99,19 @@ class LongitudinalProvider(BaseLLMProvider):
                         },
                         "memory_operations": operations,
                         "expression": expression,
+                        "expression_act": (
+                            "reflect"
+                            if expression is not None and experience_type == "self_reading"
+                            else "respond"
+                            if expression is not None
+                            else None
+                        ),
+                        "expression_evidence_ids": (
+                            [incoming["id"]]
+                            if expression is not None and experience_type == "self_reading"
+                            else []
+                        ),
+                        "expression_target_id": None,
                     },
                 )
             ]

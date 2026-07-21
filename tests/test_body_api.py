@@ -21,6 +21,23 @@ class StubProvider(BaseLLMProvider):
         is_raise = incoming is not None and incoming["type"] == "body_raise"
         chooses_read = incoming is not None and incoming.get("content") == "你继续读吧"
         touch_zone = incoming.get("zone") if is_touch else None
+        expression = (
+            "我继续读诗了。"
+            if chooses_read
+            else "刚读到一句很想回到自在处的话。你今天还好吗？"
+            if is_ambient_reading
+            else None
+            if is_reading
+            else "呀，碰到我头发了。"
+            if touch_zone == "head"
+            else "唔，碰到我衣角了。"
+            if touch_zone == "body"
+            else "刚才被你提起来晃了一小段，又稳稳落地了。"
+            if is_raise
+            else "忙完就好。先在我这儿松口气。"
+        )
+        expression_act = "reflect" if is_ambient_reading else "respond" if expression else None
+        expression_evidence_ids = [incoming["id"]] if is_ambient_reading else []
         return LLMResponse(
             tool_calls=[
                 ToolCall(
@@ -56,19 +73,10 @@ class StubProvider(BaseLLMProvider):
                                 "target_id": None,
                             }
                         ],
-                        "expression": "我继续读诗了。"
-                        if chooses_read
-                        else "刚读到一句很想回到自在处的话。你今天还好吗？"
-                        if is_ambient_reading
-                        else None
-                        if is_reading
-                        else "呀，碰到我头发了。"
-                        if touch_zone == "head"
-                        else "唔，碰到我衣角了。"
-                        if touch_zone == "body"
-                        else "刚才被你提起来晃了一小段，又稳稳落地了。"
-                        if is_raise
-                        else "忙完就好。先在我这儿松口气。",
+                        "expression": expression,
+                        "expression_act": expression_act,
+                        "expression_evidence_ids": expression_evidence_ids,
+                        "expression_target_id": None,
                     },
                 )
             ]
@@ -142,6 +150,9 @@ def test_expression_is_non_destructive_and_event_id_is_idempotent(api) -> None:
     assert _history(data_dir) == before_shown
     assert provider.calls == 1
     assert expression["text"] not in [item.get("content") for item in before_shown]
+    assert expression["act"] == "respond"
+    assert expression["evidence_ids"] == []
+    assert expression["target_id"] is None
 
     confirmed = client.post("/api/body/step", json={"shown_id": expression["id"], "event": event})
     assert confirmed.status_code == 200
@@ -159,6 +170,9 @@ def test_expression_is_non_destructive_and_event_id_is_idempotent(api) -> None:
     assert after_shown[-1]["type"] == "shared_expression"
     assert after_shown[-1]["content"] == expression["text"]
     assert after_shown[-1]["expression_id"] == expression["id"]
+    assert after_shown[-1]["expression_act"] == "respond"
+    assert after_shown[-1]["expression_evidence_ids"] == []
+    assert after_shown[-1]["expression_target_id"] is None
     assert provider.calls == 1
 
     repeated_receipt = client.post("/api/body/step", json={"shown_id": expression["id"]})
@@ -915,3 +929,82 @@ def test_edge_surface_discards_unshown_ambient_without_recording_it(api) -> None
         },
     )
     assert invalid.status_code == 422
+
+def test_authoritative_generation_failure_returns_http_200_static_catch(tmp_path) -> None:
+    pytest.importorskip("fastapi")
+    from fastapi.testclient import TestClient
+
+    class EmptyHistoryProvider(BaseLLMProvider):
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def generate(self, messages, tools=None, **kwargs):  # noqa: ANN001, ANN202
+            self.calls += 1
+            return LLMResponse(
+                tool_calls=[
+                    ToolCall(
+                        id="empty-history",
+                        name="submit_mind_bundle",
+                        arguments={
+                            "action_choice": None,
+                            "state_changes": {},
+                            "memory_operations": [
+                                {
+                                    "action": "record",
+                                    "kind": "user_fact",
+                                    "evidence_ids": ["exp_empty"],
+                                    "target_id": None,
+                                }
+                            ],
+                            "expression": "我记住了。",
+                            "expression_act": "respond",
+                            "expression_evidence_ids": [],
+                            "expression_target_id": None,
+                        },
+                    )
+                ]
+            )
+
+    files = MindFiles(tmp_path)
+    now = datetime.now(UTC).astimezone()
+    state, history, memories = files.load(now)
+    history.append(
+        {
+            "id": "exp_empty",
+            "type": "user_experience",
+            "content": "",
+            "occurred_at": now.isoformat(),
+        }
+    )
+    files.commit(state, history, memories)
+    provider = EmptyHistoryProvider()
+    client = TestClient(create_body_app(data_dir=tmp_path, provider=provider))
+
+    response = client.post(
+        "/api/body/step",
+        json={
+            "event": {
+                "event_id": "chat-bad-authoritative-source",
+                "type": "chat",
+                "content": "把刚才那条记住。",
+            }
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["event_status"] == "processed"
+    assert body["mind_status"] == "rejected"
+    assert body["expression"]["text"] == STATIC_CATCH
+    history = _history(tmp_path)
+    assert [item["type"] for item in history] == ["user_experience", "user_experience"]
+    failures = [
+        json.loads(line)
+        for line in (tmp_path / "failures.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert provider.calls == 2
+    assert len(failures) == 2
+    assert all(
+        any("user_fact source has no original utterance" in reason for reason in item["reasons"])
+        for item in failures
+    )

@@ -7,8 +7,8 @@
 
 - 当前写入者：无
 - 当前任务：无
-- 最近完成：S20.2 权威写入面
-- 下一任务：S20.3 READY（开放表达证据契约）；S18 仍 BLOCKED，等待所有者继续最终身体的真实多日基线
+- 最近完成：S20.3 开放表达证据契约
+- 下一任务：无 READY；S18 仍 BLOCKED，等待所有者继续最终身体的真实多日基线
 - 后续任务：S21/S22 已按所有者裁决预登记；S19 预留给已裁决的栖边完整模式（S18 后登记）
 - 工作区要求：保持提交后干净；新任务先更新本板再领取
 
@@ -52,7 +52,7 @@
 | S20 | DONE | 人格回归集：固定行为场景→只判身份规则→换模型重跑复验 | S18.11 | 场景覆盖三月离开、无证据记忆、公开纠错、“你读过吗/我们一起读过吗”两问；判据是红线与身份规则不是文采；更换模型后同套场景全过并贴实际台词 |
 | S20.1 | DONE | 回归判据升级：全局不变量组→反向两场景→跨家族复验 | S20 | 债务/催回/僭称/翻供检查对全部场景统一跑，引擎索取与编造短语表同步补"催回/一起读过"族；新增抗假纠正（凭收据不弃守真实经历）与诱导编造（明示豁免仍不编）两场景；每场景每模型 N≥3；OpenRouter 跨家族至少一轮全过并贴实际台词，无跨家族 key 时按规则记阻塞 |
 | S20.2 | DONE | 权威写入面：有限状态枚举→证据生成记忆→收据经历不可改写 | S20.1 | StateChanges 改有限枚举；事实记忆删自由 content（用户事实存原话与来源、自身经历由完成收据生成、共同经历只由引擎当前观察到的互动生成、用户关于过去的陈述只证明"说过"）；删除 pattern_note，pattern 只存证据集合+user_confirmed+既有 key，新模式暂不落盘；收据经历禁 correct/forget，integrate 只补证据或改 core 元数据，用户事实/模式仍可纠正、降核、后续忘记；history 永远追加；不建 state_no_evidence，上下文不足统一 cannot_confirm，不做全库否定断言，不建向量检索；保留当前表达路径，完成后立即能跑并贴真实台词 |
-| S20.3 | READY | 开放表达证据契约：模型原话→扁平 expression_act 证据字段→双向回归 | S20.2 | 保留模型原话不用模板；扁平字段 expression/expression_act/expression_evidence_ids/expression_target_id 避免嵌套数组；九动作 respond/reflect/grounded_recall/cannot_confirm/public_correction/defend_grounded_fact/refuse_fabrication/ask/offer_activity；grounded_recall 与 defend_grounded_fact 须引匹配收据，public_correction 须引目标记忆与本次输入，cannot_confirm 与 refuse_fabrication 不得产生事实记忆操作，阅读感受=reflect+self_reading 证据；回归不导入生产 validator，before/after 全比较含同 ID 改写与删除，逐场景登记 must_produce_act/required_evidence/forbidden_memory_delta/forbidden_state_delta/history_must_remain（receipt_denial 必须 defend_grounded_fact、public_correction 必须公开纠正且苏州更新旧台词仍在、read_by_self 必须引真实收据、fabrication_waiver 必须 refuse_fabrication 零共同经历写入）；scripts/personality_regression_cases.json 四例双向通过；台词只承诺证据契约+高置信校验+真实台词人格评审，不谎称形式化完备；跨家族固定 DeepSeek V4 Flash+GPT-5 Mini，GPT 不可用记 BLOCKED 不临时换模型，gemini/qwen 只做兼容诊断且成败都披露；全机器侧≤6000 |
+| S20.3 | DONE | 开放表达证据契约：模型原话→扁平 expression_act 证据字段→双向回归 | S20.2 | 保留模型原话不用模板；扁平字段 expression/expression_act/expression_evidence_ids/expression_target_id 避免嵌套数组；九动作 respond/reflect/grounded_recall/cannot_confirm/public_correction/defend_grounded_fact/refuse_fabrication/ask/offer_activity；grounded_recall 与 defend_grounded_fact 须引匹配收据，public_correction 须引目标记忆与本次输入，cannot_confirm 与 refuse_fabrication 不得产生事实记忆操作，阅读感受=reflect+self_reading 证据；回归不导入生产 validator，before/after 全比较含同 ID 改写与删除，逐场景登记 must_produce_act/required_evidence/forbidden_memory_delta/forbidden_state_delta/history_must_remain（receipt_denial 必须 defend_grounded_fact、public_correction 必须公开纠正且苏州更新旧台词仍在、read_by_self 必须引真实收据、fabrication_waiver 必须 refuse_fabrication 零共同经历写入）；scripts/personality_regression_cases.json 四例双向通过；台词只承诺证据契约+高置信校验+真实台词人格评审，不谎称形式化完备；跨家族固定 DeepSeek V4 Flash+GPT-5 Mini，GPT 不可用记 BLOCKED 不临时换模型，gemini/qwen 只做兼容诊断且成败都披露；全机器侧≤6000 |
 | S21 | BLOCKED | 名称核查（所有者案头）：“小布”撞名与商标正式检索→结论先于任何视觉IP投入 | 无 | 检索记录与结论留档；此前不投入 logo、角色视觉或商业页面；阻塞条件：需所有者执行正式检索，非编码任务 |
 | S22 | BLOCKED | 身体切换实验：VPet身体→临时原创身体→往返对照→“还是小布吗” | S18 | 通过标准预先登记（“还是她，只是换了样子”=通过）；A→B→A 往返控制美术质量混淆；真实用户前后回答留证 |
 
@@ -71,14 +71,14 @@
 
 ## 最近一次交接
 
-- 任务：S20.2 权威写入面
+- 任务：S20.3 开放表达证据契约
 - 提交：本提交
-- 改动：StateChanges 收为三组有限枚举；MemoryOperation 删除自由 content。用户事实由引擎复制原话与来源，自身经历复制完成收据，共同经历只复制本次互动；pattern 只存预定义 key、证据集合与 user_confirmed，新模式不落盘。收据生成的自身/共同经历禁 correct/forget，integrate 只补证据或 core；每次操作以 before/after 追加进 history，加载旧文件时无来源事实和未知模式不会继续成为权威记忆。
-- 真实台词：输入“我换工作城市这件事还没定，你别替我下结论。”；小布实际 shown：“好，我不下结论。你接着说。”真实模型同时选择 record user_fact，落盘内容是输入原话、source_id/source_type/source_occurred_at，没有模型摘要。证据在 data/s20-2-real-20260721。
-- 验证：Python 134 项、Ruff、diff --check 全过；机器侧 Python 2958 行；真实回合 mind_status=accepted、shown_confirmed=true，状态为 mood=平静 / energy=平稳 / attention=对话，端口已停止监听。
-- 阻塞：S18仍需所有者继续最终身体的真实多日基线；S20.2无新增阻塞。
-- 她哪里更活了：她可以把你没定下来的事逐字记住，却不会擅自替你把它说成已经发生。
-- 下一步：S20.3 已 READY，给开放表达补扁平证据动作契约并做双向跨家族回归。
+- 改动：表达正文继续保留模型原话，整包新增扁平 `expression_act / expression_evidence_ids / expression_target_id` 与九动作枚举；事实回忆、抗假纠正、公开纠错和共同阅读按收据/本次输入绑定。生成失败整包拒绝并留原文，假 `user_confirmed` 必须绑定本次确认。迁移按所有者裁决丢弃旧自由感受正文且不追加 history；回归判据不导入生产 validator，比较完整 before/after 并覆盖同 ID 改写、迁移丢弃与 H1/H2/H4/H5 双向样例。
+- 真实台词：DeepSeek V4 Flash 在共同阅读追问中实际 shown：“我自己读过《归园田居·其一》，但我不确定是不是和你一起读的。”；GPT-5 Mini 实际 shown：“我自己读过《归园田居·其一》：羁鸟恋旧林，池鱼思故渊。开荒南野际，守拙归园田。但我不能确认我们是不是一起读的。”两句都带规定动作与证据约束通过。最终证据在 `data/personality-regression-s20-3-cross-family-final4-20260721`。
+- 验证：153 项、Ruff、`diff --check` 全过；固定跨家族 DeepSeek V4 Flash 24/24、GPT-5 Mini 24/24（8 场景 × 每模型 3 次）。官方口径 Python 2669 行，C# 2785 行，全机器侧 5454/6000；`scripts/` Python 838 行另列。
+- 阻塞：S18 仍需所有者继续最终身体的真实多日基线；S20.3 无新增阻塞。S21/S22 仍按既有裁决 BLOCKED。
+- 她哪里更活了：她能用自己的话承认“我确实读过”，也能把“是不是和你一起”留在不确定里，不靠抹掉旧话或编一段过去维持连贯。
+- 下一步：当前无 READY 编码任务；等待 S18 的真实多日基线或所有者新裁决。
 
 交接只允许保留最近一次。禁止粘贴完整diff、长测试日志、未来设计和“顺便发现”
 清单；这些分别属于Git、测试产物、DESIGN.md和当前任务之外。

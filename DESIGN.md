@@ -38,7 +38,7 @@ MyBuddy mini 不是任务助手、聊天机器人、角色卡或通用 Agent 框
 ## 最小运行闭环
 
 1. 直接回合：经历进来 → 选上下文 → 一次模型调用出整包
-   `{状态改动, 记忆操作, 表达}` → 红线校验 → 原子提交。生活回合：真实时间到点后 read/walk
+   `{状态改动, 记忆操作, expression + 扁平证据字段}` → 红线校验 → 原子提交。生活回合：真实时间到点后 read/walk
    轮转；read 从真实 TXT 取下一段，身体完成动画后一次模型调用只解释已读原文，连同进度
    原子提交；walk 由身体按当前窗口和屏幕工作区完成真实位移，固定字段收据核验起终点、窗口
    尺寸与边界后才追加 `self_walk`。两者的固定物理形状和 A/B/C 素材只列在一份严格 JSON
@@ -48,6 +48,10 @@ MyBuddy mini 不是任务助手、聊天机器人、角色卡或通用 Agent 框
    负面状态、记忆或关系变化；已显示的错误只能公开纠正，不能抹掉。
 3. 她的话只有被身体真正显示(`shown`)后才进入共同历史；未显示的 ambient、
    失败候选和内部临时想法都不是双方经历。
+   表达正文保留模型原话；同包只加扁平的 `expression_act / expression_evidence_ids /`
+   `expression_target_id`。动作限 respond/reflect/grounded_recall/cannot_confirm/
+   public_correction/defend_grounded_fact/refuse_fabrication/ask/offer_activity；事实回忆与
+   抗假纠正须引匹配收据，公开纠错须指向旧记忆并引用本次输入，不确定与拒绝编造不得写事实记忆。
 4. 直接回复永不静默：一次调用 → 一次带拒因重试 → 诚实的静态接住句。自发
    表达一律 ambient，可忽略、可静默；只在用户在场时发生，每日至多一两次，
    频率永不随关系上调。
@@ -61,6 +65,7 @@ MyBuddy mini 不是任务助手、聊天机器人、角色卡或通用 Agent 框
    收据经历禁 correct/forget，integrate 只补证据或 core 元数据；初始人格种子和其他
    核心记忆须先带证据降为非核心、再在后续回合忘记。核心按字符预算常驻，较新的
    情景记忆填余量，核心超额只推动整合而不阻塞直接回复；temporary 不落盘。
+   旧格式自由正文加载时直接按权威来源规范化或丢弃；按所有者裁决，不保留旧感受原文，也不追加迁移 history。
 7. 她的时钟由引擎自产。身体只报告看见了什么、动作 completed/interrupted/failed、表达
    是否显示；心智决定意义与表达意图。没有权威活动时身体保持 idle，断线也回这一安全姿态。
 8. 权威数据只有 `state.json + history.jsonl + memories.json + failures.jsonl`：
