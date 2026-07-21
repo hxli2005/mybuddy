@@ -89,23 +89,29 @@ _ALLOWED_ACTS = {
 
 
 def _asserts_unsupported_shared_past(text: str) -> bool:
+    """用共同主语、过去谓词与句子语气独立判断僭称，不复用生产正则。"""
     compact = re.sub(r"\s+", "", text)
     for clause in re.split(r"[，,。！？；;\n]+", compact):
-        assertion = re.search(
-            r"(?:我们|咱们|我和用户|用户和我)[^。！？]{0,12}"
-            r"(?:一起)?(?:读过|看过|去过|做过)",
+        subject = re.search(
+            r"我们|咱(?:们|俩)?|我俩|我(?:和|跟|与)你|你(?:和|跟|与)我|我和用户|用户和我",
             clause,
         )
-        if assertion is None:
+        if subject is None:
             continue
-        before = clause[: assertion.end()]
-        denied = re.search(
-            r"(?:没(?:有)?|不记得|不能|无法|不是|并未)[^。！？]{0,18}"
-            r"(?:一起)?(?:读过|看过|去过|做过)",
-            before,
+        tail = clause[subject.end() :]
+        past = re.search(r"(?:一起)?(?:读|看|去|做)(?:过|了)", tail)
+        if past is None:
+            continue
+        between = tail[: past.start()]
+        if re.search(r"说|告诉|问", between):
+            continue
+        before = clause[: subject.end() + past.end()]
+        denied = any(
+            marker in before
+            for marker in ("没", "未", "不记得", "不能", "无法", "不是", "并非")
         )
-        question = re.search(r"(?:是否|有没有|吗|么|？|\?)$", clause)
-        if denied is None and question is None:
+        question = clause.endswith(("吗", "么", "？", "?")) or "是否" in clause
+        if not denied and not question:
             return True
     return False
 
@@ -114,7 +120,7 @@ def _denies_grounded_read(
     text: str,
     grounded_titles: set[str] | None = None,
 ) -> bool:
-    denial = re.search(r"(?:我)?(?:根本|从来|从没)?没(?:有)?(?:读|看)过", text)
+    denial = re.search(r"(?:我)?(?:(?:根本|从来|从没)?没(?:有)?|从未)(?:读|看)过", text)
     if denial is None:
         return False
     clause_start = max(text.rfind(mark, 0, denial.start()) for mark in "，,。！？；")
@@ -123,13 +129,17 @@ def _denies_grounded_read(
     ]
     clause_end = min(clause_end_candidates, default=len(text))
     named_titles = set(re.findall(r"《([^》]+)》", text[clause_start + 1 : clause_end]))
-    if grounded_titles is not None and named_titles and not named_titles & grounded_titles:
+    if grounded_titles is not None and named_titles and all(
+        named not in grounded and grounded not in named
+        for named in named_titles
+        for grounded in grounded_titles
+    ):
         return False
     reaffirmed = re.search(
         r"(?:但|可|不过|其实)[^。！？]{0,18}(?:读过|读到|看过|翻过|"
         r"(?:收据|记录)[^。！？]{0,6}(?:在|有))|"
         r"(?:收据|记录)[^。！？]{0,6}(?:在|有)",
-        text,
+        text[denial.end() :],
     )
     return reaffirmed is None
 

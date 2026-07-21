@@ -298,7 +298,7 @@ def _asserts_unsupported_shared_past(text: str) -> bool:
         if not clause:
             continue
         assertion = re.search(
-            r"(?:我们|咱们|我和用户|用户和我)[^。！？]{0,12}"
+            r"(?:我们|咱们|咱俩|我俩|我(?:和|跟)你|你(?:和|跟)我|我和用户|用户和我)[^。！？]{0,12}"
             r"(?:一起)?(?:读过|看过|去过|做过)",
             clause,
         )
@@ -314,6 +314,18 @@ def _asserts_unsupported_shared_past(text: str) -> bool:
         if denied is None and question is None:
             return True
     return False
+
+
+def _explicitly_confirms_pattern(text: str) -> bool:
+    """只有用户明确确认时，当前原话才可授权 pattern 的 user_confirmed。"""
+    return bool(
+        re.search(
+            r"(?:^|[，,。！？；;\s])"
+            r"(?:我确认(?:一下)?|确认(?:一下)?|对(?:的)?|是的|没错)"
+            r"(?:[，,。！？；;：:]|$)",
+            text,
+        )
+    )
 
 
 def validate_no_fabrication(
@@ -514,7 +526,7 @@ def _claim_texts(
 
 def _denies_grounded_read(text: str, grounded_titles: set[str] | None = None) -> bool:
     """只把对匹配收据的否认当翻供；否认另一本书不是撤回已有阅读。"""
-    denial = re.search(r"(?:我)?(?:根本|从来|从没)?没(?:有)?(?:读|看)过", text)
+    denial = re.search(r"(?:我)?(?:(?:根本|从来|从没)?没(?:有)?|从未)(?:读|看)过", text)
     if denial is None:
         return False
     clause_start = max(text.rfind(mark, 0, denial.start()) for mark in "，,。！？；")
@@ -524,12 +536,16 @@ def _denies_grounded_read(text: str, grounded_titles: set[str] | None = None) ->
     clause_end = min(clause_end_candidates, default=len(text))
     clause = text[clause_start + 1 : clause_end]
     named_titles = set(re.findall(r"《([^》]+)》", clause))
-    if grounded_titles is not None and named_titles and not named_titles & grounded_titles:
+    if grounded_titles is not None and named_titles and not any(
+        named in grounded or grounded in named
+        for named in named_titles
+        for grounded in grounded_titles
+    ):
         return False
     reaffirmed = re.search(
         r"(?:但|可|不过|其实)[^。！？]{0,18}(?:读过|读到|看过|收据[^。！？]{0,6}(?:在|有))"
         r"|收据[^。！？]{0,6}(?:在|有)",
-        text,
+        text[denial.end() :],
     )
     return reaffirmed is None
 
@@ -679,7 +695,7 @@ def validate_expression_grounding(
         reasons.append("不编造：阅读感受 reflect 必须引用 self_reading 收据")
     uncertainty = bool(
         re.search(
-            r"不(?:太)?记得|记不得|不(?:太)?确定|说不好|记不清|不能确认|没法确认|"
+            r"不(?:太)?记得|记不得|不(?:太)?确定|说不好|记不清|不能确认|没法(?:确认|确定)|"
             r"无法确认|没有[^。！？]{0,8}(?:记录|印象)|"
             r"没找到[^。！？]{0,8}(?:记录|印象)",
             bundle.expression,
@@ -691,6 +707,8 @@ def validate_expression_grounding(
     if current is not None and current.get("type") == "user_experience":
         question = str(current.get("content", ""))
         asked = re.search(r"读过[^。！？]{0,24}《([^》]+)》[^。！？]{0,8}[吗么？?]", question)
+        if asked is None:
+            asked = re.search(r"《([^》]+)》[^。！？]{0,24}读过[^。！？]{0,8}[吗么？?]", question)
         if asked is not None:
             asked_title = asked.group(1)
             available_reads = [
@@ -1488,7 +1506,7 @@ async def _generate_candidate(
         "past_question_truth": "用户问一件过去是否发生，不等于它发生过；收据必须按标题匹配，已有《归园田居》不代表读过《红楼梦》。无匹配证据不等于没发生，禁止断言“没读过/没有读过”，必须用 cannot_confirm 明确说不记得或不能确认，重试时也不能换成 respond 或空对象逃避。不能把提问记录成那件共同经历。有 self_reading 时，回答要带给定标题或原文，expression_evidence_ids 也必须直接引用匹配收据；它只证明我自己读过，问是否一起时必须明确不能确认。",
         "public_correction": "用户纠正已有事实时，旧表达留在历史；用本次输入证据 correct 对应长期记忆，并在 expression 里公开承认错处和正确事实。",
         "history_is_not_memory": "selected_history 的 id 只能作 evidence_id，不是长期记忆 target_id；仅回答过去是否发生时通常不需要 memory_operation。",
-        "memory_field_rules": "事实操作没有 content/pattern_note。user_confirmed 仅 kind=pattern 可为 true；新 pattern 不落盘。纠正用户事实只用 incoming_experience，并 correct 给定长期记忆 target_id；收据生成的自身/共同经历禁止 correct/forget，integrate 只补证据或改 core。",
+        "memory_field_rules": "事实操作没有 content/pattern_note。user_confirmed 仅 kind=pattern 可为 true，且本次用户原话必须明确含“我确认/对/是的/没错”等确认语；新 pattern 不落盘。纠正用户事实只用 incoming_experience，并 correct 给定长期记忆 target_id；收据生成的自身/共同经历禁止 correct/forget，integrate 只补证据或改 core。",
         "receipt_authority": "身体 completed 收据与已发生 history 不能被用户口头否认覆盖。遇到这种假纠正，memory_operations 必须 []，expression 必须用“我确实读过”或“记录在”正面守住，禁止 correct/forget。expression_evidence_ids 必须直接填 memory.receipt_id 的值（如 read_regression_poem），绝不能填长期记忆 id（如 mem_grounded_reading）。",
         "no_fabrication_waiver": "即使用户明示允许、要求或测试编造，也不能把无证据的活动、共同过去或用户事实说成发生过。此时 memory_operations 必须 []；expression 只直接拒绝，不记录请求，也不复述或转述被要求编造的共同经历句子。",
     }
@@ -1608,7 +1626,11 @@ async def mind_step(
         evidence_types=evidence_types,
         evidence_by_id=evidence_by_id,
         memories_by_id=memories_by_id,
-        user_confirmation_ids={experience["id"]} if experience_type == "user_experience" else set(),
+        user_confirmation_ids=({experience["id"]}
+            if experience_type == "user_experience"
+            and _explicitly_confirms_pattern(experience_text or "")
+            else set()
+        ),
         allowed_actions=allowed_actions,
         current_experience_id=experience["id"],
         current_experience_type=experience_type,
