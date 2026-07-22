@@ -1941,7 +1941,7 @@ def test_expression_contract_rejects_ungrounded_and_conflicting_acts() -> None:
     reflect["memory_operations"] = []
     reflect["expression_act"] = "reflect"
     reflected = CandidateBundle.model_validate(reflect)
-    assert "不编造：阅读感受 reflect 必须引用 self_reading 收据" in (
+    assert "不编造：生活感受 reflect 必须引用 self_reading/self_walk 收据" in (
         validate_expression_grounding(reflected, {}, {}, {}, "current")
     )
 

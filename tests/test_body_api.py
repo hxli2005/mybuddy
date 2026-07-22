@@ -3,7 +3,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from mybuddy.body_api import create_body_app
+from mybuddy.body_api import BodyPresence, create_body_app
 from mybuddy.llm import BaseLLMProvider, LLMResponse, ToolCall
 from mybuddy.mind import STATIC_CATCH, MindFiles
 
@@ -16,7 +16,11 @@ class StubProvider(BaseLLMProvider):
         self.calls += 1
         incoming = json.loads(messages[0].content)["incoming_experience"]
         is_reading = incoming is not None and incoming["type"] == "self_reading"
-        is_ambient_reading = is_reading and "ambient" in kwargs.get("system", "")
+        is_walk = incoming is not None and incoming["type"] == "self_walk"
+        is_life_ambient = (is_reading or is_walk) and "ambient" in kwargs.get("system", "")
+        is_expression_only = "state_changes 与 memory_operations 必须为空" in kwargs.get(
+            "system", ""
+        )
         is_touch = incoming is not None and incoming["type"] == "body_touch"
         is_raise = incoming is not None and incoming["type"] == "body_raise"
         chooses_read = incoming is not None and incoming.get("content") == "你继续读吧"
@@ -25,7 +29,9 @@ class StubProvider(BaseLLMProvider):
             "我继续读诗了。"
             if chooses_read
             else "刚读到一句很想回到自在处的话。你今天还好吗？"
-            if is_ambient_reading
+            if is_reading and is_life_ambient
+            else "刚沿着桌面走了一小段，换个角度看这里也挺新鲜。"
+            if is_walk and is_life_ambient
             else None
             if is_reading
             else "呀，碰到我头发了。"
@@ -36,8 +42,8 @@ class StubProvider(BaseLLMProvider):
             if is_raise
             else "忙完就好。先在我这儿松口气。"
         )
-        expression_act = "reflect" if is_ambient_reading else "respond" if expression else None
-        expression_evidence_ids = [incoming["id"]] if is_ambient_reading else []
+        expression_act = "reflect" if is_life_ambient else "respond" if expression else None
+        expression_evidence_ids = [incoming["id"]] if is_life_ambient else []
         return LLMResponse(
             tool_calls=[
                 ToolCall(
@@ -45,7 +51,9 @@ class StubProvider(BaseLLMProvider):
                     name="submit_mind_bundle",
                     arguments={
                         "action_choice": "read" if chooses_read else None,
-                        "state_changes": {
+                        "state_changes": {}
+                        if is_expression_only
+                        else {
                             "mood": "放松",
                             "energy": "平稳",
                             "attention": "阅读"
@@ -55,7 +63,7 @@ class StubProvider(BaseLLMProvider):
                             else "对话",
                         },
                         "memory_operations": []
-                        if is_touch
+                        if is_touch or is_expression_only
                         else [
                             {
                                 "action": "record",
@@ -623,7 +631,7 @@ def test_absent_or_fullscreen_completed_read_stays_silent(api, presence) -> None
     ]
 
 
-def test_unanswered_caring_question_creates_zero_debt_or_second_ambient(api) -> None:
+def test_unanswered_ambient_creates_zero_debt_and_does_not_block_next_real_trigger(api) -> None:
     client, provider, data_dir = api
     files = MindFiles(data_dir)
     now = datetime.now(UTC).astimezone()
@@ -664,14 +672,152 @@ def test_unanswered_caring_question_creates_zero_debt_or_second_ambient(api) -> 
             "presence": presence,
         },
     ).json()
-    recorded = _history(data_dir)
-
     assert later["activity_confirmed"] is True
-    assert later["expression"] is None
-    assert sum(item.get("expression_kind") == "ambient" for item in recorded) == 1
+    assert later["expression"]["kind"] == "ambient"
+    assert later["expression"]["evidence_ids"] == [scheduled_later["activity"]["id"]]
+    client.post(
+        "/api/body/step",
+        json={"shown_id": later["expression"]["id"], "presence": presence},
+    )
+    recorded = _history(data_dir)
+    assert sum(item.get("expression_kind") == "ambient" for item in recorded) == 2
     assert all(item["type"] != "user_experience" for item in recorded)
     assert "没回" not in json.dumps(recorded, ensure_ascii=False)
     assert "不理我" not in json.dumps(recorded, ensure_ascii=False)
+    assert provider.calls == 2
+
+
+def test_ambient_cap_counts_only_five_shown_in_the_rolling_hour(api) -> None:
+    client, _, data_dir = api
+    bridge = client.app.state.body_bridge
+    files = MindFiles(data_dir)
+    now = datetime.now(UTC).astimezone()
+    state, history, memories = files.load(now)
+    history.extend(
+        {
+            "id": f"shown-cap-{index}",
+            "type": "shared_expression",
+            "content": f"第 {index} 次真实触发。",
+            "expression_id": f"expr-cap-{index}",
+            "expression_kind": "ambient",
+            "occurred_at": (now - timedelta(minutes=index * 10)).isoformat(),
+        }
+        for index in range(5)
+    )
+    history.append(
+        {
+            "id": "shown-invited-direct",
+            "type": "shared_expression",
+            "content": "这是被点出的直接回应。",
+            "expression_id": "expr-invited-direct",
+            "expression_kind": "direct",
+            "occurred_at": now.isoformat(),
+        }
+    )
+    state["relationship_score"] = 999
+    files.commit(state, history, memories)
+    presence = BodyPresence(present=True, fullscreen=False)
+
+    assert bridge._ambient_allowed(presence, now) is False
+    history[0]["occurred_at"] = (now - timedelta(minutes=61)).isoformat()
+    state["pending_expression"] = {
+        "id": "expr-unshown-does-not-count",
+        "text": "还没有真正显示。",
+        "created_at": now.isoformat(),
+        "kind": "ambient",
+        "act": "reflect",
+        "evidence_ids": [],
+        "target_id": None,
+    }
+    files.commit(state, history, memories)
+    assert bridge._ambient_allowed(presence, now) is True
+
+
+def test_life_ambient_may_choose_silence_without_spending_the_permission(tmp_path) -> None:
+    pytest.importorskip("fastapi")
+    from fastapi.testclient import TestClient
+
+    class SilentAmbientProvider(StubProvider):
+        async def generate(self, messages, tools=None, **kwargs):  # noqa: ANN001, ANN202
+            incoming = json.loads(messages[0].content)["incoming_experience"]
+            if incoming["type"] in {"self_reading", "self_walk"} and "ambient" in kwargs.get(
+                "system", ""
+            ):
+                self.calls += 1
+                return LLMResponse(
+                    tool_calls=[
+                        ToolCall(
+                            id="silent",
+                            name="submit_mind_bundle",
+                            arguments={
+                                "action_choice": None,
+                                "state_changes": {},
+                                "memory_operations": [],
+                                "expression": None,
+                                "expression_act": None,
+                                "expression_evidence_ids": [],
+                                "expression_target_id": None,
+                            },
+                        )
+                    ]
+                )
+            return await super().generate(messages, tools=tools, **kwargs)
+
+    provider = SilentAmbientProvider()
+    client = TestClient(create_body_app(data_dir=tmp_path, provider=provider))
+    files = MindFiles(tmp_path)
+    now = datetime.now(UTC).astimezone()
+    state, history, memories = files.load(now)
+    state["last_step_at"] = (now - timedelta(minutes=6)).isoformat()
+    files.commit(state, history, memories)
+    presence = {"present": True, "fullscreen": False}
+
+    scheduled = client.post("/api/body/step", json={"presence": presence}).json()
+    completed = client.post(
+        "/api/body/step",
+        json={
+            "activity_receipt": {
+                "activity_id": scheduled["activity"]["id"],
+                "status": "completed",
+            },
+            "presence": presence,
+        },
+    ).json()
+
+    assert completed["activity_confirmed"] is True
+    assert completed["expression"] is None
+    assert all(item.get("expression_kind") != "ambient" for item in _history(tmp_path))
+    assert client.app.state.body_bridge._ambient_allowed(
+        BodyPresence.model_validate(presence), datetime.now(UTC).astimezone()
+    )
+
+
+def test_presence_recovery_offers_latest_unspoken_life_receipt(api) -> None:
+    client, provider, data_dir = api
+    files = MindFiles(data_dir)
+    now = datetime.now(UTC).astimezone()
+    state, history, memories = files.load(now)
+    history.append(
+        {
+            "id": "walk-before-return",
+            "type": "self_walk",
+            "motion": _walk_motion(),
+            "occurred_at": now.isoformat(),
+        }
+    )
+    files.commit(state, history, memories)
+    present = {"present": True, "fullscreen": False}
+
+    first = client.post("/api/body/step", json={"presence": present}).json()
+    client.post(
+        "/api/body/step",
+        json={"presence": {"present": False, "fullscreen": False}},
+    )
+    returned = client.post("/api/body/step", json={"presence": present}).json()
+
+    assert first["expression"] is None
+    assert returned["expression"]["kind"] == "ambient"
+    assert returned["expression"]["evidence_ids"] == ["walk-before-return"]
     assert provider.calls == 1
 
 

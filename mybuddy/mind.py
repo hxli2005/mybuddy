@@ -1025,9 +1025,9 @@ def validate_expression_grounding(
         if not matching:
             reasons.append(f"不编造：{act} 必须引用匹配的完成收据")
     if act == "reflect" and not any(
-        evidence_types.get(item) == "self_reading" for item in supplied
+        evidence_types.get(item) in {"self_reading", "self_walk"} for item in supplied
     ):
-        reasons.append("不编造：阅读感受 reflect 必须引用 self_reading 收据")
+        reasons.append("不编造：生活感受 reflect 必须引用 self_reading/self_walk 收据")
     uncertainty = bool(
         re.search(
             r"不(?:太)?记得|记不得|不(?:太)?确定|不(?:太)?能(?:确认|确定)|"
@@ -1570,6 +1570,13 @@ AMBIENT_READING_SYSTEM_PROMPT = """身体刚确认小布完整做完一次 read 
 未回应不能留下任何状态、记忆或频率痕迹。不要编造书外情节、共同过去或用户反应，不欢迎回来，不暗示
 知道用户此前是否在场，不制造关系计分，不撤回已发生内容。整包不能部分保留。"""
 
+LIFE_AMBIENT_SYSTEM_PROMPT = """incoming_experience 是已经写入 history 的真实 self_reading 或
+self_walk 收据。这只是一次由真实生活事件提供的开口机会，不是说话配额。请调用 submit_mind_bundle；
+action_choice 必须为 null，state_changes 与 memory_operations 必须为空。可以保持安静；若开口，只依据
+本收据自然、活泼地说一段有自己节拍的 ambient，使用 reflect 并且只引用本收据。允许顺手关心地问一句，
+但不得要求回应，未回应不能留下任何状态、记忆或频率痕迹。不要欢迎回来，不暗示知道用户此前是否
+在场，不编造收据之外的活动、共同过去或用户反应，不制造关系计分，不撤回已发生内容。"""
+
 
 def _copy_json(value: object) -> Any:
     return json.loads(json.dumps(value, ensure_ascii=False))
@@ -1791,6 +1798,8 @@ async def _generate_candidate(
     allowed_actions: set[str],
     quiet_time: bool = False,
     ambient_time: bool = False,
+    ambient_receipt_id: str | None = None,
+    expression_only: bool = False,
 ) -> tuple[CandidateBundle | None, int, list[str]]:
     payload = json.loads(prompt)
     pending = payload.get("state", {}).get("pending_activity")
@@ -1895,6 +1904,17 @@ async def _generate_candidate(
             if quiet_time:
                 if bundle.expression is not None:
                     reasons.append("安静阅读不能夹带 ambient 表达")
+            if ambient_receipt_id is not None and bundle.expression is not None:
+                if bundle.expression_act != "reflect" or set(bundle.expression_evidence_ids) != {
+                    ambient_receipt_id
+                }:
+                    reasons.append("ambient 内容必须用 reflect 且只绑定本次真实生活收据")
+            if expression_only and (
+                bundle.action_choice is not None
+                or bundle.state_changes.model_dump(exclude_none=True)
+                or bundle.memory_operations
+            ):
+                reasons.append("这次开口机会只能决定 optional ambient，不能推进状态、记忆或动作")
         except (ValidationError, ValueError) as error:
             reasons = [f"结构化候选无效：{error}"]
         if not reasons:
@@ -2114,6 +2134,7 @@ async def complete_reading(
         current_experience_type="self_reading",
         quiet_time=not allow_ambient,
         ambient_time=allow_ambient,
+        ambient_receipt_id=activity.id if allow_ambient else None,
     )
     if bundle is None:
         return ReceiptResult(committed=False, attempts=attempts, rejection_reasons=reasons)
@@ -2155,6 +2176,72 @@ async def complete_reading(
     recent = [item for item in new_state.get("recent_activity_ids", []) if isinstance(item, str)]
     new_state["recent_activity_ids"] = [*recent, activity.id][-RECENT_EVENT_LIMIT:]
     files.commit(new_state, new_history, new_memories)
+    return ReceiptResult(committed=True, pending_expression=pending, attempts=attempts)
+
+
+async def offer_latest_life_ambient(
+    *, provider: BaseLLMProvider, files: MindFiles, now: datetime
+) -> ReceiptResult:
+    """真实生活收据只提供一次可丢的开口机会；没有收据或选择安静都不造痕迹。"""
+    state, history, memories = files.load(now)
+    if state.get("pending_expression") is not None or state.get("pending_activity") is not None:
+        return ReceiptResult(committed=False, attempts=0)
+    receipt = None
+    for item in reversed(history):
+        if item.get("type") == "shared_expression" and item.get("expression_kind") == "ambient":
+            break
+        if item.get("type") in {"self_reading", "self_walk"}:
+            receipt = item
+            break
+    if receipt is None or not receipt.get("id"):
+        return ReceiptResult(committed=False, attempts=0)
+
+    context_history = _selected_history(history, include_shared_expressions=False)
+    context_memories, _ = _selected_memories(memories)
+    evidence_types = _evidence_types_for_context(history, context_history, context_memories)
+    receipt_id = str(receipt["id"])
+    evidence_types[receipt_id] = str(receipt["type"])
+    evidence_by_id = {
+        str(item["id"]): item for item in history if isinstance(item, dict) and item.get("id")
+    }
+    memories_by_id = {
+        str(item.get("id")): item
+        for item in memories.get("items", [])
+        if isinstance(item, dict) and item.get("id")
+    }
+    bundle, attempts, reasons = await _generate_candidate(
+        provider=provider,
+        files=files,
+        prompt=_prompt_payload(
+            state, history, memories, receipt, now, include_shared_expressions=False
+        ),
+        system=LIFE_AMBIENT_SYSTEM_PROMPT,
+        now=now,
+        evidence_types=evidence_types,
+        evidence_by_id=evidence_by_id,
+        memories_by_id=memories_by_id,
+        user_confirmation_ids=set(),
+        allowed_actions=set(),
+        current_experience_id=receipt_id,
+        current_experience_type=str(receipt["type"]),
+        ambient_time=True,
+        ambient_receipt_id=receipt_id,
+        expression_only=True,
+    )
+    if bundle is None:
+        return ReceiptResult(committed=False, attempts=attempts, rejection_reasons=reasons)
+    if bundle.expression is None:
+        return ReceiptResult(committed=True, attempts=attempts)
+    pending = PendingExpression(
+        id=f"expr_{uuid.uuid4().hex}",
+        text=bundle.expression.strip(),
+        created_at=now.isoformat(),
+        kind="ambient",
+        act=bundle.expression_act or "reflect",
+        evidence_ids=bundle.expression_evidence_ids,
+    )
+    state["pending_expression"] = pending.model_dump()
+    files.commit(state, history, memories)
     return ReceiptResult(committed=True, pending_expression=pending, attempts=attempts)
 
 

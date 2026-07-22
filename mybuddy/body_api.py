@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Literal
 
@@ -15,12 +15,14 @@ from mybuddy.mind import (
     READING_PATH,
     MindFiles,
     PendingExpression,
+    ReceiptResult,
     WalkEvidence,
     advance_time,
     complete_reading,
     complete_walk,
     discard_activity,
     mind_step,
+    offer_latest_life_ambient,
 )
 
 
@@ -124,16 +126,38 @@ class BodyBridge:
         self.provider = provider
         self.files = files
         self._write_lock = asyncio.Lock()
+        self._last_present: bool | None = None
 
     async def step(self, request: BodyStepRequest) -> BodyStepResponse:
         async with self._write_lock:
             now = datetime.now(UTC).astimezone()
+            presence_returned = self._presence_returned(request.presence)
             shown_confirmed = self._confirm_shown(request.shown_id, now)
             activity_confirmed, receipt_mind_status = await self._confirm_activity(
-                request.activity_receipt, request.presence, now
+                request.activity_receipt,
+                request.presence,
+                now,
+                allow_ambient=request.event is None,
             )
-            self._discard_stale_ambient(now, request.presence)
+            self._discard_stale_ambient(
+                now,
+                request.presence,
+                force=request.event is not None,
+            )
             event_status, mind_status, fallback = await self._process_event(request.event, now)
+            presence_mind_status: Literal["not_run", "accepted", "rejected", "unavailable"] = (
+                "not_run"
+            )
+            if (
+                request.event is None
+                and request.activity_receipt is None
+                and presence_returned
+                and self._ambient_allowed(request.presence, now)
+            ):
+                offered = await offer_latest_life_ambient(
+                    provider=self.provider, files=self.files, now=now
+                )
+                presence_mind_status = self._receipt_result_status(offered)
             time_status = (
                 self._advance_time(now, request.presence)
                 if request.event is None and request.activity_receipt is None
@@ -141,6 +165,8 @@ class BodyBridge:
             )
             if mind_status == "not_run":
                 mind_status = receipt_mind_status
+            if mind_status == "not_run":
+                mind_status = presence_mind_status
             state, _, _ = self.files.load(now)
             pending = state.get("pending_expression")
             pending_activity = state.get("pending_activity")
@@ -201,6 +227,8 @@ class BodyBridge:
         receipt: BodyActivityReceipt | None,
         presence: BodyPresence | None,
         now: datetime,
+        *,
+        allow_ambient: bool,
     ) -> tuple[bool, Literal["not_run", "accepted", "rejected", "unavailable"]]:
         if receipt is None:
             return False, "not_run"
@@ -224,7 +252,14 @@ class BodyBridge:
                 files=self.files,
                 now=now,
             )
-            return confirmed, "not_run" if confirmed else "rejected"
+            if not confirmed:
+                return False, "rejected"
+            if not allow_ambient or not self._ambient_allowed(presence, now):
+                return True, "not_run"
+            offered = await offer_latest_life_ambient(
+                provider=self.provider, files=self.files, now=now
+            )
+            return True, self._receipt_result_status(offered)
         if activity_type != "read" or receipt.motion is not None:
             return False, "rejected"
         result = await complete_reading(
@@ -232,13 +267,19 @@ class BodyBridge:
             provider=self.provider,
             files=self.files,
             now=now,
-            allow_ambient=self._ambient_allowed(presence, now),
+            allow_ambient=allow_ambient and self._ambient_allowed(presence, now),
         )
         if result.committed:
             return True, "accepted"
         return False, _failure_status(result.rejection_reasons)
 
-    def _discard_stale_ambient(self, now: datetime, presence: BodyPresence | None) -> bool:
+    def _discard_stale_ambient(
+        self,
+        now: datetime,
+        presence: BodyPresence | None,
+        *,
+        force: bool = False,
+    ) -> bool:
         state, history, memories = self.files.load(now)
         pending = state.get("pending_expression")
         if not isinstance(pending, dict) or pending.get("kind") != "ambient":
@@ -249,9 +290,11 @@ class BodyBridge:
                 created_at = created_at.replace(tzinfo=now.tzinfo)
         except (KeyError, TypeError, ValueError):
             return False
-        if (presence is None or presence.surface != "edge") and created_at.astimezone(
-            now.tzinfo
-        ).date() >= now.date():
+        fresh = created_at.astimezone(now.tzinfo) > now - timedelta(hours=1)
+        cannot_show = presence is not None and (
+            not presence.present or presence.fullscreen or presence.surface == "edge"
+        )
+        if fresh and not cannot_show and not force:
             return False
         state["pending_expression"] = None
         self.files.commit(state, history, memories)
@@ -304,6 +347,22 @@ class BodyBridge:
         fallback = None if result.committed else result.pending_expression
         return "processed", mind_status, fallback
 
+    def _presence_returned(self, presence: BodyPresence | None) -> bool:
+        previous = self._last_present
+        if presence is not None:
+            self._last_present = presence.present
+        return presence is not None and previous is False and presence.present
+
+    @staticmethod
+    def _receipt_result_status(
+        result: ReceiptResult,
+    ) -> Literal["not_run", "accepted", "rejected", "unavailable"]:
+        if result.committed:
+            return "accepted"
+        if result.attempts == 0:
+            return "not_run"
+        return _failure_status(result.rejection_reasons)
+
     def _advance_time(
         self, now: datetime, presence: BodyPresence | None
     ) -> Literal["not_due", "scheduled", "waiting_for_activity", "waiting_for_shown"]:
@@ -325,6 +384,8 @@ class BodyBridge:
         ):
             return False
         _, history, _ = self.files.load(now)
+        count = 0
+        cutoff = now - timedelta(hours=1)
         for item in history:
             if item.get("type") != "shared_expression" or item.get("expression_kind") != "ambient":
                 continue
@@ -332,9 +393,11 @@ class BodyBridge:
                 occurred_at = datetime.fromisoformat(str(item["occurred_at"]))
             except (KeyError, TypeError, ValueError):
                 continue
-            if occurred_at.astimezone(now.tzinfo).date() == now.date():
-                return False
-        return True
+            if occurred_at.tzinfo is None:
+                occurred_at = occurred_at.replace(tzinfo=now.tzinfo)
+            if occurred_at.astimezone(now.tzinfo) > cutoff:
+                count += 1
+        return count < 5
 
 
 def _failure_status(reasons: list[str]) -> Literal["rejected", "unavailable"]:
