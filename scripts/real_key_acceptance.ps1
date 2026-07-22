@@ -5,7 +5,8 @@ param(
     [int]$Port = 8123,
     [string]$DataDir = "data\real-key-acceptance",
     [string]$Config = "config.yaml",
-    [string]$Python = ".venv\Scripts\python.exe"
+    [string]$Python = ".venv\Scripts\python.exe",
+    [string]$ReadingFile = "data\reading.local.txt"
 )
 
 $ErrorActionPreference = "Stop"
@@ -28,10 +29,14 @@ function Start-Engine {
     $script:run += 1
     $out = Join-Path $DataDir "server-$($script:run).stdout.log"
     $err = Join-Path $DataDir "server-$($script:run).stderr.log"
+    $engineArgs = @("-m", "mybuddy.cli", "web", "--config", $Config,
+        "--data-dir", $DataDir, "--port", $Port, "--parent-pid", $PID)
+    if (Test-Path -LiteralPath $ReadingFile -PathType Leaf) {
+        $engineArgs += @("--reading-file", (Resolve-Path -LiteralPath $ReadingFile).Path)
+    }
     $script:engine = Start-Process -FilePath $Python `
-        -ArgumentList @("-m", "mybuddy.cli", "web", "--config", $Config,
-            "--data-dir", $DataDir, "--port", $Port, "--parent-pid", $PID) `
-        -RedirectStandardOutput $out -RedirectStandardError $err -PassThru -NoNewWindow
+        -ArgumentList $engineArgs `
+        -RedirectStandardOutput $out -RedirectStandardError $err -PassThru -WindowStyle Hidden
     foreach ($attempt in 1..120) {
         Start-Sleep -Milliseconds 500
         if ($script:engine.HasExited) { throw "引擎启动失败,见 $err" }
@@ -60,7 +65,7 @@ function Invoke-Leg([string]$Scenario, [string]$EventId) {
     [IO.File]::WriteAllText($legFile, ($output -join "`n"))
 }
 
-function Set-ClockBack([int]$Minutes = 31) {
+function Set-ClockBack([int]$Minutes = 6) {
     $statePath = Join-Path $DataDir "state.json"
     $stateText = [IO.File]::ReadAllText($statePath)
     $state = $stateText | ConvertFrom-Json

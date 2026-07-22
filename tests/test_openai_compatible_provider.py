@@ -106,3 +106,31 @@ async def test_openai_compatible_provider_retries_transient_errors(monkeypatch) 
     request = provider._client.chat.completions.kwargs[-1]
     assert request["extra_body"] == {"thinking": {"type": "disabled"}}
     assert request["tool_choice"]["function"]["name"] == "submit_bundle"
+
+
+@pytest.mark.asyncio
+async def test_openrouter_requires_the_only_supplied_tool() -> None:
+    class Completions:
+        def __init__(self) -> None:
+            self.request = {}
+
+        def create(self, **kwargs):  # noqa: ANN003 —— 同步客户端,经 asyncio.to_thread 调用
+            self.request = kwargs
+            msg = type("Msg", (), {"content": "ok", "tool_calls": []})()
+            choice = type("Choice", (), {"message": msg, "finish_reason": "stop"})()
+            return type("Resp", (), {"choices": [choice], "usage": None})()
+
+    class Client:
+        def __init__(self) -> None:
+            self.chat = type("Chat", (), {"completions": Completions()})()
+
+    provider = OpenAICompatibleProvider(
+        LLMConfig(provider="openrouter", model="openai/gpt-5-mini", api_key="x")
+    )
+    provider._client = Client()  # type: ignore[assignment]
+    tool = ToolSpec(name="submit_bundle", description="submit", parameters={"type": "object"})
+
+    await provider.generate([Message(role=Role.USER, content="hi")], tools=[tool])
+
+    request = provider._client.chat.completions.request
+    assert request["tool_choice"]["function"]["name"] == "submit_bundle"

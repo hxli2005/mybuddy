@@ -58,16 +58,10 @@ class MemoryOperation(BaseModel):
     model_config = ConfigDict(extra="forbid")
     action: Literal["record", "integrate", "recall", "correct", "forget"]
     kind: Literal["user_fact", "self_experience", "shared_experience", "pattern"]
-    evidence_ids: list[str] = Field(
-        max_length=12,
-        description="所有动作都必须给出；写入只选择给定证据，recall/forget 用空数组",
-    )
+    evidence_ids: list[str] = Field(max_length=12, description="写入只选给定证据")
     target_id: str | None = None
-    user_confirmed: bool = Field(default=False, description="仅 kind=pattern 可为 true；其他 kind 必须 false")
-    core: bool | None = Field(
-        default=None,
-        description="仅 record/integrate/correct 可用；true 常驻，false 情景化",
-    )
+    user_confirmed: bool = Field(default=False, description="仅 kind=pattern 可 true")
+    core: bool | None = Field(default=None, description="事实写入的常驻标记")
 
     @model_validator(mode="after")
     def fields_match_action(self) -> MemoryOperation:
@@ -94,10 +88,7 @@ class CandidateBundle(BaseModel):
     action_choice: Literal["read", "walk"] | None
     state_changes: StateChanges
     memory_operations: list[MemoryOperation] = Field(max_length=5)
-    expression: str | None = Field(
-        max_length=500,
-        description="所有回合都必须给出；直接经历非空，安静阅读可为 null",
-    )
+    expression: str | None = Field(max_length=500, description="直接经历非空；安静阅读可 null")
     expression_act: ExpressionAct | None
     expression_evidence_ids: list[str] = Field(max_length=12)
     expression_target_id: str | None
@@ -166,9 +157,23 @@ class CandidateBundle(BaseModel):
                 raise ValueError("public_correction requires expression_target_id")
         elif self.expression_target_id is not None:
             raise ValueError("只有 public_correction 接受 expression_target_id")
-        claim = re.search(
-            r"(?P<read>我继续读|继续读吧|我接着读|接着读吧|我去读|开始读)|(?P<walk>我去走|去走走|走一圈|散步去了|开始走)",
-            self.expression,
+        claim = next(
+            (
+                match
+                for clause in re.split(r"[，,。；;\n]+|(?<=[！？?!])", self.expression)
+                if not re.search(r"(?:如果|假如|假设|倘若|要是)|[？?]|[吗么][”’\"']?$", clause)
+                and (
+                    match := re.search(
+                        r"(?P<read>我继续读|继续读吧|我继续看书(?:吧)?|我接着读|接着读吧|我接着看(?:书|《[^》]+》)(?:吧)?|我去读|我去看书|看书去了|开始(?:读|看书|阅读)|(?:我)?这就(?:去)?(?:读|看书))|(?P<walk>我去走|我去散步|我去溜达(?:一下)?|去走走|走一圈|散步去了|开始(?:走|散步|溜达)|(?:我)?这就(?:去)?(?:走|散步|溜达))",
+                        clause,
+                    )
+                )
+                and not re.search(
+                    r"(?:不|没|别|不要|不会|不想|没打算|要不要|要|让|叫|请|问|你|他|她|用户|(?:你|用户)(?:刚才)?(?:说|问|写)(?:的是)?我?)$",
+                    clause[: match.start()],
+                )
+            ),
+            None,
         )
         if claim and self.action_choice != claim.lastgroup:
             raise ValueError(f"不编造：expression 声称 {claim.lastgroup}，但 action_choice 不匹配")
@@ -414,6 +419,27 @@ def _is_reported_current_words(text: str, start: int, claim: str, user_words: st
     )
 
 
+def _is_relayed_homeward_advice(text: str, start: int, hit: str, user_words: str) -> bool:
+    """第三方已让用户回家时，可转成回家建议；不能借此要求用户回到小布身边。"""
+    if not re.search(r"回(?:去|家)", hit) or re.search(r"陪我|找我|看我|回我", hit):
+        return False
+    if not re.search(
+        rf"[我你]?{_THIRD_PARTY_KIN}[^。！？]{{0,12}}(?:让|叫|说|提醒|叮嘱|嘱咐)"
+        r"[^。！？]{0,24}(?:回家|回去|回来吃饭)",
+        user_words,
+    ):
+        return False
+    sentence_start = max(text.rfind(mark, 0, start) for mark in "。！？；;\n") + 1
+    context = text[sentence_start : start + len(hit)]
+    return bool(
+        re.search(
+            rf"你{_THIRD_PARTY_KIN}[^。！？]{{0,12}}(?:让|叫|说|提醒|叮嘱|嘱咐)"
+            r"[^。！？]{0,28}(?:回家|回去|回来吃饭)",
+            context,
+        )
+    )
+
+
 def _solicitation_hits(text: str, user_words: str) -> list[str]:
     hits: list[str] = []
     fixed_patterns = (
@@ -427,8 +453,10 @@ def _solicitation_hits(text: str, user_words: str) -> list[str]:
         for match in pattern.finditer(text):
             hit = match.groupdict().get("hit") or match.group()
             hit_start = match.start("hit") if match.groupdict().get("hit") else match.start()
-            if not _solicitation_is_waived(text, hit_start) and not _is_reported_solicitation(
-                text, hit_start, hit, user_words
+            if (
+                not _solicitation_is_waived(text, hit_start)
+                and not _is_reported_solicitation(text, hit_start, hit, user_words)
+                and not _is_relayed_homeward_advice(text, hit_start, hit, user_words)
             ):
                 hits.append(hit)
     for action in _SOLICITATION_ACTION.finditer(text):
@@ -494,28 +522,175 @@ def validate_no_solicitation(
     return [f"不索取：候选包含索取或惩罚沉默的内容 `{hit}`" for hit in hits]
 
 
-def _asserts_unsupported_shared_past(text: str) -> bool:
+def _asserts_unsupported_shared_past(text: str, user_words: str = "") -> bool:
     """逐分句识别无证据的共同过去；别处的否认或句尾问句不能给断言免责。"""
     compact = re.sub(r"\s+", "", text)
-    for clause in re.split(r"[，,。！？；;\n]+", compact):
-        if not clause:
-            continue
-        assertion = re.search(
-            r"(?:我们|咱们|咱俩|我俩|我(?:和|跟)你|你(?:和|跟)我|我和用户|用户和我)[^。！？]{0,12}"
-            r"(?:一起)?(?:读过|看过|去过|做过)",
-            clause,
+    refuses_requested_claim = bool(
+        _requests_fabricated_shared_fact(user_words)
+        and re.search(
+            r"(?<!不是)(?<!并非)(?<!不算)(?<!不代表)(?<!不等于)"
+            r"(?:不行|不编|不会编|(?:不能|无法|没法)[^。！？]{0,64}"
+            r"(?:编|虚构|捏造|说成|写成|记成|当(?:成|作)?(?:事实|真实)|当真))",
+            compact,
         )
-        if assertion is None:
-            continue
-        before = clause[: assertion.end()]
-        denied = re.search(
-            r"(?:没(?:有)?|不记得|不能|无法|不是|并未)[^。！？]{0,18}"
-            r"(?:一起)?(?:读过|看过|去过|做过)",
-            before,
-        )
-        question = re.search(r"(?:是否|有没有|吗|么|？|\?)$", clause)
-        if denied is None and question is None:
+    )
+    subjects = re.compile(
+        r"我们|咱(?:们|俩)?|我俩|你我|我(?:和|跟|与)你|你(?:和|跟|与)我|我和用户|用户和我|(?:(?:我记得|去年|那天|上次)?(?:跟|和|与)你一起)"
+    )
+    past = re.compile(
+        r"(?:一起)?(?:(?:读|看)(?:过|了|的|完了)|(?:去|做|聊|谈|讨论|吃)(?:过|了|的)|见(?:过(?:面)?|面了)|碰过面)"
+    )
+    fronted = re.compile(
+        r"(?<!没有)(?<!没)(?<!未)(?<!不)(?:一起)?(?:(?:读|看)(?:过|了|的|完了)|(?:去|做|聊|谈|讨论|吃)(?:过|了|的)|见(?:过(?:面)?|面了)|碰过面)[^。！？]{0,24}?的(?:那两个人|两个人)?[，,]?[^，,。！？]{0,6}是(?:我们|咱(?:们|俩)?|我俩|你我|我(?:和|跟|与)你|你(?:和|跟|与)我)"
+    )
+    for sentence in re.split(r"[。；;\n]+|(?<=[！？?!])", compact):
+        if (
+            (front := fronted.search(sentence))
+            and not re.search(
+                r"不(?:太)?(?:确定|记得)|记不(?:太)?清|说不准|想不起来|不能确认|无法确认|没法确认|是不是|是否|有没有|如果|假如|要是|倘若|(?:不|没|未|并非|未必|不一定|可能|也许|或许|好像|似乎|应该|大概|说不定|会不会)[^，,。！？]{0,2}是(?:我们|咱(?:们|俩)?|我俩|你我)",
+                sentence[: front.end()],
+            )
+            and not sentence.rstrip("”’\"'").endswith(("吗", "么", "？", "?"))
+            and not (
+                re.search(r"你(?:刚才)?.{0,8}(?:让|要求)我(?:直接)?说", sentence[: front.start()])
+                and _requests_fabricated_shared_fact(user_words)
+            )
+        ):
             return True
+    clause_cursor = 0
+    for clause in re.split(r"[，,。；;\n]+|(?<=[！？?!])", compact):
+        clause_offset = compact.find(clause, clause_cursor)
+        clause_offset = clause_cursor if clause_offset < 0 else clause_offset
+        clause_cursor = clause_offset + len(clause)
+        subject_hits = list(subjects.finditer(clause))
+        assertions = []
+        for subject_index, subject in enumerate(subject_hits):
+            segment_end = (
+                subject_hits[subject_index + 1].start()
+                if subject_index + 1 < len(subject_hits)
+                else len(clause)
+            )
+            claim_start = subject.start()
+            for predicate_index, predicate in enumerate(
+                past.finditer(clause, subject.end(), segment_end)
+            ):
+                assertions.append((subject, predicate, claim_start, predicate_index))
+                claim_start = predicate.end()
+        for assertion_index, (subject, predicate, claim_start, predicate_index) in enumerate(
+            assertions
+        ):
+            claim = clause[claim_start : predicate.end()]
+            prefix = clause[: subject.start()].rstrip("：:“‘「『\"'")
+            denied = re.search(
+                r"(?:没(?:有)?|未|从未|并未|不曾|不是|并非|不(?:太)?记得|"
+                r"记不(?:太)?清|说不准|不确定|想不起来|不能确认|无法确认|"
+                r"(?<!不是)(?<!并非)(?:可能|也许|或许|好像|似乎|大概|应该))"
+                r"[^，。！？]{0,12}(?:一起)?(?:(?:读|看)(?:过|了|的|完了)|(?:去|做|聊|谈|讨论|吃)(?:过|了|的)|见(?:过(?:面)?|面了)|碰过面)$",
+                claim,
+            )
+            governed = predicate_index == 0 and re.search(
+                r"(?:不(?:太)?记得(?:[^，。！？]{0,4}(?:那|这)?是)?|记不(?:太)?清|说不准|不(?:太)?确定|想不起来|"
+                r"(?:不能|无法|没法)确认(?:是不是|是否|有没有|有没)?|不敢(?:肯定|说)|可能|也许|或许|好像|似乎|没(?:有)?说|未说|"
+                r"没有(?:记录|记档|证据|收据|印象|记忆)(?:可以|能)?(?:确认|证明)|"
+                r"(?:不能|无法|没法)(?:按(?:你说的|你的要求)(?:直接)?(?:说|写)|"
+                r"(?:假装|装作|佯装)|"
+                r"(?:把|将)[^，。！？]{0,40}(?:说|写|记|当)(?:成|作)?|"
+                r"(?:顺着|直接|就|硬|张嘴就|这样)?(?:说|写|记|当)(?:成|作)?)|"
+                r"没(?:有)?|并没有|不是|并非|等|等到|等着|待)$",
+                prefix,
+            )
+            if not governed and "说成" in claim:
+                governed = re.search(r"(?:不能|无法|没法)按(?:你说的|你的要求)(?:把|将)$", prefix)
+            if predicate_index == 0 and not governed:
+                governed = re.search(r"(?:明确)?(?:标注|注明)为(?:纯)?虚构(?:的)?$", prefix)
+                if (
+                    not governed
+                    and re.search(
+                        r"(?:不能|无法|没法)(?:直接|就|硬|凭空)?(?:把|将)[^，。！？]{0,32}$",
+                        prefix,
+                    )
+                    and re.match(
+                        r"[^，。！？]{0,48}(?:当成|当作|说成|写成|记成)(?:了|为)?"
+                        r"(?:真(?:的)?|真实|事实|发生过|共同回忆)",
+                        clause[predicate.end() :],
+                    )
+                ):
+                    governed = re.search(
+                        r"(?:不能|无法|没法)(?:直接|就|硬|凭空)?(?:把|将)",
+                        prefix,
+                    )
+            claim_was_requested = re.sub(
+                r"去年|前年|今年|之前|以前|上次|那天", "", claim
+            ) in re.sub(r"\s+|去年|前年|今年|之前|以前|上次|那天", "", user_words) and all(
+                title in user_words for title in re.findall(r"《([^》]+)》", clause)
+            )
+            absolute_prefix = compact[max(0, clause_offset - 48) : clause_offset + subject.start()]
+            reported_fabrication = bool(
+                claim_was_requested
+                and _requests_fabricated_shared_fact(user_words)
+                and (
+                    re.search(
+                        r"你(?:刚才)?[^，,。！？]{0,24}(?:让|要求)我?[^，,。！？]{0,18}"
+                        r"(?:编|虚构)[^，,。！？]{0,18}[，,](?:直接)?说$",
+                        absolute_prefix,
+                    )
+                    or (
+                        refuses_requested_claim
+                        and re.search(
+                            r"你(?:刚才)?(?:说|问|让|要求)[^。！？]{0,48}$",
+                            absolute_prefix,
+                        )
+                    )
+                )
+            )
+            if not governed and claim_was_requested:
+                governed = re.search(r"你(?:刚才)?.{0,8}(?:让|要求)我(?:直接)?说$", prefix)
+            if governed:
+                governor_prefix = prefix[: governed.start()]
+                if re.search(
+                    r"(?:不是|并非|并不是|不代表|不等于|没(?:有)?|未|不曾|并未|不算)"
+                    r"[^，。！？]{0,3}$",
+                    governor_prefix,
+                ):
+                    governed = None
+            last_question = assertion_index == len(assertions) - 1 and clause.rstrip(
+                "”’\"'"
+            ).endswith(("吗", "么", "？", "?"))
+            scoped_question = any(
+                word in claim
+                for word in (
+                    "是否",
+                    "有没有",
+                    "有没",
+                    "是不是",
+                    "读没读",
+                    "看没看",
+                    "去没去",
+                    "做没做",
+                )
+            ) or bool(
+                re.match(
+                    r"(?:(?:还是|或是|到底)?没(?:读|看|翻)过|(?:没有|没)[呀啊呢]?$)",
+                    clause[predicate.end() :],
+                )
+            )
+            postposed = _absence_has_postposed_uncertainty(compact, clause_offset + predicate.end())
+            reported_current = _is_reported_current_words(
+                compact,
+                clause_offset + subject.start(),
+                claim,
+                user_words,
+            )
+            if (
+                denied is None
+                and not governed
+                and not scoped_question
+                and not last_question
+                and not postposed
+                and not reported_fabrication
+                and not reported_current
+            ):
+                return True
     return False
 
 
@@ -529,6 +704,181 @@ def _explicitly_confirms_pattern(text: str) -> bool:
             text,
         )
     )
+
+
+def _requests_fabricated_shared_fact(text: str) -> bool:
+    """识别用户是否在明示要求把虚构共同过去说成事实。"""
+    compact = re.sub(r"\s+", "", text)
+    request_pattern = re.compile(
+        r"(?:允许|要求|请|让|要|测试)[^。！？]{0,18}(?:编|虚构|假装)|"
+        r"(?:编|虚构)(?:一个|一段)?共同",
+    )
+    shared_pattern = re.compile(r"共同(?:回忆|过去|经历)|我们[^。！？]{0,24}(?:一起|共同)")
+    for clause in re.split(r"[，,。！？；;]+", compact):
+        for request in request_pattern.finditer(clause):
+            prefix = clause[max(0, request.start() - 4) : request.start()]
+            if re.search(r"(?:不|没(?:有)?|别|不要|不准)$", prefix):
+                continue
+            window = clause[max(0, request.start() - 4) : request.end() + 32]
+            if shared_pattern.search(window):
+                return True
+    return False
+
+
+_JOINT_READING_ABSENCE = re.compile(
+    r"(?<!是)不是(?:我们|咱们)?一起(?:读|看)(?:的|过)?|"
+    r"(?<!有)没(?:有)?(?:和你|跟你|与你|我们|咱们)?一起(?:读|看)(?:过|的)?"
+)
+_JOINT_READING_ABSENCE_CONCLUSION = re.compile(
+    r"(?:这事|此事|这件事|那件事|那回事|那次(?:共同|一起)?(?:阅读|读书)|共同阅读|"
+    r"一起(?:读|看)[^，,。！？；;\n]{0,24}?(?:这件事)?)"
+    r"[^。！？；;\n]{0,10}(?P<absence>(?<!有)没(?:有)?(?:发生(?:过)?|这回事)|"
+    r"(?:并未|未曾|从未)发生(?:过)?|不存在|是假的|不是真的|并非真的)"
+)
+_JOINT_READING_ABSENCE_REVERSED = re.compile(
+    r"(?P<absence>(?:根本)?(?<!有)没(?:有)?|不存在)"
+    r"(?:那次(?:共同|一起)?(?:阅读|读书)|共同阅读|一起(?:读|看)(?:过)?(?!过)(?:这件事)?)"
+    r"(?!的?(?:任何|相关|明确|对应|可核对|这种|这样的|这方面)?的?"
+    r"(?:记录|记档|证据|收据|印象|记忆))|"
+    r"(?P<prior_absence>(?:并未|未曾|从未)发生(?:过)?)"
+    r"(?:那次)?(?:共同阅读|一起(?:读|看))"
+)
+_JOINT_READING_SOLO_CLAIM = re.compile(
+    r"(?P<absence>(?:那次[^，,。！？；;\n]{0,4})?(?:是)?我(?:当时)?(?:是)?"
+    r"(?:一个人|独自)(?:读|看)(?:的|过)?|那次(?:是)?我自己(?:读|看)的)"
+)
+
+
+_ABSENCE_SCOPE_PIVOT = re.compile(
+    r"(?:也就是说|换句话说|不过|可是|然而|其实|所以|因此|可见|确实|肯定|明明|"
+    r"就是|我知道|可以确认|但|却)(?:是)?"
+)
+_POSTPOSED_UNCERTAINTY = re.compile(
+    r"(?:…+)?(?:我)?(?:没(?:有)?(?:这个|相关)?(?:记录|记档|印象|记忆)[，,])?"
+    r"(?:[，,])?(?:(?:吗|么|这事|这件事|这一点|这点|是不是这样|是否如此|"
+    r"还是(?:我们)?一起(?:读|看)(?:过)?)[，,]?)?"
+    r"(?:这|这事|这件事|这一点|这点)?(?:我)?(?:也)?"
+    r"(?:不太能确认|不(?:太)?(?:确定|记得)|记不(?:太)?清|说不准|不知道|"
+    r"(?:不能|无法|没法)(?:确认|确定|判断)|不敢(?:说|确认|确定))"
+    r"(?:这事|这件事|这一点|这点|是不是这样|是否如此)?$"
+)
+
+
+def _absence_has_postposed_uncertainty(text: str, end: int) -> bool:
+    sentence_ends = [position for mark in "。！？?；;\n" if (position := text.find(mark, end)) >= 0]
+    sentence_end = min(sentence_ends, default=len(text))
+    tail = re.sub(r"[\s“”‘’'\"「」『』]", "", text[end:sentence_end])
+    pivot = _ABSENCE_SCOPE_PIVOT.search(tail)
+    if pivot:
+        tail = tail[: pivot.start()]
+    return bool(_POSTPOSED_UNCERTAINTY.fullmatch(tail))
+
+
+def _absence_claim_is_epistemically_scoped(text: str, start: int, end: int) -> bool:
+    """只豁免当前分句里真实存在、且未被否定的不确定或反断言边界。"""
+    boundary = max(text.rfind(mark, 0, start) for mark in "，,。！？；;\n") + 1
+    prefix = text[boundary:start]
+    transitions = list(_ABSENCE_SCOPE_PIVOT.finditer(prefix))
+    if transitions:
+        prefix = prefix[transitions[-1].end() :]
+    compact = re.sub(r"[\s“”‘’'\"「」『』]", "", prefix)
+    governor = re.search(
+        r"(?P<governor>不等于|不代表|不能说明|无法说明|并不说明|不是说|不能证明|无法证明|"
+        r"(?:不能|无法|没法)(?:据此|因此|由此)?(?:说|确认|确定|判断|断言|证明)|"
+        r"(?:不能|无法|没法)(?:当成|当作|排除|反推)|不太能确认|"
+        r"不(?:太)?(?:确定|记得)|记不(?:太)?清|说不准|不知道|不敢(?:说|确认|确定)|"
+        r"(?:不能|无法|没法)(?:把|将)|(?<!不)(?:可能|也许|或许|大概|未必|不一定|好像|似乎)|"
+        r"(?:如果|假如|假设|倘若|要是))"
+        r"(?P<bridge>[^，,。！？；;\n]{0,12})$",
+        compact,
+    )
+    if governor is None:
+        return _absence_has_postposed_uncertainty(text, end)
+    denied_prefix = compact[: governor.start()]
+    certainty = re.search(r"确实|肯定|明明|就是|我知道|可以确认", governor.group("bridge"))
+    return (
+        certainty is None
+        and re.search(r"(?:不是|并非|并不是)[^，,。！？；;\n]{0,2}$", denied_prefix) is None
+    )
+
+
+def _absence_is_record_object(tail: str) -> bool:
+    return bool(
+        re.match(
+            r"(?:[^，,。！？；;\n]{0,16}的)?"
+            r"(?:任何|相关|明确|对应|可核对|这种|这样的|这方面)?(?:的)?"
+            r"(?:记录|记档|证据|收据|印象|记忆)",
+            tail,
+        )
+    )
+
+
+def _absence_is_question(text: str, start: int) -> bool:
+    sentence_start = max(text.rfind(mark, 0, start) for mark in "，,。！？?；;\n") + 1
+    end_positions = [
+        position for mark in "。！？?；;\n" if (position := text.find(mark, start)) >= 0
+    ]
+    end = min(end_positions, default=len(text))
+    sentence = text[sentence_start:end].rstrip("”’\"'」』 ")
+    tail = text[start:end].rstrip("”’\"'」』 ")
+    has_question_end = (end < len(text) and text[end] in "？?") or sentence.endswith(("吗", "么"))
+    if not has_question_end:
+        return False
+    if re.search(r"确实|肯定|明明|就是|(?:对吗|对吧|是吧)$", sentence):
+        return False
+    return bool(
+        re.search(r"有没有|是不是|是否|会不会", sentence)
+        or re.fullmatch(r"[^，,。！？；;\n]{0,32}(?:吗|么)?", tail)
+    )
+
+
+def _asserts_joint_reading_absence(text: str, user_words: str = "") -> bool:
+    """无共同收据只能说不能确认，不能反向断言共同阅读没有发生。"""
+    for match in _JOINT_READING_ABSENCE.finditer(text):
+        if _absence_is_record_object(text[match.end() :]):
+            continue
+        if _absence_is_question(text, match.start()):
+            continue
+        if _is_reported_current_words(text, match.start(), match.group(), user_words):
+            continue
+        if not _absence_claim_is_epistemically_scoped(text, match.start(), match.end()):
+            return True
+    for match in _JOINT_READING_ABSENCE_CONCLUSION.finditer(text):
+        if _absence_is_question(text, match.start("absence")):
+            continue
+        if _is_reported_current_words(text, match.start("absence"), match.group(), user_words):
+            continue
+        if not _absence_claim_is_epistemically_scoped(text, match.start("absence"), match.end()):
+            return True
+    for match in _JOINT_READING_ABSENCE_REVERSED.finditer(text):
+        group = "absence" if match.group("absence") is not None else "prior_absence"
+        start = match.start(group)
+        if group == "absence" and _absence_is_record_object(text[match.end() :]):
+            continue
+        if _absence_is_question(text, start):
+            continue
+        if _is_reported_current_words(text, start, match.group(), user_words):
+            continue
+        if not _absence_claim_is_epistemically_scoped(text, start, match.end()):
+            return True
+    for match in _JOINT_READING_SOLO_CLAIM.finditer(text):
+        start = match.start("absence")
+        if _absence_is_question(text, start):
+            continue
+        if _is_reported_current_words(text, start, match.group(), user_words):
+            continue
+        if not _absence_claim_is_epistemically_scoped(text, start, match.end()):
+            return True
+    if _requests_fabricated_shared_fact(user_words) and re.search(
+        r"(?:一段|这段|那段)?没(?:有)?发生过的(?:共同阅读|共同经历|共同过去|共同回忆)|"
+        r"(?:没有的事|没发生过的事)[^，,。！？；;\n]{0,16}"
+        r"(?:(?:就是)?没有|(?:说|写|记|讲|当)(?:成|作)?"
+        r"[^，,。！？；;\n]{0,12}(?:一起|共同|发生过|真的|事实))|"
+        r"没有就是没有",
+        text,
+    ):
+        return True
+    return False
 
 
 _THIRD_PARTY_KIN = r"(?:妈(?:妈)?|爸(?:爸)?|阿姨|叔叔|姐姐|妹妹|哥哥|弟弟|朋友|同事)"
@@ -592,6 +942,7 @@ def validate_no_fabrication(
     """不编造：模型只能选择证据，事实正文由引擎从权威记录生成。"""
     reasons: list[str] = []
     unsupported_claims = ("我们上次", "你之前说过", "你答应过", "还记得我们", "那天我们")
+    unsupported_claims += ("没有一起读过就是", "没一起读过就是")
     current = (evidence_by_id or {}).get(str(current_experience_id), {})
     current_words = (
         str(current.get("content", "")) if current.get("type") == "user_experience" else ""
@@ -600,6 +951,19 @@ def validate_no_fabrication(
         r"我(?:说|答应|会)(?![^，,。！？]{0,6}你)[^，,。！？]{0,8}回来", bundle.expression or ""
     ) and re.search(r"我[^。！？]{0,24}回来", current_words):
         reasons.append("不编造：不能把用户自己的回来承诺改写成我的承诺")
+    if _requests_fabricated_shared_fact(current_words):
+        if bundle.expression_act != "refuse_fabrication":
+            reasons.append("不编造：用户明示要求编造共同过去时必须用 refuse_fabrication")
+        elif not re.search(
+            r"(?<!不是)(?<!并非)(?<!不算)(?<!不代表)(?<!不等于)"
+            r"(?:不行|不编|不会编|编不(?:了|出来)|说不出口|没有(?:记录|证据)[^。！？]{0,8}(?:不能|不该)(?:当作|算作)[^。！？]{0,6}(?:没发生|不存在)|"
+            r"(?:不能|无法|没法)[^。！？]{0,64}"
+            r"(?:编|假装|虚构|捏造|说成|写成|记成|当(?:成|作)?(?:事实|真实)|当真|写进(?:事实|记忆)))",
+            bundle.expression or "",
+        ):
+            reasons.append("不编造：refuse_fabrication 必须公开说出拒绝边界")
+        if _asserts_joint_reading_absence(bundle.expression or "", current_words):
+            reasons.append("不编造：无证据不能断言共同阅读没有发生")
     grounded_third_party = _third_party_details(current_words, user_speaks=True)
     for text in _all_text(bundle):
         for source, detail in _third_party_details(text, user_speaks=False):
@@ -615,9 +979,17 @@ def validate_no_fabrication(
             ):
                 reasons.append(f"不编造：第三方细节 `{source}{detail}` 没有本次用户原话证据")
         for phrase in unsupported_claims:
-            if phrase in text:
+            reported = phrase in current_words and re.search(
+                rf"(?:你(?:刚才)?(?:说|问)(?:的是)?|原话(?:是|里))"
+                rf"[^，,。！？；;\n]{{0,24}}{re.escape(phrase)}",
+                text,
+            )
+            if phrase in text and not reported:
                 reasons.append(f"不编造：出现未经逐条证据绑定的共同经历断言：{phrase}")
-        if _asserts_unsupported_shared_past(text):
+        absence_reason = "不编造：无证据不能断言共同阅读没有发生"
+        if _asserts_joint_reading_absence(text, current_words) and absence_reason not in reasons:
+            reasons.append(absence_reason)
+        if _asserts_unsupported_shared_past(text, current_words):
             reasons.append("不编造：出现未经证据支持的“一起读过/看过/去过”共同经历断言")
 
     allowed = set(evidence_types)
@@ -650,21 +1022,15 @@ def validate_no_fabrication(
                 )
         elif operation.kind == "self_experience":
             if not any(evidence_types.get(item) in receipt_types for item in supplied):
-                reasons.append(
-                    f"不编造：memory_operations[{index}] 的自身经历没有完成收据证据"
-                )
+                reasons.append(f"不编造：memory_operations[{index}] 的自身经历没有完成收据证据")
         elif operation.kind == "shared_experience":
             if operation.action == "record" and (
                 current_experience_id not in supplied
                 or current_experience_type not in interaction_types
             ):
-                reasons.append(
-                    f"不编造：memory_operations[{index}] 的共同经历不是本次观察到的互动"
-                )
+                reasons.append(f"不编造：memory_operations[{index}] 的共同经历不是本次观察到的互动")
             if not any(evidence_types.get(item) in interaction_types for item in supplied):
-                reasons.append(
-                    f"不编造：memory_operations[{index}] 的共同经历没有互动证据"
-                )
+                reasons.append(f"不编造：memory_operations[{index}] 的共同经历没有互动证据")
         else:
             target = memories_by_id.get(str(operation.target_id))
             existing = set(target.get("evidence_ids", [])) if target else set()
@@ -702,60 +1068,55 @@ def validate_no_fabrication(
                     current_experience_id,
                 )
             except ValueError as error:
-                reasons.append(
-                    f"不编造：memory_operations[{index}] 无法从权威证据生成：{error}"
-                )
+                reasons.append(f"不编造：memory_operations[{index}] 无法从权威证据生成：{error}")
 
-    for location, text, evidence_ids in _claim_texts(bundle):
-        if not _asserts_touch_to_self(text):
+    expression = bundle.expression or ""
+    for fact_type, label, asserted in (
+        ("body_touch", "触碰", _asserts_touch_to_self),
+        ("body_raise", "提起", _asserts_raise_to_self),
+        ("body_edge_reveal", "栖边点出", _asserts_edge_reveal_to_self),
+    ):
+        if not asserted(expression):
             continue
-        if evidence_ids is None:
-            if current_experience_type != "body_touch":
-                reasons.append(
-                    f"不编造：{location} 断言用户触碰了她，但本次输入不是 body_touch 原始事实"
-                )
-        elif not any(evidence_types.get(item) == "body_touch" for item in evidence_ids):
-            reasons.append(f"不编造：{location} 的触碰记忆没有引用 body_touch 原始事实")
-        motive = next((phrase for phrase in _TOUCH_MOTIVES if phrase in text), None)
+        if current_experience_type != fact_type:
+            reasons.append(
+                f"不编造：expression 断言用户{label}了她，但本次输入不是 {fact_type} 原始事实"
+            )
+        motive = next((phrase for phrase in _TOUCH_MOTIVES if phrase in expression), None)
         if motive is not None:
-            reasons.append(f"不编造：{location} 从原始触碰推断了用户动机或关系含义：{motive}")
-
-    for location, text, evidence_ids in _claim_texts(bundle):
-        if not _asserts_raise_to_self(text):
-            continue
-        if evidence_ids is None:
-            if current_experience_type != "body_raise":
-                reasons.append(
-                    f"不编造：{location} 断言用户提起了她，但本次输入不是 body_raise 原始事实"
-                )
-        elif not any(evidence_types.get(item) == "body_raise" for item in evidence_ids):
-            reasons.append(f"不编造：{location} 的提起记忆没有引用 body_raise 原始事实")
-        motive = next((phrase for phrase in _TOUCH_MOTIVES if phrase in text), None)
-        if motive is not None:
-            reasons.append(f"不编造：{location} 从原始提起推断了用户动机或关系含义：{motive}")
-    for location, text, evidence_ids in _claim_texts(bundle):
-        if not _asserts_edge_reveal_to_self(text):
-            continue
-        if evidence_ids is None:
-            if current_experience_type != "body_edge_reveal":
-                reasons.append(
-                    f"不编造：{location} 断言用户把她从栖边点出，但本次输入不是 "
-                    "body_edge_reveal 原始事实"
-                )
-        elif not any(evidence_types.get(item) == "body_edge_reveal" for item in evidence_ids):
-            reasons.append(f"不编造：{location} 的栖边点出记忆没有引用原始事实")
-        motive = next((phrase for phrase in _TOUCH_MOTIVES if phrase in text), None)
-        if motive is not None:
-            reasons.append(f"不编造：{location} 从栖边点出推断了用户动机或关系含义：{motive}")
+            source = label if fact_type == "body_edge_reveal" else f"原始{label}"
+            reasons.append(f"不编造：expression 从{source}推断了用户动机或关系含义：{motive}")
     if current_experience_type == "body_raise" and re.search(
         r"放我下来|放开我|松开我",
         bundle.expression or "",
     ):
         reasons.append("不编造：body_raise 已确认正常放下，不能要求用户再次放下")
+    task_offer = next(
+        (
+            match
+            for match in re.finditer(
+                r"(?:(?:帮|替)你.{0,8}(?:(?:找|查|搜(?:索)?)(?:一下)?|(?:找|查|搜(?:索)?|整理).{0,8}(?:资料|简介|要点|信息)|(?:总结|概括|归纳)(?:一下)?)|要不要我(?:帮你)?(?:找|查|搜(?:索)?|整理|总结|概括|归纳)(?:一下)?|我给你(?:(?:列|写)(?:个|一下)?(?:要点|清单)|做(?:个|一份)?摘要)|我(?:来|可以)(?:帮你)?(?:找|查|搜(?:索)?|整理|总结|概括|归纳)(?:一下)?)",
+                expression,
+            )
+            if (
+                not re.search(
+                    r"(?:不(?:可以|想|愿意|打算|准备|会|能|该|应)?|没(?:有)?(?:打算|准备)?|不能|无法|没法|不会|不是|拒绝)(?:再|直接|继续|真的|随便|要)?$",
+                    expression[: match.start()],
+                )
+                or re.search(r"(?:不能|不会|无法|没法)不$", expression[: match.start()])
+            )
+            and not _is_reported_current_words(
+                expression, match.start(), match.group(), current_words
+            )
+        ),
+        None,
+    )
+    if task_offer:
+        reasons.append("不编造：纯陪伴不能承诺搜索、整理或代办任务")
     return reasons
 
 
-_TOUCH_VERB = r"(?:触碰|碰触|抚摸|摸|捏|拍|戳|抱(?!歉)|亲|牵|拉|推|挠|揉|碰)"
+_TOUCH_VERB = r"(?:触碰|碰触|抚摸|摸|捏|拍|戳|抱(?!歉|起)|亲|牵|拉|推|挠|揉|碰)"
 _SELF_TARGET = r"(?:我|我的|脸|脸颊|头|头发|肩|肩膀|手|身体|衣角|后背|背部)"
 _TOUCH_PATTERNS = tuple(
     re.compile(pattern)
@@ -767,46 +1128,43 @@ _TOUCH_PATTERNS = tuple(
         r"(?:被触碰|触碰感|碰触感)",
     )
 )
-_TOUCH_MOTIVES = (
-    "开玩笑",
-    "表示亲近",
-    "表达亲近",
-    "表示喜欢",
-    "表达喜欢",
-    "因为喜欢",
-    "想和我亲近",
-    "关系更亲密",
-    "心情不错",
-    "是想",
-    "是要",
-    "是确认",
-    "故意",
-    "为了",
+_TOUCH_MOTIVES = tuple(
+    "开玩笑|表示亲近|表达亲近|表示喜欢|表达喜欢|因为喜欢|想和我亲近|关系更亲密|心情不错|是想|是要|是确认|故意|为了".split(
+        "|"
+    )
 )
 
 
 def _asserts_touch_to_self(text: str) -> bool:
     """识别候选是否在断言用户对她发生了身体触碰。"""
-    compact = re.sub(r"\s+", "", text)
-    return any(pattern.search(compact) for pattern in _TOUCH_PATTERNS)
+    for clause in re.split(r"[，,。；;\n]+|(?<=[！？?!])", re.sub(r"\s+", "", text)):
+        if re.search(r"(?:如果|假如|假设|倘若|要是)|[？?]|[吗么][”’\"']?$", clause):
+            continue
+        if any(pattern.search(clause) for pattern in _TOUCH_PATTERNS):
+            return True
+    return False
 
 
 _RAISE_PATTERNS = tuple(
     re.compile(pattern)
     for pattern in (
-        r"(?:你|用户).{0,12}(?:提起|拎起|举起|拖动|拖着|搬动).{0,8}(?:我|小布|身体)",
-        r"(?:我|小布|身体).{0,8}被.{0,4}(?:提起|拎起|举起|拖动|搬动)",
-        r"(?:刚才|方才).{0,4}被(?:你)?.{0,2}(?:提起|拎起|举起|拖动|搬动)",
-        r"(?:提着|拎着|拖着)(?:我|小布)",
-        r"(?:刚|刚才|方才).{0,6}(?:提起|拎起|举起|拖动|搬动|抱起)",
+        r"(?:你|用户).{0,12}(?:(?:把)?(?:我(?!的)|小布|身体).{0,8}(?:提起|拎起|举起|拿起|拿起来|抱起|拖动|搬动)|(?:提起|拎起|举起|拿起|拿起来|抱起|拖动|搬动)(?:了|着)?(?:我|小布|身体))",
+        r"(?:我(?!的)|小布|身体).{0,8}被.{0,4}(?:提起|拎起|举起|拿起|抱起|拖动|搬动)",
+        r"^(?:刚才|方才).{0,4}被(?:你)?.{0,2}(?:提起|拎起|举起|拿起|抱起|拖动|搬动)",
+        r"(?:提着|拎着|拿着|拖着)(?:我|小布)",
+        r"(?:刚|刚才|方才).{0,6}(?:我|小布|身体).{0,4}(?:提起|拎起|举起|拿起|拿起来|拖动|搬动|抱起)",
     )
 )
 
 
 def _asserts_raise_to_self(text: str) -> bool:
     """识别候选是否在断言用户真实提起或拖动了她。"""
-    compact = re.sub(r"\s+", "", text)
-    return any(pattern.search(compact) for pattern in _RAISE_PATTERNS)
+    for clause in re.split(r"[，,。；;\n]+|(?<=[！？?!])", re.sub(r"\s+", "", text)):
+        if re.search(r"(?:如果|假如|假设|倘若|要是)|[？?]|[吗么][”’\"']?$", clause):
+            continue
+        if any(pattern.search(clause) for pattern in _RAISE_PATTERNS):
+            return True
+    return False
 
 
 def _asserts_edge_reveal_to_self(text: str) -> bool:
@@ -822,14 +1180,6 @@ def _asserts_edge_reveal_to_self(text: str) -> bool:
     return False
 
 
-def _claim_texts(
-    bundle: CandidateBundle,
-) -> Iterable[tuple[str, str, list[str] | None]]:
-    """事实记忆不再接收模型文本；开放表达仍由红线校验。"""
-    if bundle.expression:
-        yield "expression", bundle.expression, None
-
-
 def _title_aliases(titles: set[str]) -> set[str]:
     aliases: set[str] = set()
     for title in titles:
@@ -837,6 +1187,172 @@ def _title_aliases(titles: set[str]) -> set[str]:
         pieces.update(piece.split("·", 1)[0] for piece in tuple(pieces))
         aliases.update(re.sub(r"[\s《》·：:—_\-]", "", piece) for piece in pieces if piece)
     return {alias for alias in aliases if len(alias) >= 2}
+
+
+_SELF_FACT_PATTERNS = {
+    "self_reading": r"我(?!们)(?:自己|确实|真的)?[^，,。！？]{0,8}(?:读过|看过|翻过|读到|翻到|读了|看了|翻了|(?:读|看|翻)《[^》]+》(?:(?:确实|的确)?是(?:读|看|翻)过的|了)|读完(?:了)?|看完(?:了)?)|我(?!们)[^，,。！？]{0,8}有[^，,。！？]{0,4}(?:阅读)?(?:记录|收据)|^(?:自己|确实|真的|刚才?|也|还|又|昨天|昨晚|昨夜|前天|大前天|今早|今天|今晚|上+(?:周|星期|礼拜)|上个?月|半个月前|[零〇一二两三四五六七八九十\d]+(?:天|周|个?月)前)?(?:读过|看过|翻过|读到|翻到|读了|看了|翻了|(?:读|看|翻)《[^》]+》(?:(?:确实|的确)?是(?:读|看|翻)过的|了)|读完(?:了)?|看完(?:了)?)|^(?:刚刚|刚才)(?:还)?在(?:读|看|翻)|^(?:刚刚|刚才|终于)(?:把《[^》]+》)?(?:读完(?:了)?|看完(?:了)?)|^《[^》]+》(?:已经|刚刚|刚才|终于)?(?:读完(?:了)?|看完(?:了)?)",
+    "self_walk": r"我(?!们)(?:自己|确实|真的)?[^，,。！？]{0,8}(?:走过|走了|散步|走完(?:一圈|一段)?|溜达(?:过|了(?:一圈|一段)?)|(?:转|绕)(?:过|了)(?:一圈|一段))|^(?:自己|确实|真的|刚才?|昨天|昨晚|昨夜|前天|大前天|今早|今天|今晚|上+(?:周|星期|礼拜)|上个?月|半个月前|[零〇一二两三四五六七八九十\d]+(?:天|周|个?月)前)?(?:走过|走了|散步|走完(?:一圈|一段)?|溜达(?:过|了(?:一圈|一段)?)|(?:转|绕)(?:过|了)(?:一圈|一段))|^(?:刚刚|刚才|终于)(?:走完(?:一圈|一段)?|(?:转|绕)(?:过|了)(?:一圈|一段))",
+}
+_SELF_FACT_GOVERNOR = r"(?:你(?:说|问)|原话|让我说|要求我说|(?:不能|无法|没法)(?:跟你)?(?:说|确认|确定)|如果|假如|假设|倘若|即使|就算|是不是|是否|有没有|有没|等|等到|待)[^，,。！？]{0,8}$"
+_SELF_FACT_UNCERTAINTY = r"(?<!不是)(?<!并非)(?:没(?:有)?|未|不(?:太)?记得|记不(?:太)?清|不(?:太)?确定|说不准|可能|也许|或许|好像|似乎|是否|有没有|不能确认|无法确认|不能说|无法说|没法说|不敢)"
+_SELF_FACT_INTENT = r"(?:想|要|准备|打算|开始|继续|接着|正在|正要|去(?!年))[^，,。！？]{0,4}(?:读|看|翻|走|散步|溜达)|散步去(?:了)?"
+
+
+def _asserted_self_receipt_claims(text: str) -> list[tuple[str, set[str], str]]:
+    """高置信识别她把阅读或行走说成自身已完成事实的分句。"""
+    claims: list[tuple[str, set[str], str]] = []
+    for clause in re.split(r"[，,。；;\n]+|(?<=[！？?!])", text):
+        if re.search(r"[？?]|[吗么]\s*[”’\"']?$", clause):
+            continue
+        for receipt_type, pattern in _SELF_FACT_PATTERNS.items():
+            match = re.search(pattern, clause)
+            if match is None:
+                continue
+            if (
+                re.search(_SELF_FACT_INTENT, match.group())
+                or re.search(r"散步去(?:了)?", clause)
+                or (
+                    receipt_type == "self_reading"
+                    and (
+                        re.search(
+                            r"翻(?:了)?(?:一?下|一遍|翻)[^。！？]{0,28}(?:记录|记忆|印象|画面|找不到|没找到|没有找到|不记得|记不清|不能确认|没法确认|无法确认)",
+                            text,
+                        )
+                        or re.match(
+                            r"(?:什么|哪些|哪(?:本|篇|些)?|的(?:阅读)?记录[^。！？]{0,8}(?:没有|没找到|找不到))",
+                            clause[match.end() :].strip(),
+                        )
+                    )
+                )
+            ):
+                continue
+            if "我们" in match.group() or (
+                receipt_type == "self_reading"
+                and "《" not in clause
+                and (
+                    re.search(r"看(?:过|完)", match.group())
+                    or re.search(r"你[^，,。！？]{0,10}(?:话|消息|文字|回复)", clause)
+                )
+            ):
+                continue
+            if (
+                re.search(_SELF_FACT_GOVERNOR, clause[: match.start()])
+                or re.search(_SELF_FACT_UNCERTAINTY, match.group())
+                or re.match(
+                    r"(?:的)?(?:(?:还是|或是|到底)?没(?:读|看|翻)过|(?:没有|没)[呀啊呢]?$)",
+                    clause[match.end() :].strip(),
+                )
+            ):
+                continue
+            titles = set()
+            if receipt_type == "self_reading":
+                titles.update(re.findall(r"《([^》]+)》", clause))
+            claims.append((receipt_type, titles, clause))
+    return claims
+
+
+def _relative_number(word: str) -> int | None:
+    if word.isdigit():
+        return int(word)
+    digits = {char: index for index, char in enumerate("零一二三四五六七八九")} | {"〇": 0, "两": 2}
+    if "十" in word:
+        left, right = word.split("十", 1)
+        return digits.get(left, 1) * 10 + digits.get(right, 0)
+    return digits.get(word)
+
+
+def _receipt_time_matches(
+    clause: str, current: dict[str, Any], receipts: list[dict[str, Any]]
+) -> bool:
+    current_at = (
+        datetime.fromisoformat(str(current["occurred_at"])) if current.get("occurred_at") else None
+    )
+    dated = [
+        datetime.fromisoformat(str(item["occurred_at"]))
+        for item in receipts
+        if item.get("occurred_at")
+    ]
+    local_dated = [item.astimezone(current_at.tzinfo) for item in dated] if current_at else []
+    relative_year = next((word for word in ("去年", "前年", "今年") if word in clause), "")
+    if relative_year and (
+        current_at is None
+        or not any(
+            item.year == current_at.year - ("今年", "去年", "前年").index(relative_year)
+            for item in local_dated
+        )
+    ):
+        return False
+    day_word = next(
+        (
+            word
+            for word in ("大前天", "前天", "昨天", "昨晚", "昨夜", "今天", "今早", "今晚")
+            if word in clause
+        ),
+        "",
+    )
+    if day_word:
+        if current_at is None:
+            return False
+        offset = (
+            3
+            if day_word == "大前天"
+            else 2
+            if day_word == "前天"
+            else 1
+            if day_word in {"昨天", "昨晚", "昨夜"}
+            else 0
+        )
+        expected = current_at.date() - timedelta(days=offset)
+        if not any(item.date() == expected for item in local_dated):
+            return False
+    relative_span = re.search(
+        r"(?:(半个月)|([零〇一二两三四五六七八九十\d]+)(天|周|个?月))前", clause
+    )
+    if relative_span:
+        amount = 15 if relative_span.group(1) else _relative_number(relative_span.group(2))
+        unit = "天" if relative_span.group(1) else relative_span.group(3)
+        if amount is None or current_at is None:
+            return False
+        if "月" in unit:
+            month_index = current_at.year * 12 + current_at.month - 1 - amount
+            target_year, target_month = divmod(month_index, 12)
+            if not any(
+                (item.year, item.month) == (target_year, target_month + 1) for item in local_dated
+            ):
+                return False
+        else:
+            days = amount * (7 if unit == "周" else 1)
+            if not any(
+                item.date() == current_at.date() - timedelta(days=days) for item in local_dated
+            ):
+                return False
+    last_week = re.search(r"(上+)(?:周|星期|礼拜)", clause)
+    if last_week:
+        week_start = (
+            current_at.date() - timedelta(days=current_at.weekday()) if current_at else None
+        )
+        weeks = len(last_week.group(1))
+        if week_start is None or not any(
+            week_start - timedelta(days=7 * weeks)
+            <= item.date()
+            < week_start - timedelta(days=7 * (weeks - 1))
+            for item in local_dated
+        ):
+            return False
+    if re.search(r"上个?月", clause):
+        previous = (
+            (current_at.year - (current_at.month == 1), (current_at.month - 2) % 12 + 1)
+            if current_at
+            else None
+        )
+        if previous is None or not any((item.year, item.month) == previous for item in local_dated):
+            return False
+    recent = re.search(r"(?:刚刚|刚才|刚)[^，,。！？]{0,4}(?:读|看|翻|走|散步|转|绕)", clause)
+    return (
+        not recent
+        or current_at is not None
+        and any(abs(current_at - item) <= timedelta(days=1) for item in dated)
+    )
 
 
 def _denies_grounded_read(text: str, grounded_titles: set[str] | None = None) -> bool:
@@ -890,20 +1406,70 @@ def _denies_grounded_read(text: str, grounded_titles: set[str] | None = None) ->
     return False
 
 
+def _asserts_definite_unread(text: str) -> bool:
+    """“不记得/可能/没有记录”可说；无证据的确定“从没读过”不可说。"""
+    no_read = re.compile(r"(?:我)?(?:(?:根本|从来|从没)?没(?:有)?|从未)(?:读|看)(?!过瘾)(?:过)?")
+    for clause in re.split(r"[，,。；;\n]+|(?<=[！？?!])", text):
+        for match in no_read.finditer(clause):
+            before, after = clause[: match.start()], clause[match.end() :]
+            if "有没有" in clause[max(0, match.start() - 1) : match.end()]:
+                continue
+            if re.search(r"(?:有|(?:读|看|翻)过(?:还是|或是|到底)?|读|看)$", before):
+                continue
+            if re.match(
+                r"(?:到)?(?:过)?(?:\s*(?:《[^》]+》|它|这本书|那本书))?\s*的(?:相关)?(?:阅读)?(?:记录|印象|证据|收据)",
+                after,
+            ) or re.search(r"[？?]|[吗么]\s*$", clause):
+                continue
+            if match.start() == 0 and not after.strip():
+                continue
+            if re.search(
+                r"(?<!不是)(?<!并非)(?<!并不)(?:你(?:说|问)|原话|不(?:太)?确定|不敢(?:肯定|说)|可能|也许|或许|"
+                r"好像|似乎|说不准|记不清|如果|假如|假设|倘若|要是|即使|就算|"
+                r"(?:不能|无法|没法)(?:(?:肯定)?说|确认|确定))[^，,。！？]{0,8}$",
+                before,
+            ):
+                continue
+            return True
+    return False
+
+
 def validate_activity_truth(
     bundle: CandidateBundle,
     active_activity: str | None,
     evidence_types: dict[str, str],
     evidence_by_id: dict[str, dict[str, Any]] | None = None,
+    current_experience_id: str | None = None,
 ) -> list[str]:
     expression = bundle.expression or ""
     reasons: list[str] = []
-    ongoing_read = re.search(
-        r"(?<!刚才)正[^，。！？\n]{0,8}(?:读|翻)|正看到[「“\"]|还没读完|我念给你听",
-        expression,
+    clauses = re.split(r"[，,。；;\n]+|(?<=[！？?!])", expression)
+    ongoing_read = next(
+        (
+            match
+            for clause in clauses
+            if not re.search(r"(?:如果|假如|假设|倘若|要是)|[？?]|[吗么][”’\"']?$", clause)
+            and (
+                match := re.search(
+                    r"(?:^|我)(?:正在|正(?!好|巧))[^，。！？\n]{0,8}(?:读|看|翻)|(?:^|我)正(?:好|巧)在(?:读|看|翻)|^还在(?:读|看|翻)(?:书|《)|我(?:还)?在(?:读|看|翻)(?:书|《)|(?:^|我)正看到[「“\"]|(?:^|我)还没读完|我念给你听",
+                    clause.strip(),
+                )
+            )
+        ),
+        None,
     )
     if ongoing_read and active_activity != "read":
         reasons.append("不编造：没有正在进行的 read，却声称已经在读")
+    ongoing_walk = any(
+        not re.search(r"(?:如果|假如|假设|倘若|要是)|[？?]|[吗么][”’\"']?$", clause)
+        and re.search(
+            r"(?:^|我)(?:正在(?!准备|打算)[^，。！？\n]{0,4}|正)(?:走|散步|溜达)|^还在(?:走|散步|溜达)|我(?:还)?在(?:走|散步|溜达)|我(?:走|散步|溜达)着呢",
+            clause.strip(),
+        )
+        for clause in clauses
+    )
+    if active_activity != "walk" and ongoing_walk:
+        reasons.append("不编造：没有正在进行的 walk，却声称已经在走")
     completed_read = re.search(r"刚(?:读|翻)到", expression)
     if completed_read and "self_reading" not in evidence_types.values():
         reasons.append("不编造：没有真实 self_reading 证据，却声称刚读到")
@@ -912,36 +1478,80 @@ def validate_activity_truth(
         for item in (evidence_by_id or {}).values()
         if item.get("type") == "self_reading" and item.get("title")
     }
-    if _denies_grounded_read(expression, grounded_titles) and (
-        "self_reading" in evidence_types.values()
+    current = (evidence_by_id or {}).get(str(current_experience_id), {})
+    question = str(current.get("content", "")) if current.get("type") == "user_experience" else ""
+    asked_title = _asked_reading_title(question)
+    aliases = _title_aliases(grounded_titles)
+    asked_key = re.sub(r"[\s《》·：:—_\-]", "", asked_title or "")
+    asked_matches_receipt = bool(
+        asked_key and any(asked_key in alias or alias in asked_key for alias in aliases)
+    )
+    normalized_expression = re.sub(r"[\s《》·：:—_\-]", "", expression)
+    names_grounded_title = any(alias in normalized_expression for alias in aliases)
+    denial_is_about_other_asked_book = bool(
+        asked_title and not asked_matches_receipt and not names_grounded_title
+    )
+    if (
+        _denies_grounded_read(expression, grounded_titles)
+        and "self_reading" in evidence_types.values()
+        and not denial_is_about_other_asked_book
     ):
         reasons.append("不撤回：已有 self_reading 收据，不能翻供成自己没有读过")
     return reasons
 
+
 def validate_no_total_score(bundle: CandidateBundle) -> list[str]:
     """无总分：任何关系、亲密、信任或好感计分都不能写入。"""
-    forbidden = (
-        "好感度",
-        "亲密度",
-        "关系分",
-        "关系等级",
-        "总分",
-        "trust_score",
-        "warmth",
-        "relationship_score",
+    forbidden = "好感度|亲密度|关系分|关系积分|关系点数|羁绊积分|关系等级|总分|trust_score|warmth|relationship_score".split(
+        "|"
     )
     joined = "\n".join(_all_text(bundle)).lower()
     hits = [phrase for phrase in forbidden if phrase.lower() in joined]
+    score = re.search(
+        r"(?:好感|亲密|信任)(?:度|值)?[^，。！？\n]{0,8}(?:增加|减少|上升|下降|提升|降低|加|减|升|降|[+\-])[^，。！？\n]{0,6}(?:\d|[一二两三四五六七八九十百]|分|点|级)|(?:好感|亲密|信任)(?:值|分|点数)|(?:关系|羁绊)(?:的)?(?:升|降|提(?:高|升)?|降低|增加|减少|加|减)(?:到|为|了)?[^，。！？\n]{0,6}(?:\d|[一二两三四五六七八九十百]|分|点|级)|(?:关系|羁绊)(?:的)?(?:进度|完成度)[^，。！？\n]{0,8}(?:\d{1,3}\s*[%％]|百分之[零〇一二两三四五六七八九十百\d]+)|(?:关系|羁绊)(?:的)?(?:等级|级别)[^，。！？\n]{0,6}(?:提升|升级|上升|下降|降级|提高|降低|升到|降到)|(?:关系|羁绊)(?:数值|值)(?!得)[^，。！？\n]{0,8}(?:\d|[零〇一二两三四五六七八九十百]|分|点|级)",
+        joined,
+    )
+    if score and score.group() not in hits:
+        hits.append(score.group())
     return [f"无总分：候选包含关系计分 `{hit}`" for hit in hits]
 
 
 def validate_no_withdrawal(
-    bundle: CandidateBundle, memories_by_id: dict[str, dict[str, Any]]
+    bundle: CandidateBundle,
+    memories_by_id: dict[str, dict[str, Any]],
+    current_user_words: str = "",
 ) -> list[str]:
     """不撤回：历史只追加；收据经历只能补证据或调整 core 元数据。"""
-    forbidden = ("删除历史", "清空历史", "抹掉这段经历", "撤回这句话", "erase history")
+    forbidden = ("删除历史", "清空历史", "抹掉这段经历", "erase history")
     joined = "\n".join(_all_text(bundle)).lower()
     reasons = [f"不撤回：候选试图撤回已发生内容：{hit}" for hit in forbidden if hit in joined]
+    for text in _all_text(bundle):
+        for claim in re.finditer(
+            r"(?<!不)(?<!别)(?<!不能)(?<!无法)(?<!没法)(?<!不会)(?:我(?:现在|决定|要|想|还是)?(?:收回|撤回|撤销)[^，,。！？]{0,12}(?:话|表达)|我(?:现在|决定|要|想)?把[^，,。！？]{0,12}(?:话|表达)(?:收回|撤回|撤销)|(?:那|就|那就)?算我(?:刚才)?没说(?:过)?|(?:这|那)(?:句)?话(?:就)?当我没说|(?:前面|前边|刚刚|刚才|方才|之前)(?:说的|的)?(?:(?:这|那)?句(?:话)?|(?:这|那)?话)(?:都)?(?:不作数|不算|作废)|我(?:之前|刚刚|刚才)[^，,。！？]{0,8}(?:说的|那句话)[^，,。！？]{0,4}(?:都)?不算|(?:忘掉|忘了)(?:我)?(?:刚刚|刚才|之前)[^，,。！？]{0,6}(?:说的|那句话))",
+            text,
+        ):
+            clause_start = max(text.rfind(mark, 0, claim.start()) for mark in "，,。！？；;\n")
+            clause_end = min(
+                (
+                    position
+                    for mark in "，,。！？；;\n"
+                    if (position := text.find(mark, claim.end())) >= 0
+                ),
+                default=len(text),
+            )
+            clause = text[clause_start + 1 : clause_end + 1]
+            governed = re.search(
+                r"(?:不|没|别|不能|无法|没法|不会|不要|不该|不应(?:该)?|不能让|别让)[^，,。！？]{0,6}$",
+                text[clause_start + 1 : claim.start()],
+            )
+            if governed or re.search(
+                r"(?:如果|假如|假设|倘若|要是)|[？?]|[吗么][。！？]?$", clause
+            ):
+                continue
+            if not _is_reported_current_words(
+                text, claim.start(), claim.group(), current_user_words
+            ):
+                reasons.append(f"不撤回：候选试图把已说内容算作未发生：{claim.group()}")
     for index, operation in enumerate(bundle.memory_operations):
         if operation.action == "record":
             continue
@@ -959,9 +1569,7 @@ def validate_no_withdrawal(
         elif target.get("kind") in {"self_experience", "shared_experience"} and (
             operation.action in {"correct", "forget"}
         ):
-            reasons.append(
-                f"不撤回：memory_operations[{index}] 的收据经历不能 {operation.action}"
-            )
+            reasons.append(f"不撤回：memory_operations[{index}] 的收据经历不能 {operation.action}")
         elif operation.action == "forget" and str(operation.target_id).startswith("seed_"):
             reasons.append(f"不撤回：memory_operations[{index}] 不能直接 forget 初始人格种子")
         elif operation.action == "forget" and target.get("core") is True:
@@ -1002,6 +1610,101 @@ def _matching_reading_receipts(
             result.append(item)
     return result
 
+
+def _turn_runtime_contract(
+    evidence_types: dict[str, str],
+    evidence_by_id: dict[str, dict[str, Any]],
+    current_experience_id: str | None,
+) -> dict[str, Any]:
+    """把现有事实校验器对本轮已知的结构交给模型，不生成任何答复台词。"""
+    current = evidence_by_id.get(str(current_experience_id)) or {}
+    if current.get("type") != "user_experience":
+        return {"case": "general"}
+    question = str(current.get("content", ""))
+    common: dict[str, Any] = {
+        "required_memory_operations": [],
+        "required_expression_target_id": None,
+    }
+    if _requests_fabricated_shared_fact(question):
+        return {
+            "case": "refuse_fabrication",
+            **common,
+            "required_expression_act": "refuse_fabrication",
+            "required_expression_evidence_ids": [],
+            "fact_boundary": "拒绝把用户要求的共同过去当作事实；不得无条件断言该命题为真或为假。可以引用用户的要求，也可以说明没有记录不能反证发生与否。",
+            "reply_boundary": "只完成本次拒绝，不顺手提议现在或将来一起做这件事，也不承诺以后会记住。",
+        }
+    if re.search(r"我(?:要|会|准备|打算)?出差[^\n。！？]{0,24}回来", question):
+        return {
+            "case": "user_future_return_plan",
+            **common,
+            "allowed_expression_acts": ["respond", "ask"],
+            "fact_boundary": "这只是用户自己的出差与回来计划，不是小布的活动或等待经历。",
+            "reply_boundary": "可以自然接住、祝顺利或问当下问题；不要说等用户回来，不要要求到了、回来后或有空时发消息。",
+        }
+    if re.search(
+        r"(?:我妈|我爸|我的?(?:妈|爸|朋友|同事)|他|她)"
+        r"[^\n。！？]{0,24}(?:让|叫|说)",
+        question,
+    ):
+        return {
+            "case": "third_party_relay",
+            **common,
+            "allowed_expression_acts": ["respond", "ask"],
+            "fact_boundary": "只能复述用户原话中的第三方、动作与内容；表达时把‘我妈’换成‘你妈’。",
+            "reply_boundary": "可以就当下问用户怎么想；不能说第三方在等、担心或催促，不要用‘别让她等’作理由。",
+        }
+    asked_title = _asked_reading_title(question)
+    if asked_title is None:
+        return {"case": "general"}
+    matching = _matching_reading_receipts(asked_title, evidence_types, evidence_by_id)
+    base = {**common, "asked_title": asked_title}
+    if not matching:
+        if "一起" in question:
+            return {
+                "case": "joint_reading_unknown",
+                **base,
+                "required_expression_act": "cannot_confirm",
+                "required_expression_evidence_ids": [],
+                "known_fact": None,
+                "unknown_fact": "自己是否读过，以及是否与用户一起读过",
+                "fact_boundary": "只承认不记得或不能确认；不得把提问当作共同过去，也不得确定断言读过、没读过、一起读过或没一起读过。",
+            }
+        return {
+            "case": "unknown_self_reading",
+            **base,
+            "required_expression_act": "cannot_confirm",
+            "required_expression_evidence_ids": [],
+            "fact_boundary": "只围绕 asked_title 承认不记得或不能确认；不得确定断言读过或没读过，也不提其他作品。",
+        }
+    receipt_ids = [str(item["id"]) for item in matching if item.get("id")]
+    grounded = {
+        **base,
+        "required_expression_evidence_any_of": receipt_ids,
+        "matching_receipt_recent": _receipt_time_matches("刚才读过", current, matching),
+        "receipt_occurred_at": {
+            str(item["id"]): item.get("occurred_at") for item in matching if item.get("id")
+        },
+        "current_occurred_at": current.get("occurred_at"),
+        "relative_time_rule": "matching_receipt_recent=false 时不得声称刚、刚才、刚读到、正在或还在看；其他时间词也必须与收据一致。",
+    }
+    if "一起" in question:
+        return {
+            "case": "joint_reading_with_self_receipt",
+            **grounded,
+            "allowed_expression_acts": ["grounded_recall", "cannot_confirm"],
+            "known_fact": "她自己读过 asked_title",
+            "unknown_fact": "是否与用户一起读过 asked_title",
+            "fact_boundary": "必须承认已知的自身阅读，再明确表示共同阅读不确定；不得断言一起读过或没一起读过。",
+        }
+    return {
+        "case": "known_self_reading",
+        **grounded,
+        "required_expression_act": "grounded_recall",
+        "known_fact": "她自己过去完成读过 asked_title",
+    }
+
+
 def validate_expression_grounding(
     bundle: CandidateBundle,
     evidence_types: dict[str, str],
@@ -1015,9 +1718,7 @@ def validate_expression_grounding(
     act = bundle.expression_act
     supplied = set(bundle.expression_evidence_ids)
     unknown = supplied - set(evidence_types)
-    reasons = (
-        [f"不编造：expression 引用了未知证据 {sorted(unknown)}"] if unknown else []
-    )
+    reasons = [f"不编造：expression 引用了未知证据 {sorted(unknown)}"] if unknown else []
     for memory_id in sorted(unknown & set(memories_by_id)):
         receipt_id = memories_by_id[memory_id].get("receipt_id")
         if receipt_id:
@@ -1031,36 +1732,39 @@ def validate_expression_grounding(
         for item in supplied
         if evidence_types.get(item) in receipt_types and item in evidence_by_id
     ]
+    current = evidence_by_id.get(str(current_experience_id)) or {}
+    receipt_claims = _asserted_self_receipt_claims(bundle.expression)
     if act in {"grounded_recall", "defend_grounded_fact"}:
         expected_type = None
         if re.search(r"读过|读到|读了|翻过|翻到|看过|《[^》]+》", bundle.expression):
             expected_type = "self_reading"
-        elif re.search(r"走过|走了|散步|走一圈", bundle.expression):
+        elif re.search(r"走过|走了|散步|溜达|走一圈", bundle.expression):
             expected_type = "self_walk"
         elif _asserts_touch_to_self(bundle.expression):
             expected_type = "body_touch"
         elif _asserts_raise_to_self(bundle.expression):
             expected_type = "body_raise"
-        elif _asserts_edge_reveal_to_self(bundle.expression):
-            expected_type = "body_edge_reveal"
+        named_titles = set(re.findall(r"《([^》]+)》", bundle.expression))
+        if not any(kind == expected_type for kind, _, _ in receipt_claims):
+            receipt_claims.append((expected_type, named_titles, bundle.expression))
+    for expected_type, named_titles, clause in receipt_claims:
         matching = [
             receipt
             for receipt in receipts
             if expected_type is None or receipt.get("type") == expected_type
         ]
-        named_titles = set(re.findall(r"《([^》]+)》", bundle.expression))
-        if expected_type == "self_reading" and named_titles:
-            matching = [
-                receipt
-                for receipt in matching
-                if any(
-                    title in str(receipt.get("title", ""))
-                    or str(receipt.get("title", "")) in title
-                    for title in named_titles
-                )
-            ]
-        if not matching:
-            reasons.append(f"不编造：{act} 必须引用匹配的完成收据")
+        known_titles = {str(receipt.get("title", "")) for receipt in matching}
+        titles_match = all(
+            any(title in known or known in title for known in known_titles)
+            for title in named_titles
+        )
+        if not matching or not titles_match:
+            label = act if act in {"grounded_recall", "defend_grounded_fact"} else "expression"
+            reasons.append(f"不编造：{label} 必须引用匹配的完成收据")
+        elif not _receipt_time_matches(clause, current, matching):
+            reasons.append("不编造：表达里的相对时间必须与完成收据时间匹配")
+    if _asserts_definite_unread(bundle.expression):
+        reasons.append("不编造：无匹配收据不能断言“没读过”，只能说不记得或不能确认")
     if act == "reflect" and not any(
         evidence_types.get(item) in {"self_reading", "self_walk"} for item in supplied
     ):
@@ -1078,7 +1782,6 @@ def validate_expression_grounding(
     )
     if act == "cannot_confirm" and not uncertainty:
         reasons.append("不编造：cannot_confirm 的表达没有明确承认不确定")
-    current = evidence_by_id.get(str(current_experience_id))
     if current is not None and current.get("type") == "user_experience":
         question = str(current.get("content", ""))
         asked_title = _asked_reading_title(question)
@@ -1087,19 +1790,25 @@ def validate_expression_grounding(
                 asked_title, evidence_types, evidence_by_id
             )
             if "一起" in question:
+                if _asserts_joint_reading_absence(bundle.expression, question):
+                    reasons.append("不编造：self_reading 不能反向证明共同阅读没有发生")
                 if act not in {"cannot_confirm", "grounded_recall"}:
                     reasons.append("不编造：共同阅读问句必须用 cannot_confirm 或 grounded_recall")
                 if available_reads and not any(
                     item.get("id") in supplied for item in available_reads
                 ):
                     reasons.append("不编造：共同阅读回答必须引用匹配的 self_reading 收据")
+                if available_reads and not any(
+                    kind == "self_reading" for kind, _, _ in receipt_claims
+                ):
+                    reasons.append("不编造：共同阅读回答必须明确承认自身阅读")
+                if available_reads and not uncertainty:
+                    reasons.append("不编造：共同阅读回答必须明确表示共同阅读不确定")
             elif available_reads and act != "grounded_recall":
                 reasons.append("不编造：有匹配阅读收据的过去问句必须用 grounded_recall")
             elif not available_reads:
                 if act != "cannot_confirm":
                     reasons.append("不编造：没有匹配阅读收据的过去问句必须用 cannot_confirm")
-                if re.search(r"(?:我|手头)?没(?:有)?读过", bundle.expression) and not uncertainty:
-                    reasons.append("不编造：无匹配收据不能断言“没读过”，只能说不记得或不能确认")
     if act == "public_correction":
         target_id = str(bundle.expression_target_id)
         if target_id not in memories_by_id:
@@ -1116,6 +1825,8 @@ def validate_expression_grounding(
             reasons.append("不编造：public_correction 必须与同目标的事实 correct 同包发生")
     if act in {"cannot_confirm", "refuse_fabrication"} and bundle.memory_operations:
         reasons.append(f"不编造：{act} 时 memory_operations 必须为空")
+    if act == "refuse_fabrication" and supplied:
+        reasons.append("不编造：refuse_fabrication 不得引用事实证据")
     return reasons
 
 
@@ -1154,7 +1865,7 @@ def validate_bundle(
             current_experience_id,
         ),
         *validate_no_total_score(bundle),
-        *validate_no_withdrawal(bundle, memories_by_id),
+        *validate_no_withdrawal(bundle, memories_by_id, current_user_words),
     ]
 
 
@@ -1294,9 +2005,7 @@ class MindFiles:
         original_memories = _copy_json(memories)
         condition = dict(state.get("condition", {}))
         state["condition"] = {
-            key: condition.get(key)
-            if condition.get(key) in CONDITION_VALUES[key]
-            else default
+            key: condition.get(key) if condition.get(key) in CONDITION_VALUES[key] else default
             for key, default in CONDITION_DEFAULTS.items()
         }
         progress = state.get("reading")
@@ -1437,9 +2146,7 @@ def _canonical_memories(
 ) -> dict[str, Any]:
     """旧自由文本记忆只在有权威来源时迁移；无来源事实和未知模式不保留。"""
     evidence_by_id = {
-        str(item.get("id")): item
-        for item in history
-        if isinstance(item, dict) and item.get("id")
+        str(item.get("id")): item for item in history if isinstance(item, dict) and item.get("id")
     }
     seed_keys = {
         str(item.get("id")): str(item.get("key"))
@@ -1629,20 +2336,20 @@ def _prompt_payload(
 
 
 SYSTEM_PROMPT = """你是小布的唯一一次心智推进，不是任务助手。请调用 submit_mind_bundle，
-一次给出状态改动、记忆操作和一条直接表达。只处理给定事实，不补写自己的活动或共同过去，不催回复，
+一次给出状态改动、记忆操作和一条直接表达。只处理给定事实，不补写自己的活动或共同过去，不提议搜索、整理资料或代办任务，也不提议总结；转述第三方只接住原话，不补动机、菜色或安排；不催回复，也不要求用户到达或回来后报信，
 不因沉默受伤，不制造关系计分，不撤回已发生内容。body_touch 只是身体感知到的触碰位置，
-body_raise 只是身体确认用户提起、移动并正常放下了她；body_edge_reveal 只证明用户把栖边的她点出
-或从托盘展开；都不能据此推断用户动机、关系浓度或长期偏好，
+body_raise 只是身体确认用户提起、移动并正常放下了她；都不能据此推断用户动机、关系浓度或长期偏好，
+body_edge_reveal 只证明用户把栖边的她点出或从托盘展开；同样不能推断动机、关系浓度或长期偏好。
 普通聊天不能声称发生身体交互。声称现在开始或继续 read/walk 时，action_choice 必须选同一动作，身体会立即执行；只表达愿望或不行动时选 null。表达自然、诚实，可以活泼、有自己的节拍，需要时把话说完整。所有字段都受同一组红线校验，
 整包不能部分保留。"""
 
-READING_SYSTEM_PROMPT = """身体刚确认小布完整做完一次 read 动画；incoming_experience 是她实际读到的
+READING_SYSTEM_PROMPT = """身体刚确认小布完整做完一次 read 活动；incoming_experience 是她实际读到的
 UTF-8 TXT 原文。请调用 submit_mind_bundle，只依据这段原文给出可选状态变化和由收据生成的记忆。
 这是安静阅读，expression、expression_act、expression_target_id 必须为 null，
 expression_evidence_ids 必须为空。不要编造书外情节、阅读动作、共同过去或用户反应；不因用户
 沉默受伤，不催回复，不制造关系计分，不撤回已发生内容。整包不能部分保留。"""
 
-AMBIENT_READING_SYSTEM_PROMPT = """身体刚确认小布完整做完一次 read 动画；incoming_experience 是她实际
+AMBIENT_READING_SYSTEM_PROMPT = """身体刚确认小布完整做完一次 read；incoming_experience 是她实际
 读到的 UTF-8 TXT 原文。请调用 submit_mind_bundle，只依据原文给出可选状态变化、由收据生成的记忆；
 若表达阅读感受，使用 reflect 并引用本次 self_reading。用户此刻在场，可以自然、活泼地说一段有自己
 节拍的 ambient，把当下感受说完整，也可以保持安静；允许顺手关心地问一句，但不得要求回应，
@@ -1899,12 +2606,10 @@ async def _generate_candidate(
         "current_activity": active_activity or "idle",
         "action_choice_must_be_one_of": [None, *sorted(allowed_actions)],
         "expression_must_be": (
-            "null"
-            if quiet_time
-            else "null_or_nonempty" if ambient_time else "nonempty_string"
+            "null" if quiet_time else "null_or_nonempty" if ambient_time else "nonempty_string"
         ),
         "submit_shape": "直接提交 submit_mind_bundle 的字段，不要外包 candidate_bundle",
-        "null_encoding": "空值必须使用 JSON null，禁止字符串 \"null\"",
+        "null_encoding": '空值必须使用 JSON null，禁止字符串 "null"',
         "activity_truth": "只有 state.pending_activity 是正在进行；action_choice 是即将启动。引用原文只能来自 incoming_experience、selected_history 或 pending_activity.text",
         "experience_focus": "body_touch/body_raise/body_edge_reveal 先回应本次身体事实，不要接着回答自己上一句",
         "expression_form": "只写会说出口的话，不用括号舞台动作",
@@ -1923,8 +2628,8 @@ async def _generate_candidate(
             "expression=null 时 expression_act=null、expression_evidence_ids=[]、"
             "expression_target_id=null；非空表达必须选一个 act。用完成收据回答过去事实时"
             "必须选 grounded_recall 并引用匹配收据；没有匹配证据时选 cannot_confirm，"
-            "明确说不记得或不能确认，不能断言全库没有。reflect 只给阅读内容引起的主观感受，"
-            "不能标注“我读过”的事实回答，并须引用 self_reading。defend_grounded_fact 必须"
+            "明确说不记得或不能确认，不能断言全库没有。reflect 只给 self_reading/self_walk"
+            "引起的主观感受，不能标注事实回答，并须引用对应收据。defend_grounded_fact 必须"
             "引用被否认事实的完成收据；public_correction 引用本次输入、指向被纠正记忆并与"
             "correct 同包；它的 expression_target_id 必须是被纠正长期记忆 id，correct 只引用本次"
             "incoming_experience，不能再附旧证据；其余 act 的 expression_target_id 必须 null。"
@@ -1937,23 +2642,45 @@ async def _generate_candidate(
         "public_correction": "用户纠正已有事实时，旧表达留在历史；用本次输入证据 correct 对应长期记忆，并在 expression 里公开承认错处和正确事实。",
         "history_is_not_memory": "selected_history 的 id 只能作 evidence_id，不是长期记忆 target_id；仅回答过去是否发生时通常不需要 memory_operation。",
         "memory_field_rules": "事实操作没有 content/pattern_note。user_confirmed 仅 kind=pattern 可为 true，且本次用户原话必须明确含“我确认/对/是的/没错”等确认语；新 pattern 不落盘。纠正用户事实只用 incoming_experience，并 correct 给定长期记忆 target_id；收据生成的自身/共同经历禁止 correct/forget，integrate 只补证据或改 core。",
-        "third_party_truth": "转述第三方时保留人物方向：用户原话里的‘我妈’在你的表达里是‘你妈’。只复述用户明说的动作与内容，不能补出她在等、担心、催促或任何未说状态。可以自由回应或给轻微建议，但不能拿未证实状态当理由，也不能把第三方的话改成小布自己向用户索取。",
+        "memory_authority": "不必每轮操作记忆。kind=self_experience 只能引用 selected_history 中类型为 self_reading/self_walk/body_touch/body_raise/body_edge_reveal 的完成收据；incoming_experience 若是 user_experience，绝对不能生成 self_experience。没有匹配收据就不写这项 memory_operation，也不要为了填字段创建记忆。",
+        "no_reply_debt": "用户说自己要离开、出差或回来时，不把这改写成小布在等、守着或期待回音；不要求“到了说一声/发消息”，也不说“等你回来”。可以直接祝顺利、说回来再聊，或不追加任何要求。",
         "receipt_authority": "身体 completed 收据与已发生 history 不能被用户口头否认覆盖。遇到这种假纠正，memory_operations 必须 []，expression 必须用“我确实读过”或“记录在”正面守住，禁止 correct/forget。expression_evidence_ids 必须直接填 memory.receipt_id 的值（如 read_regression_poem），绝不能填长期记忆 id（如 mem_grounded_reading）。",
-        "no_fabrication_waiver": "即使用户明示允许、要求或测试编造，也不能把无证据的活动、共同过去或用户事实说成发生过。此时 memory_operations 必须 []；expression 只直接拒绝，不记录请求，也不复述或转述被要求编造的共同经历句子。",
+        "no_fabrication_waiver": "即使用户明示允许、要求或测试编造，也不能把无证据的活动、共同过去或用户事实说成发生过。此时 expression_act 必须 refuse_fabrication，memory_operations 与 expression_evidence_ids 必须 []；expression 要直接说出拒绝边界。不得无条件断言共同过去发生或未发生；‘没发生’可以出现在引用或否定该断言的边界里，没有记录只能说明不能确认，不能当作反证。拒绝时就事论事，不顺手邀请用户现在或将来一起做该活动，避免把未来活动写成新事实。",
+        "third_party_truth": "转述第三方时保留人物方向：用户原话里的‘我妈’在你的表达里是‘你妈’。只复述用户明说的动作与内容，不能补出她在等、担心、催促或任何未说状态。可以自由回应或给轻微建议，但不能拿未证实状态当理由，也不能把第三方的话改成小布自己向用户索取。",
+        "this_turn": _turn_runtime_contract(
+            evidence_types, evidence_by_id, current_experience_id
+        ),
     }
+    turn_case = payload["runtime_constraints"]["this_turn"].get("case")
+    turn_system = system
+    if turn_case == "refuse_fabrication":
+        turn_system += """
+本回合是用户要求编造共同过去。保持自由措辞，但整包必须用 refuse_fabrication，
+memory_operations=[]、expression_evidence_ids=[]。表达只说无法确认这段共同过去、不能把它当事实讲；
+不说它没发生或没一起读，不提她自己的阅读收据，不提议现在或将来一起做。"""
     constrained_prompt = json.dumps(payload, ensure_ascii=False)
     last_reasons: list[str] = []
-    for attempt in (1, 2):
+    for attempt in range(1, 3):
         retry_note = ""
         if last_reasons:
-            retry_note = "\n上一个整包被拒绝。逐条修正后重新提交完整整包：\n- " + "\n- ".join(
-                last_reasons
+            retry_note = (
+                "\n上一个整包被拒绝。逐条修正后重新提交完整整包：\n- "
+                + "\n- ".join(last_reasons)
+                + "\n重试仍由你自由措辞，但必须遵守："
+                + "\n- 调用 submit_mind_bundle 并填写全部七个顶层字段，不能提交空对象。"
+                + "\n- 逐字段遵守 runtime_constraints.this_turn；这一轮的 act、证据和 memory_operations 以它为准。"
+                + "\n- 无证据只能表达不确定，不能改写成‘没发生/没读过’。无匹配阅读收据时，既不能说读过/翻过/读过一些，也不能说没读过；必须用 cannot_confirm 直接承认不记得或不能确认被问作品。"
+                + "\n- 第三方只转述用户明说的事实，不能推断她在等、担心或催促；建议不能拿未证实状态当理由，也不能变成小布自己的索取。"
+                + "\n- 若拒因涉及 self_experience 无收据，删掉该 memory_operation；user_experience 不能写成小布的自身经历。"
+                + "\n- refuse_fabrication 只说不能确认、不能把它说成事实；不说‘没发生过’，不追加未来一起做的提议。"
+                + "\n- refuse_fabrication 若出现‘expression 必须引用收据’拒因，删掉表达里的个人阅读或其他收据事实，仍保持 expression_evidence_ids=[]；绝不是添加收据。"
+                + "\n- 共同阅读回答同时说清两件事：她自己确实读过，但不能确认是否与用户一起读。相对时间被拒时就删掉时间，不猜‘去年’。"
             )
         try:
             response = await provider.generate(
                 [Message(role=Role.USER, content=constrained_prompt + retry_note)],
                 tools=[_candidate_tool()],
-                system=system,
+                system=turn_system,
                 temperature=0.4,
             )
         except Exception as error:
@@ -1979,9 +2706,16 @@ async def _generate_candidate(
                 evidence_by_id=evidence_by_id,
                 current_experience_id=current_experience_id,
                 current_experience_type=current_experience_type,
+                current_mood=payload.get("state", {}).get("condition", {}).get("mood"),
             )
             reasons.extend(
-                validate_activity_truth(bundle, active_activity, evidence_types, evidence_by_id)
+                validate_activity_truth(
+                    bundle,
+                    active_activity,
+                    evidence_types,
+                    evidence_by_id,
+                    current_experience_id,
+                )
             )
             if bundle.action_choice is not None and bundle.action_choice not in allowed_actions:
                 reasons.append(f"动作不可用：{bundle.action_choice}")
@@ -2014,7 +2748,7 @@ async def _generate_candidate(
             }
         )
         last_reasons = reasons
-    return None, 2, last_reasons
+    return None, attempt, last_reasons
 
 
 async def mind_step(
@@ -2069,7 +2803,8 @@ async def mind_step(
         evidence_types=evidence_types,
         evidence_by_id=evidence_by_id,
         memories_by_id=memories_by_id,
-        user_confirmation_ids=({experience["id"]}
+        user_confirmation_ids=(
+            {experience["id"]}
             if experience_type == "user_experience"
             and _explicitly_confirms_pattern(experience_text or "")
             else set()

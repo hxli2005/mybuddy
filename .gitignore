@@ -30,6 +30,7 @@ dist/
 
 # Testing
 .pytest_cache/
+.pytest-*
 .pytest-tmp/
 .test-tmp*/
 .coverage

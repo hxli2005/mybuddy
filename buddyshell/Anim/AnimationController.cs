@@ -3,8 +3,7 @@ using System.Windows.Threading;
 
 namespace BuddyShell.Anim;
 
-public sealed class AnimationController : IAnimationController, IAnimationDiagnostics
-{
+public sealed class AnimationController : IAnimationController, IAnimationDiagnostics {
     private readonly AnimationManifest _manifest;
     private readonly IAnimationRenderer _renderer;
     private readonly IAnimationClock _clock;
@@ -28,8 +27,7 @@ public sealed class AnimationController : IAnimationController, IAnimationDiagno
         AnimationManifest manifest,
         IAnimationRenderer renderer,
         IAnimationClock? clock = null,
-        bool autoStart = true)
-    {
+        bool autoStart = true) {
         _manifest = manifest;
         _renderer = renderer;
         _clock = clock ?? new SystemAnimationClock();
@@ -37,10 +35,8 @@ public sealed class AnimationController : IAnimationController, IAnimationDiagno
         _renderer.TouchStarted += OnTouchStarted;
         _renderer.TouchDetected += OnTouchDetected;
         StartBaseline();
-        if (autoStart)
-        {
-            _timer = new DispatcherTimer(DispatcherPriority.Render)
-            {
+        if (autoStart) {
+            _timer = new DispatcherTimer(DispatcherPriority.Render) {
                 Interval = TimeSpan.FromMilliseconds(16),
             };
             _timer.Tick += (_, _) => Tick();
@@ -72,11 +68,9 @@ public sealed class AnimationController : IAnimationController, IAnimationDiagno
         (_renderer as IAnimationDiagnostics)?.ClassifyTouch(y, height)
         ?? (y <= height * 0.45 ? TouchZone.Head : TouchZone.Body);
 
-    public void Submit(AnimationRequest request) => OnDispatcher(() =>
-    {
+    public void Submit(AnimationRequest request) => OnDispatcher(() => {
         if (_disposed) return;
-        if (request.Intent == AnimationIntent.Think)
-        {
+        if (request.Intent == AnimationIntent.Think) {
             if (request.Source != AnimationSource.Chat || _pendingThink is not null) return;
             _pendingThink = request;
             _thinkBodyEntered = false;
@@ -86,8 +80,7 @@ public sealed class AnimationController : IAnimationController, IAnimationDiagno
         StartRequest(request);
     });
 
-    public void BeginInteractive(AnimationRequest request, bool resumeBody = false) => OnDispatcher(() =>
-    {
+    public void BeginInteractive(AnimationRequest request, bool resumeBody = false) => OnDispatcher(() => {
         if (_disposed || request.Source != AnimationSource.DirectManipulation) return;
         _interactiveFollowUp = null;
         _interactiveFollowUpResumeBody = false;
@@ -97,8 +90,7 @@ public sealed class AnimationController : IAnimationController, IAnimationDiagno
     public void EndInteractive(
         string correlationId,
         AnimationRequest? followUp = null,
-        bool followUpResumeBody = false) => OnDispatcher(() =>
-    {
+        bool followUpResumeBody = false) => OnDispatcher(() => {
         if (_disposed || _execution != AnimationExecutionKind.Interactive ||
             _request?.CorrelationId != correlationId || _phase?.Kind == AnimationPhaseKind.Exit)
             return;
@@ -108,65 +100,54 @@ public sealed class AnimationController : IAnimationController, IAnimationDiagno
         else ResumePersistentView();
     });
 
-    public void Complete(string correlationId, AnimationOutcome outcome) => OnDispatcher(() =>
-    {
+    public void Complete(string correlationId, AnimationOutcome outcome) => OnDispatcher(() => {
         if (_disposed || _pendingThink?.CorrelationId != correlationId) return;
         _pendingThink = null;
         _thinkBodyEntered = false;
-        if (outcome.Reaction is { } reaction && reaction != AnimationIntent.Think)
-        {
+        if (outcome.Reaction is { } reaction && reaction != AnimationIntent.Think) {
             StartRequest(new AnimationRequest(
                 reaction,
                 AnimationSource.System, $"reply:{correlationId}"));
         }
-        else if (_request?.CorrelationId == correlationId)
-        {
+        else if (_request?.CorrelationId == correlationId) {
             StartBaseline();
         }
     });
 
-    public void Tick()
-    {
+    public void Tick() {
         if (_disposed || _plan is null || _phase is null) return;
         var elapsed = Math.Max(0, _clock.ElapsedMilliseconds - _phaseStartedAt);
         var frame = AnimationTimeline.Compose(_generation, _plan.Id, _phase, elapsed);
-        try
-        {
-            if (frame.Signature != _lastSignature)
-            {
+        try {
+            if (frame.Signature != _lastSignature) {
                 _renderer.Render(frame);
                 _lastSignature = frame.Signature;
             }
-            if (_faulted)
-            {
+            if (_faulted) {
                 _faulted = false;
                 Faulted?.Invoke(this, new AnimationFaultEventArgs(null, true));
             }
         }
-        catch (Exception exception)
-        {
+        catch (Exception exception) {
             var failedActivity = _execution == AnimationExecutionKind.Transient &&
                 _request?.Source == AnimationSource.State
                 ? _request.CorrelationId
                 : null;
             if (!_faulted) Faulted?.Invoke(this, new AnimationFaultEventArgs(exception, false));
             _faulted = true;
-            if (failedActivity is not null)
-            {
+            if (failedActivity is not null) {
                 ResetToBaselineWithoutRender();
                 ActivityFinished?.Invoke(
                     this, new ActivityFinishedEventArgs(failedActivity, "failed", "animation_fault"));
             }
-            else if (_execution == AnimationExecutionKind.Interactive)
-            {
+            else if (_execution == AnimationExecutionKind.Interactive) {
                 ResetToBaselineWithoutRender();
             }
             return;
         }
         if (_phase.Kind == AnimationPhaseKind.Body && _phase.Loop &&
             _execution == AnimationExecutionKind.Transient &&
-            _request is { DurationMs: > 0 } request && elapsed >= request.DurationMs)
-        {
+            _request is { DurationMs: > 0 } request && elapsed >= request.DurationMs) {
             if (_plan.Exit is { } exit) StartPhase(exit);
             else ResumePersistentView();
             return;
@@ -177,8 +158,7 @@ public sealed class AnimationController : IAnimationController, IAnimationDiagno
     private void StartRequest(
         AnimationRequest request,
         AnimationExecutionKind? execution = null,
-        bool resumeBody = false)
-    {
+        bool resumeBody = false) {
         if (_execution == AnimationExecutionKind.Transient &&
             _request?.Source == AnimationSource.State &&
             _request.CorrelationId != request.CorrelationId)
@@ -196,16 +176,14 @@ public sealed class AnimationController : IAnimationController, IAnimationDiagno
         StartPhase(resumeBody ? _plan.Body : _plan.Entry ?? _plan.Body);
     }
 
-    private void StartBaseline()
-    {
+    private void StartBaseline() {
         _plan = _desiredBaseline;
         _request = null;
         _execution = AnimationExecutionKind.Baseline;
         StartPhase(_plan.Entry ?? _plan.Body);
     }
 
-    private void ResetToBaselineWithoutRender()
-    {
+    private void ResetToBaselineWithoutRender() {
         _plan = _desiredBaseline;
         _request = null;
         _execution = AnimationExecutionKind.Baseline;
@@ -215,16 +193,14 @@ public sealed class AnimationController : IAnimationController, IAnimationDiagno
         _lastSignature = null;
     }
 
-    private static string InterruptionReason(AnimationSource source) => source switch
-    {
+    private static string InterruptionReason(AnimationSource source) => source switch {
         AnimationSource.Touch => "touch",
         AnimationSource.Chat => "chat",
         AnimationSource.DirectManipulation => "raise",
         _ => "activity_replaced",
     };
 
-    private void StartPhase(AnimationPhasePlan phase)
-    {
+    private void StartPhase(AnimationPhasePlan phase) {
         _phase = phase;
         _phaseStartedAt = _clock.ElapsedMilliseconds;
         _generation += 1;
@@ -234,24 +210,20 @@ public sealed class AnimationController : IAnimationController, IAnimationDiagno
         Tick();
     }
 
-    private void AdvancePhase()
-    {
+    private void AdvancePhase() {
         if (_plan is null || _phase is null) return;
-        if (_phase.Kind == AnimationPhaseKind.Entry)
-        {
+        if (_phase.Kind == AnimationPhaseKind.Entry) {
             StartPhase(_plan.Body);
             return;
         }
-        if (_phase.Kind == AnimationPhaseKind.Body && _plan.Exit is { } exit)
-        {
+        if (_phase.Kind == AnimationPhaseKind.Body && _plan.Exit is { } exit) {
             StartPhase(exit);
             return;
         }
         ResumePersistentView();
     }
 
-    private void ResumePersistentView()
-    {
+    private void ResumePersistentView() {
         var completedActivity = _execution == AnimationExecutionKind.Transient &&
             _request?.Source == AnimationSource.State
             ? _request.CorrelationId
@@ -260,19 +232,16 @@ public sealed class AnimationController : IAnimationController, IAnimationDiagno
         var followUpResumeBody = _interactiveFollowUpResumeBody;
         _interactiveFollowUp = null;
         _interactiveFollowUpResumeBody = false;
-        if (followUp is not null)
-        {
+        if (followUp is not null) {
             StartRequest(followUp, AnimationExecutionKind.Interactive, followUpResumeBody);
         }
-        else if (_pendingThink is { } pending)
-        {
+        else if (_pendingThink is { } pending) {
             _plan = _manifest.Resolve(pending);
             _request = pending;
             _execution = AnimationExecutionKind.Pending;
             StartPhase(_thinkBodyEntered ? _plan.Body : _plan.Entry ?? _plan.Body);
         }
-        else
-        {
+        else {
             StartBaseline();
         }
         if (completedActivity is not null)
@@ -288,14 +257,12 @@ public sealed class AnimationController : IAnimationController, IAnimationDiagno
     private void OnTouchDetected(object? sender, TouchDetectedEventArgs args) =>
         TouchDetected?.Invoke(this, args);
 
-    private void OnDispatcher(Action action)
-    {
+    private void OnDispatcher(Action action) {
         if (_renderer.View.Dispatcher.CheckAccess()) action();
         else _renderer.View.Dispatcher.Invoke(action);
     }
 
-    public void Dispose()
-    {
+    public void Dispose() {
         if (_disposed) return;
         _disposed = true;
         _timer?.Stop();

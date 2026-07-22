@@ -7,22 +7,16 @@ using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Threading;
-
 namespace BuddyShell;
-
 public enum ConnectionState { Connected, Warning, Error }
-
-public partial class MainWindow : Window
-{
+public partial class MainWindow : Window {
     private readonly ShellSettings _settings = SettingsStore.Load();
     private readonly DispatcherTimer _walkTimer = new(DispatcherPriority.Render);
     private readonly DispatcherTimer _edgeReadTimer = new();
-    private readonly DispatcherTimer _edgeHoverTimer = new()
-    {
+    private readonly DispatcherTimer _edgeHoverTimer = new() {
         Interval = TimeSpan.FromMilliseconds(350),
     };
-    private readonly DispatcherTimer _edgeVisibilityTimer = new()
-    {
+    private readonly DispatcherTimer _edgeVisibilityTimer = new() {
         Interval = TimeSpan.FromMilliseconds(500),
     };
     private readonly Stopwatch _walkClock = new();
@@ -46,9 +40,7 @@ public partial class MainWindow : Window
     private EdgeSide? _edgeSide;
     private bool _edgePeeked;
     private bool _edgeHiddenForFullscreen;
-
-    public MainWindow()
-    {
+    public MainWindow() {
         InitializeComponent();
         Loaded += OnLoaded;
         _walkTimer.Interval = TimeSpan.FromMilliseconds(16);
@@ -56,17 +48,14 @@ public partial class MainWindow : Window
         _edgeReadTimer.Tick += OnEdgeReadTick;
         _edgeHoverTimer.Tick += OnEdgeHoverTick;
         _edgeVisibilityTimer.Tick += (_, _) => UpdateEdgeVisibility();
-        MouseEnter += (_, _) =>
-        {
+        MouseEnter += (_, _) => {
             if (_edgeSide is not null && !_edgePeeked) _edgeHoverTimer.Start();
         };
-        MouseLeave += (_, _) =>
-        {
+        MouseLeave += (_, _) => {
             _edgeHoverTimer.Stop();
             if (_edgePeeked) ReturnToEdgeMain();
         };
-        PreviewMouseLeftButtonDown += async (_, args) =>
-        {
+        PreviewMouseLeftButtonDown += async (_, args) => {
             if (_edgeSide is null) return;
             args.Handled = true;
             ExitEdge(poll: false);
@@ -74,45 +63,34 @@ public partial class MainWindow : Window
         };
         Closing += (_, _) => SaveWindowPosition();
         Closed += (_, _) => DisposeServices();
-        DragBar.MouseLeftButtonDown += (_, args) =>
-        {
+        DragBar.MouseLeftButtonDown += (_, args) => {
             if (IsInsideButton(args.OriginalSource as DependencyObject)) return;
             args.Handled = true;
             BeginRaisedDrag();
         };
         Chat.SendRequested += async (_, args) => await SendBodyChatAsync(args.Text);
     }
-
-    public void SetConnectionState(string text, ConnectionState state) => Dispatcher.Invoke(() =>
-    {
+    public void SetConnectionState(string text, ConnectionState state) => Dispatcher.Invoke(() => {
         StatusText.Text = text;
-        StatusDot.Fill = state switch
-        {
+        StatusDot.Fill = state switch {
             ConnectionState.Connected => Brushes.LightGreen,
             ConnectionState.Warning => Brushes.Gold,
             _ => Brushes.IndianRed,
         };
     });
-
     private void ToggleChat_Click(object sender, RoutedEventArgs e) =>
         ChatDrawer.Visibility = ChatDrawer.Visibility == Visibility.Visible
             ? Visibility.Collapsed
             : Visibility.Visible;
-
-    private static bool IsInsideButton(DependencyObject? element)
-    {
-        while (element is not null)
-        {
+    private static bool IsInsideButton(DependencyObject? element) {
+        while (element is not null) {
             if (element is System.Windows.Controls.Button) return true;
             element = VisualTreeHelper.GetParent(element);
         }
         return false;
     }
-
-    private void OnLoaded(object sender, RoutedEventArgs e)
-    {
-        try
-        {
+    private void OnLoaded(object sender, RoutedEventArgs e) {
+        try {
             RestoreWindowPosition();
             var root = !string.IsNullOrWhiteSpace(_settings.PetAssetRoot)
                 ? _settings.PetAssetRoot
@@ -130,7 +108,6 @@ public partial class MainWindow : Window
                 args.Recovered ? "动画渲染已恢复" : $"动画渲染失败：{args.Exception?.Message}",
                 args.Recovered ? ConnectionState.Connected : ConnectionState.Error);
             AnimationHostSlot.Content = _animationController.View;
-
             _engine = EngineHost.Start(_settings);
             _client = new BridgeClient(_settings);
             _presence = new Presence(_settings);
@@ -140,20 +117,16 @@ public partial class MainWindow : Window
                 () => _activityReceipt,
                 () => _presence.Snapshot(_edgeSide is not null));
             _stateLoop.Updated += OnBodyUpdated;
-            _stateLoop.Failed += (_, exception) => Dispatcher.Invoke(() =>
-            {
+            _stateLoop.Failed += (_, exception) => Dispatcher.Invoke(() => {
                 SetConnectionState(exception.Message, ConnectionState.Warning);
             });
             _tray = new Tray();
-            _tray.SettingsRequested += (_, _) =>
-            {
+            _tray.SettingsRequested += (_, _) => {
                 if (_edgeSide is not null) ExitEdge();
                 ShowSettings();
             };
-            _tray.ShowRequested += async (_, _) =>
-            {
-                if (_edgeSide is not null)
-                {
+            _tray.ShowRequested += async (_, _) => {
+                if (_edgeSide is not null) {
                     ExitEdge(poll: false);
                     await ReportEdgeRevealAsync();
                 }
@@ -163,41 +136,44 @@ public partial class MainWindow : Window
             RestoreEdgeMode();
             _stateLoop.Start();
         }
-        catch (Exception exception)
-        {
+        catch (Exception exception) {
             App.LogException(exception);
             SetConnectionState(exception.Message, ConnectionState.Error);
         }
     }
-
-    private async void OnBodyUpdated(object? sender, BodyStepResponse response)
-    {
+    private async void OnBodyUpdated(object? sender, BodyStepResponse response) {
         var displayed = false;
-        Dispatcher.Invoke(() =>
-        {
+        BodyPresence? blockedPresence = null;
+        Dispatcher.Invoke(() => {
             ApplyActivity(response);
+            var presence = _presence?.Snapshot(_edgeSide is not null);
             if (_edgeSide is null && response.Expression is not null &&
-                !string.Equals(response.Expression.Id, _settings.LastShownId, StringComparison.Ordinal))
-            {
+                (!string.Equals(response.Expression.Kind, "ambient", StringComparison.Ordinal) ||
+                    presence is not null && Presence.AllowsAmbient(presence)) &&
+                !string.Equals(response.Expression.Id, _settings.LastShownId, StringComparison.Ordinal)) {
                 ShowBodyExpression(response.Expression);
                 displayed = true;
             }
+            else if (Presence.MustDiscardAmbient(response.Expression, presence)) blockedPresence = presence;
             SetMindConnectionState(response);
         });
         if (displayed) await ConfirmShownAsync();
+        else if (blockedPresence is not null) await DiscardAmbientAsync(blockedPresence);
     }
-
+    private async Task DiscardAmbientAsync(BodyPresence presence) {
+        try {
+            await _client!.StepBodyAsync(new BodyStepRequest { ShownId = _settings.LastShownId, ActivityReceipt = _activityReceipt, Presence = presence });
+        }
+        catch (BridgeRequestException exception) { App.LogMessage($"event=ambient_discard_pending reason={exception.Message}"); }
+    }
     private void OnPetDragStarted(object? sender, EventArgs args) => BeginRaisedDrag();
-
-    private async void BeginRaisedDrag()
-    {
+    private async void BeginRaisedDrag() {
         if (_raiseDragging || _animationController is null) return;
         _raiseDragging = true;
         string? eventId = null;
         var released = false;
         EdgeSide? dockSide = null;
-        try
-        {
+        try {
             var animation = BodyActionCatalog.Default.Get("raise")
                 .Animation(BodyActionDirection.Still);
             eventId = $"raise-{Guid.NewGuid():N}";
@@ -210,132 +186,104 @@ public partial class MainWindow : Window
                 Math.Abs(Top - start.Y) >= SystemParameters.MinimumVerticalDragDistance;
             if (released) dockSide = EdgeDock.Detect(CurrentWorkArea(), Left, ActualWidth);
         }
-        catch (InvalidOperationException exception)
-        {
+        catch (InvalidOperationException exception) {
             SetConnectionState($"窗口拖动失败：{exception.Message}", ConnectionState.Warning);
         }
-        finally
-        {
+        finally {
             if (eventId is not null && dockSide is null)
                 _animationController.EndInteractive(eventId);
             SaveWindowPosition();
             _raiseDragging = false;
         }
-        if (dockSide is { } side)
-        {
+        if (dockSide is { } side) {
             EnterEdge(side);
             return;
         }
         if (released && eventId is not null) await ReportRaiseAsync(eventId);
     }
-
-    private async Task ReportRaiseAsync(string eventId)
-    {
-        if (_client is null || _raiseReporting)
-        {
+    private async Task ReportRaiseAsync(string eventId) {
+        if (_client is null || _raiseReporting) {
             App.LogMessage($"event=body_raise_unreported event_id={eventId} reason=not_connected_or_busy");
             return;
         }
         _raiseReporting = true;
         var bodyEvent = new BodyEvent { EventId = eventId, Type = "raise" };
-        try
-        {
+        try {
             var response = await StepAsync(bodyEvent);
             if (response.EventStatus is not ("processed" or "duplicate")) return;
             ApplyActivity(response);
-            if (response.Expression is not null)
-            {
+            if (response.Expression is not null) {
                 ShowBodyExpression(response.Expression);
                 await ConfirmShownAsync();
             }
             SetMindConnectionState(response);
         }
-        catch (BridgeRequestException exception)
-        {
+        catch (BridgeRequestException exception) {
             SetConnectionState("未连接；这次提起只做了本地反射", ConnectionState.Warning);
             App.LogMessage($"event=body_raise_unreported event_id={eventId} reason={exception.Message}");
         }
-        finally
-        {
+        finally {
             _raiseReporting = false;
         }
     }
-
-    private async Task ReportEdgeRevealAsync()
-    {
+    private async Task ReportEdgeRevealAsync() {
         if (_client is null || _edgeRevealReporting) return;
         _edgeRevealReporting = true;
-        var bodyEvent = new BodyEvent
-        {
+        var bodyEvent = new BodyEvent {
             EventId = $"edge-reveal-{Guid.NewGuid():N}",
             Type = "edge_reveal",
         };
-        try
-        {
+        try {
             var response = await StepAsync(bodyEvent);
             if (response.EventStatus is not ("processed" or "duplicate" or "cooldown")) return;
             ApplyActivity(response);
-            if (response.Expression is not null)
-            {
+            if (response.Expression is not null) {
                 ShowBodyExpression(response.Expression);
                 await ConfirmShownAsync();
             }
             SetMindConnectionState(response);
         }
-        catch (BridgeRequestException exception)
-        {
+        catch (BridgeRequestException exception) {
             SetConnectionState("未连接；这次点出只完成了本地展开", ConnectionState.Warning);
             App.LogMessage($"event=edge_reveal_unreported event_id={bodyEvent.EventId} reason={exception.Message}");
         }
-        finally
-        {
+        finally {
             _edgeRevealReporting = false;
         }
     }
-
-    private async void OnTouchDetected(object? sender, TouchDetectedEventArgs args)
-    {
+    private async void OnTouchDetected(object? sender, TouchDetectedEventArgs args) {
         if (_client is null || _touchReporting) return;
         _touchReporting = true;
-        var bodyEvent = new BodyEvent
-        {
+        var bodyEvent = new BodyEvent {
             EventId = args.CorrelationId,
             Type = args.Zone == TouchZone.Head ? "touch_head" : "touch_body",
         };
-        try
-        {
+        try {
             var response = await StepAsync(bodyEvent);
             if (response.EventStatus is not ("processed" or "duplicate")) return;
             ApplyActivity(response);
-            if (response.Expression is not null)
-            {
+            if (response.Expression is not null) {
                 ShowBodyExpression(response.Expression);
                 await ConfirmShownAsync();
             }
             SetMindConnectionState(response);
         }
-        catch (BridgeRequestException exception)
-        {
+        catch (BridgeRequestException exception) {
             SetConnectionState("未连接；这次触碰只做了本地反射", ConnectionState.Warning);
             App.LogMessage($"event=body_touch_unreported event_id={bodyEvent.EventId} reason={exception.Message}");
         }
-        finally
-        {
+        finally {
             _touchReporting = false;
         }
     }
-
-    private async Task SendBodyChatAsync(string text)
-    {
+    private async Task SendBodyChatAsync(string text) {
         if (_client is null || _animationController is null || _chatSending) return;
         _chatSending = true;
-        if (!string.Equals(_pendingChatText, text, StringComparison.Ordinal))
-        {
+        if (!string.Equals(_pendingChatText, text, StringComparison.Ordinal)) {
             _pendingChatText = text;
             _pendingChatEventId = $"chat-{Guid.NewGuid():N}";
         }
-        var bodyEvent = new BodyEvent
-        {
+        var bodyEvent = new BodyEvent {
             EventId = _pendingChatEventId!,
             Type = "chat",
             Content = text,
@@ -344,8 +292,7 @@ public partial class MainWindow : Window
         _animationController.Submit(new AnimationRequest(
             AnimationIntent.Think,
             AnimationSource.Chat, animationId));
-        try
-        {
+        try {
             var response = await StepAsync(bodyEvent);
             if (response.EventStatus is not ("processed" or "duplicate"))
                 throw new BridgeRequestException($"身体桥未接收聊天事件：{response.EventStatus}");
@@ -354,38 +301,30 @@ public partial class MainWindow : Window
             _pendingChatEventId = null;
             _animationController.Complete(animationId, new AnimationOutcome(AnimationIntent.Happy));
             ApplyActivity(response);
-            if (response.Expression is not null)
-            {
+            if (response.Expression is not null) {
                 ShowBodyExpression(response.Expression);
                 await ConfirmShownAsync();
             }
             SetMindConnectionState(response);
         }
-        catch (BridgeRequestException)
-        {
+        catch (BridgeRequestException) {
             SetConnectionState("未连接，输入已保留", ConnectionState.Warning);
             _animationController.Complete(animationId, new AnimationOutcome());
         }
-        finally
-        {
+        finally {
             _chatSending = false;
         }
     }
-
-    private async Task<BodyStepResponse> StepAsync(BodyEvent bodyEvent)
-    {
-        var response = await _client!.StepBodyAsync(new BodyStepRequest
-        {
+    private async Task<BodyStepResponse> StepAsync(BodyEvent bodyEvent) {
+        var response = await _client!.StepBodyAsync(new BodyStepRequest {
             ShownId = _settings.LastShownId,
             ActivityReceipt = _activityReceipt,
             Presence = _presence?.Snapshot(_edgeSide is not null),
             Event = bodyEvent,
         });
-        if (response.EventStatus == "waiting_for_shown" && response.Expression is not null)
-        {
+        if (response.EventStatus == "waiting_for_shown" && response.Expression is not null) {
             ShowBodyExpression(response.Expression);
-            response = await _client.StepBodyAsync(new BodyStepRequest
-            {
+            response = await _client.StepBodyAsync(new BodyStepRequest {
                 ShownId = _settings.LastShownId,
                 ActivityReceipt = _activityReceipt,
                 Presence = _presence?.Snapshot(_edgeSide is not null),
@@ -394,9 +333,7 @@ public partial class MainWindow : Window
         }
         return response;
     }
-
-    private void ShowBodyExpression(PendingBodyExpression expression)
-    {
+    private void ShowBodyExpression(PendingBodyExpression expression) {
         if (string.IsNullOrWhiteSpace(expression.Id) || string.IsNullOrWhiteSpace(expression.Text)) return;
         SpeechBubble.ShowSpeech(
             expression.Text,
@@ -406,13 +343,9 @@ public partial class MainWindow : Window
         SettingsStore.Save(_settings);
         App.LogMessage($"event=bubble_shown expression_id={expression.Id} text={expression.Text}");
     }
-
-    private async Task<bool> ConfirmShownAsync()
-    {
-        try
-        {
-            var response = await _client!.StepBodyAsync(new BodyStepRequest
-            {
+    private async Task<bool> ConfirmShownAsync() {
+        try {
+            var response = await _client!.StepBodyAsync(new BodyStepRequest {
                 ShownId = _settings.LastShownId,
                 ActivityReceipt = _activityReceipt,
                 Presence = _presence?.Snapshot(_edgeSide is not null),
@@ -420,18 +353,14 @@ public partial class MainWindow : Window
             ApplyActivity(response);
             return response.ShownConfirmed;
         }
-        catch (BridgeRequestException exception)
-        {
+        catch (BridgeRequestException exception) {
             SetConnectionState("回复已显示，shown 确认待重报", ConnectionState.Warning);
             App.LogMessage($"event=shown_pending expression_id={_settings.LastShownId} reason={exception.Message}");
             return false;
         }
     }
-
-    private void ApplyActivity(BodyStepResponse response)
-    {
-        if (response.ActivityConfirmed && _activityReceipt is not null)
-        {
+    private void ApplyActivity(BodyStepResponse response) {
+        if (response.ActivityConfirmed && _activityReceipt is not null) {
             _edgeReadTimer.Stop();
             EdgeLifeCue.Visibility = Visibility.Collapsed;
             _activityReceipt = null;
@@ -439,8 +368,7 @@ public partial class MainWindow : Window
         }
         var surface = _edgeSide is null ? "full" : "edge";
         if (response.Activity is { } planned && !planned.MatchesSurface(surface)) return;
-        if (_edgeSide is not null)
-        {
+        if (_edgeSide is not null) {
             if (response.Activity is { Type: "read" } edgeRead &&
                 !string.Equals(edgeRead.Id, _activeActivityId, StringComparison.Ordinal) &&
                 !string.Equals(edgeRead.Id, _activityReceipt?.ActivityId, StringComparison.Ordinal))
@@ -453,23 +381,19 @@ public partial class MainWindow : Window
             return;
         if (!BodyActionCatalog.Default.TryGet(activity.Type, out var action) || action is null) return;
         _activeActivityId = activity.Id;
-        if (action.Shape == BodyActionShape.Stationary)
-        {
+        if (action.Shape == BodyActionShape.Stationary) {
             _animationController?.Submit(new AnimationRequest(
                 action.Animation(BodyActionDirection.Still).Intent,
                 AnimationSource.State, activity.Id, activity.DurationMs));
             return;
         }
-        if (action.Shape == BodyActionShape.Horizontal)
-        {
+        if (action.Shape == BodyActionShape.Horizontal) {
             StartWalk(activity.Id, action);
             return;
         }
         _activeActivityId = null;
     }
-
-    private void StartEdgeRead(BodyActivity activity)
-    {
+    private void StartEdgeRead(BodyActivity activity) {
         if (_edgeSide is not { } side) return;
         _activeActivityId = activity.Id;
         EdgeLifeCue.HorizontalAlignment = side == EdgeSide.Left
@@ -480,14 +404,11 @@ public partial class MainWindow : Window
         _edgeReadTimer.Start();
         App.LogMessage($"event=edge_read_cue_started activity_id={activity.Id} duration_ms={activity.DurationMs}");
     }
-
-    private async void OnEdgeReadTick(object? sender, EventArgs args)
-    {
+    private async void OnEdgeReadTick(object? sender, EventArgs args) {
         _edgeReadTimer.Stop();
         EdgeLifeCue.Visibility = Visibility.Collapsed;
         if (_activeActivityId is not { } activityId) return;
-        _activityReceipt = new BodyActivityReceipt
-        {
+        _activityReceipt = new BodyActivityReceipt {
             ActivityId = activityId,
             Status = "completed",
             Reason = "edge_cue_finished",
@@ -495,24 +416,18 @@ public partial class MainWindow : Window
         App.LogMessage($"event=edge_read_cue_finished activity_id={activityId}");
         if (_stateLoop is not null) await _stateLoop.PollAsync();
     }
-
-    private void InterruptEdgeRead()
-    {
+    private void InterruptEdgeRead() {
         if (!_edgeReadTimer.IsEnabled || _activeActivityId is not { } activityId) return;
         _edgeReadTimer.Stop();
         EdgeLifeCue.Visibility = Visibility.Collapsed;
-        _activityReceipt = new BodyActivityReceipt
-        {
+        _activityReceipt = new BodyActivityReceipt {
             ActivityId = activityId,
             Status = "interrupted",
             Reason = "activity_replaced",
         };
     }
-
-    private void StartWalk(string activityId, BodyActionDefinition action)
-    {
-        try
-        {
+    private void StartWalk(string activityId, BodyActionDefinition action) {
+        try {
             _walkAttempt = new WalkAttempt(
                 activityId,
                 Left,
@@ -528,35 +443,27 @@ public partial class MainWindow : Window
                 action.Animation(_walkAttempt.Direction).Intent,
                 AnimationSource.State, activityId));
         }
-        catch (Exception exception)
-        {
+        catch (Exception exception) {
             FailWalk(activityId, exception);
         }
     }
-
-    private void OnWalkTick(object? sender, EventArgs args)
-    {
+    private void OnWalkTick(object? sender, EventArgs args) {
         if (_walkAttempt is null) return;
-        try
-        {
+        try {
             _walkAttempt.Advance(_walkClock.ElapsedMilliseconds);
             Left = _walkAttempt.Left;
             Top = _walkAttempt.Top;
         }
-        catch (Exception exception)
-        {
+        catch (Exception exception) {
             FailWalk(_walkAttempt.ActivityId, exception);
         }
     }
-
-    private async void FailWalk(string activityId, Exception exception)
-    {
+    private async void FailWalk(string activityId, Exception exception) {
         _walkTimer.Stop();
         _walkClock.Stop();
         _walkAttempt = null;
         _activeActivityId = null;
-        _activityReceipt = new BodyActivityReceipt
-        {
+        _activityReceipt = new BodyActivityReceipt {
             ActivityId = activityId,
             Status = "failed",
             Reason = "window_fault",
@@ -564,28 +471,23 @@ public partial class MainWindow : Window
         SetConnectionState($"窗口移动失败：{exception.Message}", ConnectionState.Warning);
         if (_stateLoop is not null) await _stateLoop.PollAsync();
     }
-
-    private async void OnActivityFinished(object? sender, ActivityFinishedEventArgs args)
-    {
+    private async void OnActivityFinished(object? sender, ActivityFinishedEventArgs args) {
         if (!string.Equals(args.ActivityId, _activeActivityId, StringComparison.Ordinal)) return;
         BodyWalkMotion? motion = null;
-        if (_walkAttempt?.ActivityId == args.ActivityId)
-        {
+        if (_walkAttempt?.ActivityId == args.ActivityId) {
             _walkAttempt.Advance(_walkClock.ElapsedMilliseconds);
             Left = _walkAttempt.Left;
             Top = _walkAttempt.Top;
             _walkTimer.Stop();
             _walkClock.Stop();
             if (_walkAttempt.Contains(Left, Top)) motion = _walkAttempt.Capture(Left, Top);
-            else
-            {
+            else {
                 args = new ActivityFinishedEventArgs(args.ActivityId, "failed", "window_fault");
             }
             _walkAttempt = null;
             SaveWindowPosition();
         }
-        _activityReceipt = new BodyActivityReceipt
-        {
+        _activityReceipt = new BodyActivityReceipt {
             ActivityId = args.ActivityId,
             Status = args.Status,
             Reason = args.Reason,
@@ -593,20 +495,15 @@ public partial class MainWindow : Window
         };
         if (_stateLoop is not null) await _stateLoop.PollAsync();
     }
-
-    private void RestoreEdgeMode()
-    {
-        var side = _settings.EdgeSide?.ToLowerInvariant() switch
-        {
+    private void RestoreEdgeMode() {
+        var side = _settings.EdgeSide?.ToLowerInvariant() switch {
             "left" => EdgeSide.Left,
             "right" => EdgeSide.Right,
             _ => (EdgeSide?)null,
         };
         if (side is not null) EnterEdge(side.Value, restoring: true);
     }
-
-    private void EnterEdge(EdgeSide side, bool restoring = false)
-    {
+    private void EnterEdge(EdgeSide side, bool restoring = false) {
         var area = CurrentWorkArea();
         if (_edgeSide is null) SaveWindowPosition();
         _edgeSide = side;
@@ -620,7 +517,6 @@ public partial class MainWindow : Window
         _settings.EdgeSide = side.ToString().ToLowerInvariant();
         _settings.EdgeTopRatio = topRatio;
         SettingsStore.Save(_settings);
-
         SpeechBubble.Visibility = Visibility.Collapsed;
         ChatDrawer.Visibility = Visibility.Collapsed;
         DragBar.Visibility = Visibility.Collapsed;
@@ -632,9 +528,7 @@ public partial class MainWindow : Window
         _ = _stateLoop?.PollAsync();
         App.LogMessage($"event=edge_enter side={_settings.EdgeSide} top_ratio={topRatio:F3}");
     }
-
-    private void ExitEdge(bool poll = true)
-    {
+    private void ExitEdge(bool poll = true) {
         if (_edgeSide is not { } side) return;
         InterruptEdgeRead();
         var area = CurrentWorkArea();
@@ -653,8 +547,7 @@ public partial class MainWindow : Window
             ? area.Left + 12
             : Math.Max(area.Left, area.Right - ActualWidth - 12);
         Top = Math.Clamp(top, area.Top, Math.Max(area.Top, area.Bottom - ActualHeight));
-        if (_animationController is not null)
-        {
+        if (_animationController is not null) {
             var reveal = EdgeAnimationRequest(side, rise: false);
             _animationController.BeginInteractive(reveal, resumeBody: true);
             _animationController.EndInteractive(reveal.CorrelationId);
@@ -667,32 +560,26 @@ public partial class MainWindow : Window
         if (poll) _ = _stateLoop?.PollAsync();
         App.LogMessage($"event=edge_exit side={side.ToString().ToLowerInvariant()}");
     }
-
-    private void OnEdgeHoverTick(object? sender, EventArgs args)
-    {
+    private void OnEdgeHoverTick(object? sender, EventArgs args) {
         _edgeHoverTimer.Stop();
-        if (_edgeSide is not { } side || !IsMouseOver || _edgeHiddenForFullscreen) return;
+        if (_edgeSide is not { } side || !IsMouseOver || _edgeHiddenForFullscreen ||
+            _presence?.Snapshot(edgeDocked: true).Fullscreen != false) return;
         _edgePeeked = true;
         _animationController?.BeginInteractive(EdgeAnimationRequest(side, rise: true));
         App.LogMessage($"event=edge_peek side={side.ToString().ToLowerInvariant()}");
     }
-
-    private void ReturnToEdgeMain()
-    {
+    private void ReturnToEdgeMain() {
         _edgePeeked = false;
         if (_edgeSide is not { } side || _animationController is not { } controller ||
             controller.Snapshot.CorrelationId is not { } current) return;
         controller.EndInteractive(current, EdgeAnimationRequest(side, rise: false), followUpResumeBody: true);
     }
-
     private static AnimationRequest EdgeAnimationRequest(EdgeSide side, bool rise) => new(
         rise
             ? side == EdgeSide.Left ? AnimationIntent.EdgeLeftRise : AnimationIntent.EdgeRightRise
             : side == EdgeSide.Left ? AnimationIntent.EdgeLeft : AnimationIntent.EdgeRight,
         AnimationSource.DirectManipulation, $"edge:{side.ToString().ToLowerInvariant()}:{(rise ? "rise" : "main")}:{Guid.NewGuid():N}");
-
-    private void UpdateEdgeVisibility()
-    {
+    private void UpdateEdgeVisibility() {
         if (_edgeSide is null || _presence is null) return;
         var hidden = _presence.Snapshot(edgeDocked: true).Fullscreen;
         if (hidden == _edgeHiddenForFullscreen) return;
@@ -702,9 +589,7 @@ public partial class MainWindow : Window
         if (hidden && _edgePeeked) ReturnToEdgeMain();
         App.LogMessage($"event=edge_fullscreen hidden={hidden.ToString().ToLowerInvariant()}");
     }
-
-    private Rect CurrentWorkArea()
-    {
+    private Rect CurrentWorkArea() {
         var handle = new WindowInteropHelper(this).Handle;
         var pixels = System.Windows.Forms.Screen.FromHandle(handle).WorkingArea;
         var transform = PresentationSource.FromVisual(this)?.CompositionTarget?.TransformFromDevice
@@ -713,11 +598,8 @@ public partial class MainWindow : Window
         var bottomRight = transform.Transform(new Point(pixels.Right, pixels.Bottom));
         return new Rect(topLeft, bottomRight);
     }
-
-    private void SetMindConnectionState(BodyStepResponse response)
-    {
-        switch (response.MindStatus)
-        {
+    private void SetMindConnectionState(BodyStepResponse response) {
+        switch (response.MindStatus) {
             case "accepted":
                 SetConnectionState("已连接", ConnectionState.Connected);
                 break;
@@ -732,29 +614,21 @@ public partial class MainWindow : Window
                 break;
         }
     }
-
-    private void ShowSettings()
-    {
+    private void ShowSettings() {
         var window = new SettingsWindow(_settings) { Owner = this };
         if (window.ShowDialog() == true) _client?.UpdateSettings(_settings);
     }
-
     private void Settings_Click(object sender, RoutedEventArgs e) => ShowSettings();
     private void Exit_Click(object sender, RoutedEventArgs e) => Close();
-
-    private void RestoreWindowPosition()
-    {
+    private void RestoreWindowPosition() {
         if (_settings.WindowLeft is not double left || _settings.WindowTop is not double top) return;
         var area = SystemParameters.WorkArea;
         Left = Math.Clamp(left, area.Left, Math.Max(area.Left, area.Right - Width));
         Top = Math.Clamp(top, area.Top, Math.Max(area.Top, area.Bottom - Height));
     }
-
-    private void SaveWindowPosition()
-    {
+    private void SaveWindowPosition() {
         if (!double.IsFinite(Left) || !double.IsFinite(Top)) return;
-        if (_edgeSide is { })
-        {
+        if (_edgeSide is { }) {
             _settings.EdgeTopRatio = EdgeDock.TopRatio(CurrentWorkArea(), ActualHeight, Top);
             SettingsStore.Save(_settings);
             return;
@@ -763,12 +637,9 @@ public partial class MainWindow : Window
         _settings.WindowTop = Top;
         SettingsStore.Save(_settings);
     }
-
-    private void DisposeServices()
-    {
+    private void DisposeServices() {
         if (_animationHost is not null) _animationHost.DragStarted -= OnPetDragStarted;
-        if (_animationController is not null)
-        {
+        if (_animationController is not null) {
             _animationController.TouchDetected -= OnTouchDetected;
             _animationController.ActivityFinished -= OnActivityFinished;
         }

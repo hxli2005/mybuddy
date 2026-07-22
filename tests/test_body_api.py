@@ -297,10 +297,10 @@ def test_raise_is_a_raw_idempotent_body_fact(api) -> None:
     assert authored.status_code == 422
 
 
-def test_edge_reveal_is_invited_direct_with_restart_safe_cooldown(api) -> None:
+def test_edge_reveal_is_invited_direct_with_history_cooldown(api) -> None:
+    client, provider, data_dir = api
     from fastapi.testclient import TestClient
 
-    client, provider, data_dir = api
     files = MindFiles(data_dir)
     first = client.post(
         "/api/body/step",
@@ -348,6 +348,109 @@ def test_edge_reveal_is_invited_direct_with_restart_safe_cooldown(api) -> None:
     assert after_cooldown["event_status"] == "processed"
     assert after_cooldown["expression"]["kind"] == "direct"
     assert provider.calls == 2
+
+
+@pytest.mark.parametrize(
+    "event",
+    (
+        {"event_id": "chat-drops-ambient", "type": "chat", "content": "在吗"},
+        {"event_id": "touch-drops-ambient", "type": "touch_head"},
+        {"event_id": "raise-drops-ambient", "type": "raise"},
+        {"event_id": "edge-drops-ambient", "type": "edge_reveal"},
+    ),
+)
+def test_direct_event_discards_a_fresh_ambient_before_reply(api, event) -> None:  # noqa: ANN001
+    client, provider, data_dir = api
+    files = MindFiles(data_dir)
+    now = datetime.now(UTC).astimezone()
+    state, history, memories = files.load(now)
+    state["pending_expression"] = {
+        "id": "expr-before-reveal",
+        "text": "这句不该从栖边漏出来。",
+        "created_at": now.isoformat(),
+        "kind": "ambient",
+    }
+    files.commit(state, history, memories)
+
+    response = client.post(
+        "/api/body/step",
+        json={
+            "presence": {"present": True, "fullscreen": False, "surface": "full"},
+            "event": event,
+        },
+    ).json()
+
+    assert response["event_status"] == "processed"
+    assert response["expression"]["kind"] == "direct"
+    assert response["expression"]["text"] != "这句不该从栖边漏出来。"
+    assert all(item.get("content") != "这句不该从栖边漏出来。" for item in _history(data_dir))
+    assert provider.calls == 1
+
+
+def test_walk_receipt_and_chat_same_step_skip_ambient_call(api) -> None:
+    client, provider, data_dir = api
+    scheduled = _schedule_walk(client, data_dir)
+
+    response = client.post(
+        "/api/body/step",
+        json={
+            "activity_receipt": {
+                "activity_id": scheduled["activity"]["id"],
+                "status": "completed",
+                "reason": "animation_finished",
+                "motion": _walk_motion(),
+            },
+            "event": {"event_id": "chat-with-walk", "type": "chat", "content": "回来啦"},
+            "presence": {"present": True, "fullscreen": False, "surface": "full"},
+        },
+    ).json()
+
+    assert response["activity_confirmed"] is True
+    assert response["event_status"] == "processed"
+    assert response["expression"]["kind"] == "direct"
+    assert provider.calls == 1
+    assert [item["type"] for item in _history(data_dir)] == [
+        "self_walk",
+        "user_experience",
+        "memory_operation",
+    ]
+
+
+def test_read_receipt_and_chat_same_step_use_quiet_read_then_direct(api) -> None:
+    client, provider, data_dir = api
+    files = MindFiles(data_dir)
+    now = datetime.now(UTC).astimezone()
+    state, history, memories = files.load(now)
+    state["last_step_at"] = (now - timedelta(minutes=6)).isoformat()
+    files.commit(state, history, memories)
+    scheduled = client.post(
+        "/api/body/step",
+        json={"presence": {"present": True, "fullscreen": False, "surface": "full"}},
+    ).json()
+
+    response = client.post(
+        "/api/body/step",
+        json={
+            "activity_receipt": {
+                "activity_id": scheduled["activity"]["id"],
+                "status": "completed",
+                "reason": "animation_finished",
+            },
+            "event": {"event_id": "chat-with-read", "type": "chat", "content": "回来啦"},
+            "presence": {"present": True, "fullscreen": False, "surface": "full"},
+        },
+    ).json()
+
+    assert response["activity_confirmed"] is True
+    assert response["event_status"] == "processed"
+    assert response["expression"]["kind"] == "direct"
+    assert provider.calls == 2
+    assert [item["type"] for item in _history(data_dir)] == [
+        "self_reading",
+        "memory_operation",
+        "user_experience",
+        "memory_operation",
+    ]
 
 
 @pytest.mark.parametrize("extra", [{"content": "替身体解释"}, {"meaning": "用户想听我说话"}])
@@ -399,6 +502,7 @@ def test_mind_status_does_not_call_a_fallback_connected(provider, expected, tmp_
     after_shown = _history(tmp_path)
     assert after_shown == before_shown
 
+
 @pytest.mark.parametrize(
     "event",
     (
@@ -407,7 +511,7 @@ def test_mind_status_does_not_call_a_fallback_connected(provider, expected, tmp_
         {"event_id": "edge-failure", "type": "edge_reveal"},
     ),
 )
-def test_body_rejections_use_the_same_untracked_static_catch(event, tmp_path) -> None:  # noqa: ANN001
+def test_body_rejections_use_the_same_honest_static_catch(event, tmp_path) -> None:  # noqa: ANN001
     pytest.importorskip("fastapi")
     from fastapi.testclient import TestClient
 
@@ -417,14 +521,6 @@ def test_body_rejections_use_the_same_untracked_static_catch(event, tmp_path) ->
     assert response["event_status"] == "processed"
     assert response["mind_status"] == "rejected"
     assert response["expression"]["text"] == STATIC_CATCH
-    state, history, _ = MindFiles(tmp_path).load(datetime.now(UTC).astimezone())
-    assert state["pending_expression"] is None
-    shown = client.post(
-        "/api/body/step", json={"shown_id": response["expression"]["id"]}
-    ).json()
-    assert shown["shown_confirmed"] is False
-    assert all(item["type"] != "shared_expression" for item in history)
-
 
 
 def test_cross_day_unshown_ambient_is_discarded_without_erasing_life(api) -> None:
@@ -503,6 +599,41 @@ def test_direct_or_same_day_expression_is_not_discarded(api, kind) -> None:  # n
     assert response["expression"]["id"] == f"expr-{kind}"
     assert response["time_status"] == "waiting_for_shown"
     assert provider.calls == 0
+
+
+@pytest.mark.parametrize(
+    "presence",
+    [
+        {"present": False, "fullscreen": False},
+        {"present": True, "fullscreen": True},
+    ],
+)
+def test_fresh_ambient_is_discarded_when_presence_cannot_show_it(api, presence) -> None:  # noqa: ANN001
+    client, provider, data_dir = api
+    files = MindFiles(data_dir)
+    now = datetime.now(UTC).astimezone()
+    state, history, memories = files.load(now)
+    state["pending_expression"] = {
+        "id": "expr-unshowable-ambient",
+        "text": "没显示就不留下。",
+        "created_at": now.isoformat(),
+        "kind": "ambient",
+    }
+    files.commit(state, history, memories)
+
+    response = client.post("/api/body/step", json={"presence": presence}).json()
+    final_state = json.loads(files.state_path.read_text(encoding="utf-8"))
+
+    assert response["expression"] is None
+    assert final_state["pending_expression"] is None
+    assert _history(data_dir) == []
+    assert provider.calls == 0
+    returned = client.post(
+        "/api/body/step",
+        json={"presence": {"present": True, "fullscreen": False, "surface": "full"}},
+    ).json()
+    assert returned["expression"] is None
+    assert _history(data_dir) == []
 
 
 def test_request_rejects_missing_event_id_and_extra_protocol_fields(api) -> None:
@@ -1308,6 +1439,7 @@ def test_edge_surface_discards_unshown_ambient_without_recording_it(api) -> None
         },
     )
     assert invalid.status_code == 422
+
 
 def test_authoritative_generation_failure_returns_http_200_static_catch(tmp_path) -> None:
     pytest.importorskip("fastapi")

@@ -15,6 +15,7 @@ internal static class Program
         var tests = new (string Name, Action Run)[]
         {
             ("body step is the only wire contract", BodyStepIsOnlyContract),
+            ("ambient presentation rechecks current presence", AmbientPresentationRechecksPresence),
             ("edge read cue stays a closed physical fact", EdgeReadCueStaysClosed),
             ("edge reveal stays a closed physical fact", EdgeRevealStaysClosed),
             ("read presentation stays bound to its scheduled surface", ReadPresentationStaysBound),
@@ -111,6 +112,25 @@ internal static class Program
         Contains(response, "mind_status");
         Contains(response, "unavailable");
         Contains(response, "activity_confirmed");
+    }
+
+    private static void AmbientPresentationRechecksPresence()
+    {
+        Equal(true, Presence.AllowsAmbient(new BodyPresence
+        { Present = true, Fullscreen = false, Surface = "full" }));
+        Equal(false, Presence.AllowsAmbient(new BodyPresence
+        { Present = false, Fullscreen = false, Surface = "full" }));
+        Equal(false, Presence.AllowsAmbient(new BodyPresence
+        { Present = true, Fullscreen = true, Surface = "full" }));
+        Equal(false, Presence.AllowsAmbient(new BodyPresence
+        { Present = true, Fullscreen = false, Surface = "edge" }));
+        var ambient = new PendingBodyExpression { Id = "ambient-1", Kind = "ambient" };
+        Equal(true, Presence.MustDiscardAmbient(ambient, new BodyPresence
+        { Present = false, Fullscreen = false, Surface = "full" }));
+        Equal(true, Presence.MustDiscardAmbient(ambient, new BodyPresence
+        { Present = true, Fullscreen = false, Surface = "edge" }));
+        Equal(false, Presence.MustDiscardAmbient(ambient, new BodyPresence
+        { Present = true, Fullscreen = false, Surface = "full" }));
     }
 
     private static void EdgeReadCueStaysClosed()

@@ -57,6 +57,24 @@ def test_body_has_one_wire_path_and_no_legacy_policy_fields() -> None:
         assert legacy not in sources
 
 
+def test_edge_life_is_read_only_and_uses_a_non_speech_cue() -> None:
+    window = (ROOT / "buddyshell" / "MainWindow.xaml.cs").read_text(encoding="utf-8")
+    xaml = (ROOT / "buddyshell" / "MainWindow.xaml").read_text(encoding="utf-8")
+
+    assert 'response.Activity is { Type: "read" } edgeRead' in window
+    assert 'Reason = "edge_cue_finished"' in window
+    assert 'x:Name="EdgeLifeCue"' in xaml
+    assert 'Text="读"' in xaml
+
+
+def test_shell_immediately_discards_ambient_blocked_at_presentation_time() -> None:
+    window = (ROOT / "buddyshell" / "MainWindow.xaml.cs").read_text(encoding="utf-8")
+
+    assert "Presence.MustDiscardAmbient(response.Expression, presence)" in window
+    assert "await DiscardAmbientAsync(blockedPresence)" in window
+    assert "Presence = presence" in window
+
+
 def test_machine_side_stays_under_owner_limit() -> None:
     files = [
         path

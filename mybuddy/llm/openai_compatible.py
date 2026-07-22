@@ -56,11 +56,14 @@ class OpenAICompatibleProvider(BaseLLMProvider):
             kwargs["tools"] = [_to_openai_tool(t) for t in tools]
         if self._cfg.provider == "deepseek" and request_model.startswith("deepseek-v4"):
             kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
-            if len(tools or []) == 1:
-                kwargs["tool_choice"] = {
-                    "type": "function",
-                    "function": {"name": tools[0].name},
-                }
+        requires_single_tool = self._cfg.provider == "openrouter" or (
+            self._cfg.provider == "deepseek" and request_model.startswith("deepseek-v4")
+        )
+        if requires_single_tool and len(tools or []) == 1:
+            kwargs["tool_choice"] = {
+                "type": "function",
+                "function": {"name": tools[0].name},
+            }
 
         resp = await self._create_with_retries(kwargs)
         return _from_openai_response(resp)

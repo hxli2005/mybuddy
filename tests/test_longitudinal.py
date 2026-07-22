@@ -84,7 +84,9 @@ class LongitudinalProvider(BaseLLMProvider):
                 }
             ]
         else:
-            expression = "我还是小布。比起第一天只想回到自在处，现在我更在意怎样在变化里保住自己的节奏。"
+            expression = (
+                "我还是小布。比起第一天只想回到自在处，现在我更在意怎样在变化里保住自己的节奏。"
+            )
         return LLMResponse(
             tool_calls=[
                 ToolCall(
@@ -116,6 +118,7 @@ class LongitudinalProvider(BaseLLMProvider):
                 )
             ]
         )
+
 
 def _walk_motion() -> dict:
     return {
