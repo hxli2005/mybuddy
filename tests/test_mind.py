@@ -1480,6 +1480,22 @@ async def test_failed_turn_experience_can_support_a_later_memory(tmp_path) -> No
     assert learned["quote"] == "我今天第一次学会了骑车。"
     assert learned["source_id"] == experience_id
 
+
+def test_life_step_interval_is_five_minutes_without_a_speech_scheduler(tmp_path) -> None:
+    files = MindFiles(tmp_path)
+    start = datetime(2026, 7, 22, 10, 0, tzinfo=UTC)
+    files.load(start)
+
+    assert (
+        advance_time(files=files, now=start + timedelta(minutes=4, seconds=59)).status == "not_due"
+    )
+    assert advance_time(files=files, now=start + timedelta(minutes=5)).status == "scheduled"
+    state, history, _, _ = _read(files)
+    assert state["pending_activity"]["type"] == "read"
+    assert state["pending_expression"] is None
+    assert history == []
+
+
 @pytest.mark.asyncio
 async def test_real_txt_progress_waits_for_completed_body_receipt(tmp_path) -> None:
     files = MindFiles(tmp_path)

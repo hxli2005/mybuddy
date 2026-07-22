@@ -22,7 +22,7 @@ from mybuddy.llm import BaseLLMProvider, Message, Role, ToolSpec, make_provider
 HISTORY_CONTEXT_LIMIT = 12
 MEMORY_CONTEXT_BUDGET = 4000
 RECENT_EVENT_LIMIT = 128
-LIFE_STEP_INTERVAL = timedelta(minutes=30)
+LIFE_STEP_INTERVAL = timedelta(minutes=5)
 STATIC_CATCH = "我在。刚才脑子里那句话没理清，但你的话我确实听见了。"
 PERSONALITY_PATH = Path(__file__).with_name("personality.json")
 READING_PATH = Path(__file__).with_name("reading.txt")
