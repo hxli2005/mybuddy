@@ -314,18 +314,42 @@ def test_mind_status_does_not_call_a_fallback_connected(provider, expected, tmp_
         json={"event": {"event_id": "chat-failure", "type": "chat", "content": "在吗"}},
     ).json()
     assert repeated["event_status"] == "duplicate"
+    assert repeated["expression"] is None
     assert _history(tmp_path) == before_shown
 
     confirmed = client.post(
         "/api/body/step",
         json={"shown_id": response["expression"]["id"]},
     ).json()
-    assert confirmed["shown_confirmed"] is True
+    assert confirmed["shown_confirmed"] is False
     after_shown = _history(tmp_path)
-    assert [(item["type"], item["content"]) for item in after_shown] == [
-        ("user_experience", "在吗"),
-        ("shared_expression", STATIC_CATCH),
-    ]
+    assert after_shown == before_shown
+
+@pytest.mark.parametrize(
+    "event",
+    (
+        {"event_id": "touch-failure", "type": "touch_head"},
+        {"event_id": "raise-failure", "type": "raise"},
+    ),
+)
+def test_body_rejections_use_the_same_untracked_static_catch(event, tmp_path) -> None:  # noqa: ANN001
+    pytest.importorskip("fastapi")
+    from fastapi.testclient import TestClient
+
+    client = TestClient(create_body_app(data_dir=tmp_path, provider=RejectingProvider()))
+    response = client.post("/api/body/step", json={"event": event}).json()
+
+    assert response["event_status"] == "processed"
+    assert response["mind_status"] == "rejected"
+    assert response["expression"]["text"] == STATIC_CATCH
+    state, history, _ = MindFiles(tmp_path).load(datetime.now(UTC).astimezone())
+    assert state["pending_expression"] is None
+    shown = client.post(
+        "/api/body/step", json={"shown_id": response["expression"]["id"]}
+    ).json()
+    assert shown["shown_confirmed"] is False
+    assert all(item["type"] != "shared_expression" for item in history)
+
 
 
 def test_cross_day_unshown_ambient_is_discarded_without_erasing_life(api) -> None:

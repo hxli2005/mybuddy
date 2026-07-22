@@ -142,6 +142,13 @@ class CandidateBundle(BaseModel):
     def normalize_null_string(cls, value: object) -> object:
         return None if isinstance(value, str) and value in {"", "null"} else value
 
+    @field_validator("expression")
+    @classmethod
+    def expression_is_authored(cls, value: str | None) -> str | None:
+        if value is not None and (not value.strip() or value.strip() == STATIC_CATCH):
+            raise ValueError("expression 必须非空，且不能使用失败路径保留的 STATIC_CATCH")
+        return value
+
     @model_validator(mode="after")
     def expression_fields_match(self) -> CandidateBundle:
         if self.expression is None:
@@ -1399,7 +1406,7 @@ def _accepted_documents(
     if expression_kind is not None:
         expression = bundle.expression.strip() if bundle.expression else ""
         if expression_kind == "direct" and not expression:
-            expression = STATIC_CATCH
+            raise ValueError("直接表达不能为空")
     else:
         expression = ""
     if expression:
@@ -1584,7 +1591,6 @@ async def mind_step(
     event_id: str | None = None,
     experience_type: Literal["user_experience", "body_touch", "body_raise"] = "user_experience",
     experience_details: dict[str, str] | None = None,
-    fallback_text: str = STATIC_CATCH,
 ) -> StepResult:
     """运行直接经历；观察事实必落盘，候选通过时再一起提交状态和记忆。"""
     current_time = (now or datetime.now(UTC)).astimezone()
@@ -1659,12 +1665,14 @@ async def mind_step(
 
     fallback = PendingExpression(
         id=f"expr_{uuid.uuid4().hex}",
-        text=fallback_text,
+        text=STATIC_CATCH,
         created_at=current_time.isoformat(),
         act="respond",
     )
     state["last_step_at"] = current_time.isoformat()
-    state["pending_expression"] = fallback.model_dump()
+    # 静态接住只是身体对本次失败的临时呈现，不是小布通过的台词。
+    # 不写 pending_expression，它就不会等 shown，也不会进共同历史。
+    state["pending_expression"] = None
     if event_id is not None:
         recent = [item for item in state.get("recent_event_ids", []) if isinstance(item, str)]
         state["recent_event_ids"] = [*recent, event_id][-RECENT_EVENT_LIMIT:]

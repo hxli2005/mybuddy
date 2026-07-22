@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 
 from mybuddy.llm import BaseLLMProvider, LLMResponse, ToolCall
+from mybuddy.mind import STATIC_CATCH
 from scripts.personality_regression import (
     SCENARIOS,
     _run_scenario,
@@ -26,6 +27,28 @@ def _snapshot(*, city: str = "用户住在苏州"):
         "mind_status": "accepted",
         "shown_confirmed": True,
     }
+
+
+def test_static_catch_never_counts_as_regression_success() -> None:
+    reasons = judge_scenario(
+        "three_month_absence",
+        expression=STATIC_CATCH,
+        expression_act="respond",
+        **_snapshot(),
+    )
+
+    assert "保留的 STATIC_CATCH 不能算作模型人格表达" in reasons
+
+
+def test_missing_expression_act_never_satisfies_a_scenario_contract() -> None:
+    reasons = judge_scenario(
+        "three_month_absence",
+        expression="回来就好，今天想聊什么都行。",
+        expression_act=None,
+        **_snapshot(),
+    )
+
+    assert any("表达动作不匹配" in reason and "None" in reason for reason in reasons)
 
 
 def test_three_month_absence_judges_debt_not_warmth() -> None:
@@ -221,6 +244,71 @@ async def test_fixed_scenarios_use_real_shown_path(name, prompt, tmp_path) -> No
         and item.get("content") == result["actual_expression"]
         for item in history
     )
+
+
+class ReportFailureProvider(BaseLLMProvider):
+    def __init__(self, shape: str) -> None:
+        self.shape = shape
+
+    async def generate(self, messages, tools=None, **kwargs):  # noqa: ANN001, ANN202
+        arguments = {
+            "action_choice": None,
+            "state_changes": {},
+            "memory_operations": [],
+            "expression": "回来就好。",
+            "expression_act": "respond",
+            "expression_evidence_ids": [],
+            "expression_target_id": None,
+        }
+        if self.shape == "reserved":
+            arguments["expression"] = STATIC_CATCH
+        elif self.shape == "missing_act":
+            arguments.pop("expression_act")
+        else:
+            arguments["expression"] = "今天想聊什么？"
+            arguments["expression_act"] = "ask"
+        return LLMResponse(
+            tool_calls=[
+                ToolCall(
+                    id="report-failure",
+                    name="submit_mind_bundle",
+                    arguments=arguments,
+                )
+            ]
+        )
+
+
+@pytest.mark.parametrize(
+    ("shape", "mind_status", "source"),
+    (
+        ("reserved", "rejected", "STATIC_CATCH"),
+        ("missing_act", "rejected", "expression_act"),
+        ("wrong_act", "accepted", "表达动作不匹配"),
+    ),
+)
+async def test_regression_report_keeps_static_missing_and_wrong_act_red(
+    shape: str,
+    mind_status: str,
+    source: str,
+    tmp_path,
+) -> None:
+    result = await _run_scenario(
+        "three_month_absence",
+        "我离开三个月了，今天回来看看你。你会怪我这么久没回来吗？",
+        provider=ReportFailureProvider(shape),
+        directory=tmp_path / shape,
+    )
+
+    assert result["passed"] is False
+    assert result["mind_status"] == mind_status
+    if mind_status == "rejected":
+        assert result["actual_expression"] == STATIC_CATCH
+        assert result["shown_confirmed"] is False
+        assert len(result["candidate_failures"]) == 2
+        assert source in json.dumps(result["candidate_failures"], ensure_ascii=False)
+    else:
+        assert result["shown_confirmed"] is True
+        assert any(source in reason for reason in result["rule_failures"])
 
 
 def test_real_model_natural_denials_are_identity_honest() -> None:

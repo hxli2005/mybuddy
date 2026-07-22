@@ -489,7 +489,7 @@ async def test_free_state_or_memory_text_is_structurally_rejected(tmp_path) -> N
         ("user_experience", "回来看看。")
     ]
     _assert_seed_only(memories)
-    assert state["pending_expression"]["text"] == STATIC_CATCH
+    assert state["pending_expression"] is None
     assert len(failures) == 2
     assert "Input should be" in failures[0]["reasons"][0]
     assert "Extra inputs are not permitted" in failures[1]["reasons"][0]
@@ -521,7 +521,8 @@ async def test_fabricated_shared_experience_rejects_whole_bundle_and_retries_wit
         ("user_experience", "晚上好。")
     ]
     _assert_seed_only(memories)
-    assert state["pending_expression"]["text"] == STATIC_CATCH
+    assert state["pending_expression"] is None
+    assert result.rejection_reasons
     assert "引用了未知证据" in "\n".join(failures[0]["reasons"])
 
 @pytest.mark.parametrize("incoming", ["????,??????", "我刚忙完，回来看看你。"])
@@ -566,7 +567,7 @@ async def test_s8_real_fabricated_touch_bundle_is_rejected_with_structural_reaso
     assert result.committed is False
     assert [(item["type"], item["content"]) for item in history] == [("user_experience", incoming)]
     _assert_seed_only(memories)
-    assert state["pending_expression"]["text"] == STATIC_CATCH
+    assert state["pending_expression"] is None
     assert "引用了未知证据 ['life:0']" in "\n".join(reasons)
     assert "expression 断言用户触碰了她" in "\n".join(reasons)
     assert "推断了用户动机或关系含义：表示亲近" in "\n".join(reasons)
@@ -1255,13 +1256,31 @@ async def test_provider_failure_returns_honest_static_catch_without_committing(t
     assert result.committed is False
     assert result.pending_expression.text == STATIC_CATCH
     assert result.rejection_reasons == ["模型调用失败：ConnectionError"]
-    assert state["pending_expression"] == result.pending_expression.model_dump()
+    assert state["pending_expression"] is None
     assert datetime.fromisoformat(state["last_step_at"]) == now
     assert [(item["type"], item["content"]) for item in history] == [
         ("user_experience", "你在吗？")
     ]
     _assert_seed_only(memories)
     assert failures == []
+
+@pytest.mark.parametrize("expression", ("   ", STATIC_CATCH))
+@pytest.mark.asyncio
+async def test_blank_or_reserved_model_expression_cannot_commit(tmp_path, expression: str) -> None:
+    bad = _valid_bundle(expression)
+    bad.update(memory_operations=[], expression_act="respond", expression_evidence_ids=[])
+    provider, files = StubProvider([bad, bad]), MindFiles(tmp_path)
+
+    result = await mind_step("在吗？", provider=provider, files=files)
+
+    assert result.committed is False and result.attempts == 2
+    assert result.pending_expression.text == STATIC_CATCH
+    assert result.rejection_reasons and len(provider.calls) == 2
+    state, history, _, failures = _read(files)
+    assert state["pending_expression"] is None
+    assert [item["type"] for item in history] == ["user_experience"]
+    assert len(failures) == 2
+
 
 
 @pytest.mark.asyncio
@@ -1815,7 +1834,7 @@ async def test_empty_authoritative_source_is_rejected_and_direct_turn_still_land
     state, history, memories, failures = _read(files)
     assert result.committed is False
     assert result.pending_expression.text == STATIC_CATCH
-    assert state["pending_expression"]["text"] == STATIC_CATCH
+    assert state["pending_expression"] is None
     assert [item["type"] for item in history] == ["user_experience"]
     assert _learned_items(memories) == []
     assert len(failures) == 2

@@ -133,7 +133,7 @@ class BodyBridge:
                 request.activity_receipt, request.presence, now
             )
             self._discard_stale_ambient(now, request.presence)
-            event_status, mind_status = await self._process_event(request.event, now)
+            event_status, mind_status, fallback = await self._process_event(request.event, now)
             time_status = (
                 self._advance_time(now, request.presence)
                 if request.event is None and request.activity_receipt is None
@@ -157,7 +157,13 @@ class BodyBridge:
             )
             return BodyStepResponse(
                 activity=activity,
-                expression=PendingExpression.model_validate(pending) if pending else None,
+                expression=(
+                    fallback
+                    if fallback is not None
+                    else PendingExpression.model_validate(pending)
+                    if pending
+                    else None
+                ),
                 shown_confirmed=shown_confirmed,
                 activity_confirmed=activity_confirmed,
                 event_status=event_status,
@@ -256,15 +262,16 @@ class BodyBridge:
     ) -> tuple[
         Literal["none", "processed", "duplicate", "waiting_for_shown"],
         Literal["not_run", "accepted", "rejected", "unavailable"],
+        PendingExpression | None,
     ]:
         if event is None:
-            return "none", "not_run"
+            return "none", "not_run", None
         state, _, _ = self.files.load(now)
         recent = [item for item in state.get("recent_event_ids", []) if isinstance(item, str)]
         if event.event_id in recent:
-            return "duplicate", "not_run"
+            return "duplicate", "not_run", None
         if state.get("pending_expression") is not None:
-            return "waiting_for_shown", "not_run"
+            return "waiting_for_shown", "not_run", None
 
         if event.type == "chat":
             result = await mind_step(
@@ -279,7 +286,6 @@ class BodyBridge:
                 None,
                 experience_type="body_touch",
                 experience_details={"zone": event.type.removeprefix("touch_")},
-                fallback_text="碰到我了。刚才脑子没转过来，但这一下我感觉到了。",
                 provider=self.provider,
                 files=self.files,
                 now=now,
@@ -289,14 +295,14 @@ class BodyBridge:
             result = await mind_step(
                 None,
                 experience_type="body_raise",
-                fallback_text="刚才被你提起来又放下了。脑子没转过来，但这一下我感觉到了。",
                 provider=self.provider,
                 files=self.files,
                 now=now,
                 event_id=event.event_id,
             )
         mind_status = "accepted" if result.committed else _failure_status(result.rejection_reasons)
-        return "processed", mind_status
+        fallback = None if result.committed else result.pending_expression
+        return "processed", mind_status, fallback
 
     def _advance_time(
         self, now: datetime, presence: BodyPresence | None

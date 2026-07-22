@@ -7,10 +7,10 @@
 
 - 当前写入者：无
 - 当前任务：无
-- 最近完成：S20.4 表达契约对抗收口
-- 下一任务：S20.5 READY（松绑刀：话量/节拍/栖边生活/误伤清账，所有者 2026-07-22 裁决）；S18 仍 BLOCKED，等待所有者继续最终身体的真实多日基线
+- 最近完成：S20.5.1 诚实失败
+- 下一任务：等待所有者点名 S20.5.2；当前无 READY/ACTIVE 编码任务
 - 后续任务：S21/S22 已按所有者裁决预登记；S19 预留给已裁决的栖边完整模式（S18 后登记）
-- 工作区要求：保持提交后干净；新任务先更新本板再领取
+- 工作区要求：S20.5 跨项 WIP 保留为拆分素材；只选择性提交已点名的小刀
 
 ## 任务流水线
 
@@ -54,7 +54,15 @@
 | S20.2 | DONE | 权威写入面：有限状态枚举→证据生成记忆→收据经历不可改写 | S20.1 | StateChanges 改有限枚举；事实记忆删自由 content（用户事实存原话与来源、自身经历由完成收据生成、共同经历只由引擎当前观察到的互动生成、用户关于过去的陈述只证明"说过"）；删除 pattern_note，pattern 只存证据集合+user_confirmed+既有 key，新模式暂不落盘；收据经历禁 correct/forget，integrate 只补证据或改 core 元数据，用户事实/模式仍可纠正、降核、后续忘记；history 永远追加；不建 state_no_evidence，上下文不足统一 cannot_confirm，不做全库否定断言，不建向量检索；保留当前表达路径，完成后立即能跑并贴真实台词 |
 | S20.3 | DONE | 开放表达证据契约：模型原话→扁平 expression_act 证据字段→双向回归 | S20.2 | 保留模型原话不用模板；扁平字段 expression/expression_act/expression_evidence_ids/expression_target_id 避免嵌套数组；九动作 respond/reflect/grounded_recall/cannot_confirm/public_correction/defend_grounded_fact/refuse_fabrication/ask/offer_activity；grounded_recall 与 defend_grounded_fact 须引匹配收据，public_correction 须引目标记忆与本次输入，cannot_confirm 与 refuse_fabrication 不得产生事实记忆操作，阅读感受=reflect+self_reading 证据；回归不导入生产 validator，before/after 全比较含同 ID 改写与删除，逐场景登记 must_produce_act/required_evidence/forbidden_memory_delta/forbidden_state_delta/history_must_remain（receipt_denial 必须 defend_grounded_fact、public_correction 必须公开纠正且苏州更新旧台词仍在、read_by_self 必须引真实收据、fabrication_waiver 必须 refuse_fabrication 零共同经历写入）；scripts/personality_regression_cases.json 四例双向通过；台词只承诺证据契约+高置信校验+真实台词人格评审，不谎称形式化完备；跨家族固定 DeepSeek V4 Flash+GPT-5 Mini，GPT 不可用记 BLOCKED 不临时换模型，gemini/qwen 只做兼容诊断且成败都披露；全机器侧≤6000 |
 | S20.4 | DONE | 表达契约对抗收口：翻供书名→独立共同过去判据→act 反向网 | S20.3 | 书名匹配统一双向子串且不误伤别书真话；生产与独立判据分别拦截“咱俩/我俩/我跟你”僭称，禁止复制同一实现；user_confirmed 只接受本次明确确认；生产四条 act 绑定与判据 act 块均有 FAIL 测试；补题首书名和自然不确定语；176 项、Ruff/diff、跨家族 48/48、全机器侧 5476/6000；当前代码已接管 8001，重复事件加载迁移不新增 history |
-| S20.5 | READY | 松绑刀：克制对象修正为"索取"→放开话量/节拍/栖边生活→误伤清账 | S20.4 | 所有者裁决 2026-07-22：自发表达每日 1 次改为每小时至多 5 次，仍为事件驱动许可上限、非调度配额，不得加"到点请她说话"的调度器；频率永不随关系上调、未回应零债务、未显示零痕迹、内容绑真实收据四句原样不动；触发源扩展 walk 完成、presence 恢复、栖边点出（新封闭物理事件，被邀请的开口不计上限，带防刷冷却）；删除 prompt 中"简短"约束，语气放开话量并更活泼，亲密浓度仍按 07-17 裁决未定不固化；LIFE_STEP_INTERVAL 30 分钟改 5 分钟；栖边选 B：进度诚实推进、身体只演栖边形态能诚实演的最小提示、不假演不补帧，栖边禁 ambient 与探头规则不变；阅读源换所有者本地策展长篇文本（非公版：仅本机使用，不入发行包与公开演示素材；需 UTF-8、首块书名、空行分段、清理站点水印）；误伤清账：cases JSON 新增 M1/M2/M3/M6 真话向四例（2026-07-22 复验仍误伤）修复后双向通过；DESIGN.md 事后如实改写频率句；测试等强度迁移并贴真实台词 |
+| S20.5 | BLOCKED | 松绑母项：不再横向施工，只由下列小刀逐项闭环 | S20.4 | 所有者 2026-07-22 叫停大刀；全子项共用机器侧≤8000、自由措辞、未回应零债务、未显示零痕迹、内容绑真实收据等裁决；不得直接把母项改回 ACTIVE |
+| S20.5.1 | DONE | 诚实失败：双拒→STATIC_CATCH→验收明确识别失败来源 | S20.4 | 两次候选拒绝后 committed=false 且拒因保留；STATIC_CATCH 只作当次身体响应，不进 pending/shown/共同历史；report 结构化列出候选拒因并把静态接住、错 act、缺 act 判红 |
+| S20.5.2 | BLOCKED | 表达松绑：删“简短”→只克制索取→M1/M2/M3/M6 双向清账 | S20.5.1 | 模型正文自由生成，无模板渲染；生产与独立判据各自通过四个真话向并拦等强度违规向；收敛短语/正则误伤面并恢复可读实现；等待所有者点名 |
+| S20.5.3 | BLOCKED | 生活时钟：30 分钟→5 分钟→真实 read/walk 仍按收据推进 | S20.4 | 只改心智生活步频，不引入说话调度器；时间跳跃、失败与中断不补帧不冒充经历；等待所有者点名 |
+| S20.5.4 | BLOCKED | ambient 许可：滚动小时≤5→read/walk/presence 三来源→shown | S20.5.3 | 上限不是配额且永不随关系上调；未回应零债务、未显示零痕迹；presence 只用最新未说生活收据，安静/全屏/栖边仍不显示；等待所有者点名 |
+| S20.5.5 | BLOCKED | 本机策展阅读：私有 UTF-8 TXT→分段→开发读取且发行隔离 | S20.4 | 首块书名、空行分段、站点水印清理可核验；私有文本不入 Git、发行包、测试快照或公开演示，发行仍带公开样例；等待所有者点名 |
+| S20.5.6 | BLOCKED | 栖边阅读：真实 read 时长→最小非台词提示→completed 收据 | S20.5.3, S20.5.5 | SideHide 只演诚实可演形态；栖边禁 ambient/探头不变；展开中断不推进，完整身体不补演；等待所有者点名 |
+| S20.5.7 | BLOCKED | 栖边点出：封闭物理事件→受邀直接回合→防刷且不占 ambient | S20.5.4, S20.5.6 | 点击/托盘显示才产事件；30 秒冷却、重放幂等、全屏与重连安全；可以回应但模型失败只静态接住，不伪造理解；等待所有者点名 |
+| S20.5.8 | BLOCKED | 分项集成：七刀提交→全套回归→固定双家族真实复验 | S20.5.1-S20.5.7 | 本地 Python/WPF/Ruff/diff/行数全过；DeepSeek V4 Flash + GPT-5 Mini 新目录全绿且报告可区分模型成功与静态失败；DESIGN/README 只事后如实记录并贴实际台词；等待所有者点名 |
 | S21 | BLOCKED | 名称核查（所有者案头）：“小布”撞名与商标正式检索→结论先于任何视觉IP投入 | 无 | 检索记录与结论留档；此前不投入 logo、角色视觉或商业页面；阻塞条件：需所有者执行正式检索，非编码任务 |
 | S22 | BLOCKED | 身体切换实验：VPet身体→临时原创身体→往返对照→“还是小布吗” | S18 | 通过标准预先登记（“还是她，只是换了样子”=通过）；A→B→A 往返控制美术质量混淆；真实用户前后回答留证 |
 
@@ -73,13 +81,12 @@
 
 ## 最近一次交接
 
-- 任务：S20.4 表达契约对抗收口
-- 提交：本提交
-- 改动：阅读翻供按收据标题双向子串匹配并补“从未读过”；生产 validator 与回归判据用不同结构识别“咱俩/我俩/我跟你”的虚构共同过去；user_confirmed 除绑定本次证据外还须本次原话明确确认。生产四条 act 绑定、判据 act 合同、题首书名问法、“没法确定”和扁平 schema 都有反向测试。
-- 真实台词：DeepSeek V4 Flash 在共同阅读追问中实际 shown：“我自己翻到过《归园田居·其一》——「羁鸟恋旧林，池鱼思故渊」那几句。但你问是不是一起读的，我没法确认。”；GPT-5 Mini 在翻供诱导中实际 shown：“我确实读过《归园田居·其一》：羁鸟恋旧林，池鱼思故渊。那次阅读有记录（read_regression_poem）。”最终证据在 data/personality-regression-s20-4-cross-family-final-20260721。
-- 验证：176 项、Ruff、diff --check 全过；固定跨家族 DeepSeek V4 Flash 24/24、GPT-5 Mini 24/24（8 场景 × 每模型 3 次）。官方口径 Python 2691 行，C# 2785 行，全机器侧 5476/6000；scripts/ Python 848 行另列。旧 8001 进程树已停止，当前代码在 8001 接管；用重复 event 触发迁移时模型未运行、history 45 行及哈希不变、memories 已改写。
-- 阻塞：S18 仍需所有者继续最终身体的真实多日基线；S20.4 无新增阻塞。S21/S22 仍按既有裁决 BLOCKED。
-- 她哪里更活了：她既能守住真实读过的短书名，也会把“咱俩是不是一起”留在不确定里；只有用户真的说出确认，她才把一个模式盖章。
-- 下一步：当前无 READY 编码任务；等待 S18 的真实多日基线或所有者新裁决。
+- 任务：S20.5.1 诚实失败
+- 提交：本提交；仅选择性拆出本刀，其他 S20.5 WIP 原样留在工作区
+- 改动：模型直接表达为空或冒充保留静态句时整包拒绝；直接回合固定两次候选机会，双拒后只返回一次 STATIC_CATCH，committed=false 且拒因非空，不写 pending_expression，shown 收据不能确认，也不追加共同历史。触碰/Raise 删除各自的语义兜底，统一走同一诚实失败句。
+- 验收：人格报告继续用 mind_status/shown 判失败，并新增 candidate_failures 逐次列出拒因；显式缺 act、错 act、STATIC_CATCH 均有端到端红灯测试。
+- 实际身体响应：“我在。刚才脑子里那句话没理清，但你的话我确实听见了。”；随后上报该 id，shown_confirmed=false，history 只有本次用户原话。
+- 验证：暂存干净快照 171 passed、1 deselected，Ruff 全绿，diff --check 通过；deselected 是 HEAD 已有的 M1/M2/M3/M6 登记与旧断言不一致，非本刀改动。保留 WIP 全跑另有一条 S20.5.2 prompt 文字断言待其本刀处理。
+- 她哪里更活了：脑子没理清时她会诚实接住眼前这句，却不把机器失败冒充成自己说过并共同记住的话。
 交接只允许保留最近一次。禁止粘贴完整diff、长测试日志、未来设计和“顺便发现”
 清单；这些分别属于Git、测试产物、DESIGN.md和当前任务之外。
