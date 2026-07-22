@@ -16,6 +16,7 @@ public partial class MainWindow : Window
 {
     private readonly ShellSettings _settings = SettingsStore.Load();
     private readonly DispatcherTimer _walkTimer = new(DispatcherPriority.Render);
+    private readonly DispatcherTimer _edgeReadTimer = new();
     private readonly DispatcherTimer _edgeHoverTimer = new()
     {
         Interval = TimeSpan.FromMilliseconds(350),
@@ -51,6 +52,7 @@ public partial class MainWindow : Window
         Loaded += OnLoaded;
         _walkTimer.Interval = TimeSpan.FromMilliseconds(16);
         _walkTimer.Tick += OnWalkTick;
+        _edgeReadTimer.Tick += OnEdgeReadTick;
         _edgeHoverTimer.Tick += OnEdgeHoverTick;
         _edgeVisibilityTimer.Tick += (_, _) => UpdateEdgeVisibility();
         MouseEnter += (_, _) =>
@@ -392,10 +394,21 @@ public partial class MainWindow : Window
     {
         if (response.ActivityConfirmed && _activityReceipt is not null)
         {
+            _edgeReadTimer.Stop();
+            EdgeLifeCue.Visibility = Visibility.Collapsed;
             _activityReceipt = null;
             _activeActivityId = null;
         }
-        if (_edgeSide is not null) return;
+        var surface = _edgeSide is null ? "full" : "edge";
+        if (response.Activity is { } planned && !planned.MatchesSurface(surface)) return;
+        if (_edgeSide is not null)
+        {
+            if (response.Activity is { Type: "read" } edgeRead &&
+                !string.Equals(edgeRead.Id, _activeActivityId, StringComparison.Ordinal) &&
+                !string.Equals(edgeRead.Id, _activityReceipt?.ActivityId, StringComparison.Ordinal))
+                StartEdgeRead(edgeRead);
+            return;
+        }
         if (response.Activity is not { } activity ||
             string.Equals(activity.Id, _activeActivityId, StringComparison.Ordinal) ||
             string.Equals(activity.Id, _activityReceipt?.ActivityId, StringComparison.Ordinal))
@@ -415,6 +428,47 @@ public partial class MainWindow : Window
             return;
         }
         _activeActivityId = null;
+    }
+
+    private void StartEdgeRead(BodyActivity activity)
+    {
+        if (_edgeSide is not { } side) return;
+        _activeActivityId = activity.Id;
+        EdgeLifeCue.HorizontalAlignment = side == EdgeSide.Left
+            ? HorizontalAlignment.Right
+            : HorizontalAlignment.Left;
+        EdgeLifeCue.Visibility = Visibility.Visible;
+        _edgeReadTimer.Interval = TimeSpan.FromMilliseconds(Math.Max(1, activity.DurationMs));
+        _edgeReadTimer.Start();
+        App.LogMessage($"event=edge_read_cue_started activity_id={activity.Id} duration_ms={activity.DurationMs}");
+    }
+
+    private async void OnEdgeReadTick(object? sender, EventArgs args)
+    {
+        _edgeReadTimer.Stop();
+        EdgeLifeCue.Visibility = Visibility.Collapsed;
+        if (_activeActivityId is not { } activityId) return;
+        _activityReceipt = new BodyActivityReceipt
+        {
+            ActivityId = activityId,
+            Status = "completed",
+            Reason = "edge_cue_finished",
+        };
+        App.LogMessage($"event=edge_read_cue_finished activity_id={activityId}");
+        if (_stateLoop is not null) await _stateLoop.PollAsync();
+    }
+
+    private void InterruptEdgeRead()
+    {
+        if (!_edgeReadTimer.IsEnabled || _activeActivityId is not { } activityId) return;
+        _edgeReadTimer.Stop();
+        EdgeLifeCue.Visibility = Visibility.Collapsed;
+        _activityReceipt = new BodyActivityReceipt
+        {
+            ActivityId = activityId,
+            Status = "interrupted",
+            Reason = "activity_replaced",
+        };
     }
 
     private void StartWalk(string activityId, BodyActionDefinition action)
@@ -544,6 +598,7 @@ public partial class MainWindow : Window
     private void ExitEdge()
     {
         if (_edgeSide is not { } side) return;
+        InterruptEdgeRead();
         var area = CurrentWorkArea();
         var top = EdgeDock.TopFromRatio(area, ActualHeight, _settings.EdgeTopRatio ?? 0.5);
         _edgeSide = null;
@@ -682,6 +737,8 @@ public partial class MainWindow : Window
         _stateLoop?.Dispose();
         _walkTimer.Stop();
         _walkTimer.Tick -= OnWalkTick;
+        _edgeReadTimer.Stop();
+        _edgeReadTimer.Tick -= OnEdgeReadTick;
         _edgeHoverTimer.Stop();
         _edgeVisibilityTimer.Stop();
         _walkClock.Stop();

@@ -64,6 +64,7 @@ class BodyActivityReceipt(BaseModel):
     reason: (
         Literal[
             "animation_finished",
+            "edge_cue_finished",
             "touch",
             "chat",
             "activity_replaced",
@@ -78,7 +79,7 @@ class BodyActivityReceipt(BaseModel):
     @model_validator(mode="after")
     def completed_motion_must_be_a_horizontal_walk(self) -> BodyActivityReceipt:
         allowed_reasons = {
-            "completed": {None, "animation_finished"},
+            "completed": {None, "animation_finished", "edge_cue_finished"},
             "interrupted": {"touch", "chat", "activity_replaced", "raise"},
             "failed": {"animation_fault", "window_fault"},
         }
@@ -98,6 +99,7 @@ class BodyActivity(BaseModel):
     id: str
     type: Literal["read", "walk"]
     duration_ms: int = Field(default=15_000, ge=0)
+    presentation: Literal["full", "edge"] | None = None
 
 
 class BodyStepRequest(BaseModel):
@@ -133,6 +135,8 @@ class BodyBridge:
             now = datetime.now(UTC).astimezone()
             presence_returned = self._presence_returned(request.presence)
             shown_confirmed = self._confirm_shown(request.shown_id, now)
+            if request.activity_receipt is None:
+                self._discard_incompatible_activity(request.presence, now)
             activity_confirmed, receipt_mind_status = await self._confirm_activity(
                 request.activity_receipt,
                 request.presence,
@@ -174,7 +178,7 @@ class BodyBridge:
                 BodyActivity.model_validate(
                     {
                         key: pending_activity[key]
-                        for key in ("id", "type", "duration_ms")
+                        for key in ("id", "type", "duration_ms", "presentation")
                         if key in pending_activity
                     }
                 )
@@ -222,6 +226,18 @@ class BodyBridge:
         self.files.commit(state, history, memories)
         return True
 
+    def _discard_incompatible_activity(self, presence: BodyPresence | None, now: datetime) -> bool:
+        if presence is None:
+            return False
+        state, _, _ = self.files.load(now)
+        pending = state.get("pending_activity")
+        if not isinstance(pending, dict):
+            return False
+        incompatible = presence.surface == "edge" and pending.get("type") == "walk"
+        if pending.get("type") == "read":
+            incompatible = pending.get("presentation", "full") != presence.surface
+        return incompatible and discard_activity(str(pending.get("id")), files=self.files, now=now)
+
     async def _confirm_activity(
         self,
         receipt: BodyActivityReceipt | None,
@@ -244,6 +260,8 @@ class BodyBridge:
             confirmed = discard_activity(receipt.activity_id, files=self.files, now=now)
             return confirmed, "not_run"
         if activity_type == "walk":
+            if receipt.reason == "edge_cue_finished":
+                return False, "rejected"
             if receipt.motion is None:
                 return False, "rejected"
             confirmed = complete_walk(
@@ -262,12 +280,17 @@ class BodyBridge:
             return True, self._receipt_result_status(offered)
         if activity_type != "read" or receipt.motion is not None:
             return False, "rejected"
+        scheduled_at_edge = pending.get("presentation", "full") == "edge"
+        if scheduled_at_edge != (receipt.reason == "edge_cue_finished"):
+            return False, "rejected"
         result = await complete_reading(
             receipt.activity_id,
             provider=self.provider,
             files=self.files,
             now=now,
-            allow_ambient=allow_ambient and self._ambient_allowed(presence, now),
+            allow_ambient=(
+                allow_ambient and not scheduled_at_edge and self._ambient_allowed(presence, now)
+            ),
         )
         if result.committed:
             return True, "accepted"
@@ -366,14 +389,16 @@ class BodyBridge:
     def _advance_time(
         self, now: datetime, presence: BodyPresence | None
     ) -> Literal["not_due", "scheduled", "waiting_for_activity", "waiting_for_shown"]:
-        if presence is not None and presence.surface == "edge":
-            return "not_due"
         state, _, _ = self.files.load(now)
         if state.get("pending_expression") is not None:
             return "waiting_for_shown"
         if state.get("pending_activity") is not None:
             return "waiting_for_activity"
-        return advance_time(files=self.files, now=now).status
+        return advance_time(
+            files=self.files,
+            now=now,
+            edge_docked=presence is not None and presence.surface == "edge",
+        ).status
 
     def _ambient_allowed(self, presence: BodyPresence | None, now: datetime) -> bool:
         if (

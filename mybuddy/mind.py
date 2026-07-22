@@ -187,6 +187,7 @@ class PendingReadActivity(PendingActivity):
     passage_index: int
     text: str
     duration_ms: int = 15_000
+    presentation: Literal["full", "edge"] = "full"
 
 
 class PendingWalkActivity(PendingActivity):
@@ -1171,7 +1172,12 @@ def _reading_source(path: Path) -> dict[str, Any]:
     }
 
 
-def _activity(action: str, state: dict[str, Any], reading_path: Path) -> dict[str, Any]:
+def _activity(
+    action: str,
+    state: dict[str, Any],
+    reading_path: Path,
+    presentation: Literal["full", "edge"] = "full",
+) -> dict[str, Any]:
     if action == "walk":
         return {"id": f"walk_{uuid.uuid4().hex}", "type": "walk"}
     source = _reading_source(reading_path)
@@ -1185,6 +1191,7 @@ def _activity(action: str, state: dict[str, Any], reading_path: Path) -> dict[st
         "passage_index": passage_index,
         "text": text,
         "duration_ms": max(15_000, len(text) * 250),
+        "presentation": presentation,
     }
 
 
@@ -2069,7 +2076,9 @@ async def mind_step(
     )
 
 
-def advance_time(*, files: MindFiles, now: datetime | None = None) -> TimeStepResult:
+def advance_time(
+    *, files: MindFiles, now: datetime | None = None, edge_docked: bool = False
+) -> TimeStepResult:
     """到点发出一个 read 或 walk；没有身体收据就没有她的生活事实。"""
     current_time = (now or datetime.now(UTC)).astimezone()
     state, history, memories = files.load(current_time)
@@ -2085,10 +2094,17 @@ def advance_time(*, files: MindFiles, now: datetime | None = None) -> TimeStepRe
     if elapsed < LIFE_STEP_INTERVAL:
         return TimeStepResult(status="not_due")
 
-    action = state.get("next_activity")
+    if edge_docked and state["reading"]["finished"]:
+        return TimeStepResult(status="not_due")
+    action = "read" if edge_docked else state.get("next_activity")
     if action != "read" or state["reading"]["finished"]:
         action = "walk"
-    state["pending_activity"] = _activity(action, state, files.reading_path)
+    state["pending_activity"] = _activity(
+        action,
+        state,
+        files.reading_path,
+        "edge" if edge_docked else "full",
+    )
     files.commit(state, history, memories)
     return TimeStepResult(status="scheduled")
 

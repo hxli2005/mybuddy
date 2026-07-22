@@ -24,6 +24,12 @@
         </Border>
         <local:Bubble x:Name="SpeechBubble" Panel.ZIndex="30"
                       Margin="8,2" VerticalAlignment="Top" />
+        <Border x:Name="EdgeLifeCue" Panel.ZIndex="25" Visibility="Collapsed"
+                Width="34" Height="26" Margin="18,0" VerticalAlignment="Center"
+                IsHitTestVisible="False" Background="#CC20232D" CornerRadius="13">
+            <TextBlock Text="读" Foreground="#F4F6FA" FontSize="12"
+                       HorizontalAlignment="Center" VerticalAlignment="Center" />
+        </Border>
         <Border x:Name="ChatDrawer" Panel.ZIndex="20" Visibility="Collapsed"
                 Height="196" VerticalAlignment="Bottom" Margin="5,0,5,51">
             <local:ChatPanel x:Name="Chat" />

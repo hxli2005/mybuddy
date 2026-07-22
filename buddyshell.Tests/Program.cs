@@ -15,6 +15,8 @@ internal static class Program
         var tests = new (string Name, Action Run)[]
         {
             ("body step is the only wire contract", BodyStepIsOnlyContract),
+            ("edge read cue stays a closed physical fact", EdgeReadCueStaysClosed),
+            ("read presentation stays bound to its scheduled surface", ReadPresentationStaysBound),
             ("edge docking exposes only a narrow strip", EdgeDockingExposesNarrowStrip),
             ("edge transitions preserve side-hide continuity", EdgeTransitionsPreserveContinuity),
             ("body action catalog adds same-shape actions as data", BodyActionCatalogIsDataDriven),
@@ -108,6 +110,35 @@ internal static class Program
         Contains(response, "mind_status");
         Contains(response, "unavailable");
         Contains(response, "activity_confirmed");
+    }
+
+    private static void EdgeReadCueStaysClosed()
+    {
+        var json = JsonSerializer.Serialize(new BodyStepRequest
+        {
+            ActivityReceipt = new BodyActivityReceipt
+            {
+                ActivityId = "edge-read-1",
+                Status = "completed",
+                Reason = "edge_cue_finished",
+            },
+            Presence = new BodyPresence { Present = true, Fullscreen = false, Surface = "full" },
+        });
+        Contains(json, "edge_cue_finished");
+        Equal(false, json.Contains("meaning", StringComparison.Ordinal));
+        Equal(false, json.Contains("content", StringComparison.Ordinal));
+    }
+
+    private static void ReadPresentationStaysBound()
+    {
+        var edge = new BodyActivity { Id = "read-edge", Type = "read", Presentation = "edge" };
+        Contains(JsonSerializer.Serialize(edge), "\"presentation\":\"edge\"");
+        Equal(true, edge.MatchesSurface("edge"));
+        Equal(false, edge.MatchesSurface("full"));
+        var legacy = new BodyActivity { Id = "read-legacy", Type = "read" };
+        Equal(true, legacy.MatchesSurface("full"));
+        Equal(false, legacy.MatchesSurface("edge"));
+        Equal(true, new BodyActivity { Type = "walk" }.MatchesSurface("full"));
     }
 
     private static void EdgeDockingExposesNarrowStrip()

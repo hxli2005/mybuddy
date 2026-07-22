@@ -103,6 +103,11 @@ public sealed class BodyActivity
     [JsonPropertyName("type")]
     public string Type { get; set; } = "read";
 
+    [JsonPropertyName("presentation")]
+    public string? Presentation { get; set; }
+
+    public bool MatchesSurface(string surface) =>
+        Type != "read" || (Presentation ?? "full") == surface;
     [JsonPropertyName("duration_ms")]
     public int DurationMs { get; set; } = 15_000;
 }

@@ -952,6 +952,30 @@ def test_completed_walk_records_only_verified_physical_life(api) -> None:
     assert provider.calls == 0
 
 
+def test_edge_cue_reason_cannot_complete_a_walk(api) -> None:
+    client, provider, data_dir = api
+    scheduled = _schedule_walk(client, data_dir)
+
+    response = client.post(
+        "/api/body/step",
+        json={
+            "activity_receipt": {
+                "activity_id": scheduled["activity"]["id"],
+                "status": "completed",
+                "reason": "edge_cue_finished",
+                "motion": _walk_motion(),
+            }
+        },
+    ).json()
+    state = json.loads((data_dir / "state.json").read_text(encoding="utf-8"))
+
+    assert response["activity_confirmed"] is False
+    assert response["mind_status"] == "rejected"
+    assert state["pending_activity"]["id"] == scheduled["activity"]["id"]
+    assert _history(data_dir) == []
+    assert provider.calls == 0
+
+
 @pytest.mark.parametrize(
     ("status", "reason", "motion"),
     [
@@ -1019,38 +1043,156 @@ def test_walk_receipt_rejects_out_of_bounds_zero_or_authored_meaning(api, motion
     assert provider.calls == 0
 
 
-def test_edge_surface_pauses_semantic_life_without_touching_four_files(api) -> None:
+def test_edge_surface_advances_only_read_with_an_honest_cue_receipt(api) -> None:
     client, provider, data_dir = api
     files = MindFiles(data_dir)
     now = datetime.now(UTC).astimezone()
     state, history, memories = files.load(now)
-    state["next_activity"] = "read"
+    state["next_activity"] = "walk"
     state["last_step_at"] = (now - timedelta(minutes=31)).isoformat()
     files.commit(state, history, memories)
-    paths = [
-        files.state_path,
-        files.history_path,
-        files.memories_path,
-        files.failures_path,
-    ]
-    before = {path: path.read_bytes() for path in paths}
+    presence = {"present": True, "fullscreen": False, "surface": "edge"}
+
+    scheduled = client.post(
+        "/api/body/step",
+        json={"presence": presence},
+    ).json()
+    assert scheduled["time_status"] == "scheduled"
+    assert scheduled["activity"]["type"] == "read"
+    assert scheduled["activity"]["presentation"] == "edge"
+
+    completed = client.post(
+        "/api/body/step",
+        json={
+            "presence": {"present": True, "fullscreen": False, "surface": "full"},
+            "activity_receipt": {
+                "activity_id": scheduled["activity"]["id"],
+                "status": "completed",
+                "reason": "edge_cue_finished",
+            },
+        },
+    ).json()
+    final_state = json.loads(files.state_path.read_text(encoding="utf-8"))
+    recorded = _history(data_dir)
+
+    assert completed["activity_confirmed"] is True
+    assert completed["expression"] is None
+    assert final_state["reading"]["next_passage"] == 1
+    assert final_state["next_activity"] == "walk"
+    assert [item["type"] for item in recorded] == ["self_reading", "memory_operation"]
+    assert all(item["type"] != "self_walk" for item in recorded)
+    assert provider.calls == 1
+
+    state, history, memories = files.load(now)
+    state["last_step_at"] = (now - timedelta(minutes=6)).isoformat()
+    files.commit(state, history, memories)
+    next_edge = client.post("/api/body/step", json={"presence": presence}).json()
+    assert next_edge["activity"]["type"] == "read"
+
+
+@pytest.mark.parametrize(
+    ("scheduled_presence", "reason"),
+    [
+        ({"present": True, "fullscreen": False, "surface": "full"}, "edge_cue_finished"),
+        ({"present": True, "fullscreen": False, "surface": "edge"}, "animation_finished"),
+    ],
+)
+def test_read_completion_reason_matches_scheduled_presentation(
+    api,
+    scheduled_presence,
+    reason,  # noqa: ANN001
+) -> None:
+    client, provider, data_dir = api
+    files = MindFiles(data_dir)
+    now = datetime.now(UTC).astimezone()
+    state, history, memories = files.load(now)
+    state["last_step_at"] = (now - timedelta(minutes=6)).isoformat()
+    files.commit(state, history, memories)
+    scheduled = client.post("/api/body/step", json={"presence": scheduled_presence}).json()
+    assert scheduled["activity"]["presentation"] == scheduled_presence["surface"]
 
     response = client.post(
         "/api/body/step",
         json={
-            "presence": {
-                "present": True,
-                "fullscreen": False,
-                "surface": "edge",
-            }
+            "presence": scheduled_presence,
+            "activity_receipt": {
+                "activity_id": scheduled["activity"]["id"],
+                "status": "completed",
+                "reason": reason,
+            },
         },
-    )
+    ).json()
+    final_state = json.loads(files.state_path.read_text(encoding="utf-8"))
 
-    assert response.status_code == 200
-    assert response.json()["activity"] is None
-    assert response.json()["expression"] is None
-    assert response.json()["time_status"] == "not_due"
-    assert {path: path.read_bytes() for path in paths} == before
+    assert response["activity_confirmed"] is False
+    assert final_state["reading"]["next_passage"] == 0
+    assert final_state["pending_activity"]["id"] == scheduled["activity"]["id"]
+    assert _history(data_dir) == []
+    assert provider.calls == 0
+
+
+def test_revealing_during_edge_read_interrupts_without_progress_or_full_replay(api) -> None:
+    client, provider, data_dir = api
+    files = MindFiles(data_dir)
+    now = datetime.now(UTC).astimezone()
+    state, history, memories = files.load(now)
+    state["last_step_at"] = (now - timedelta(minutes=6)).isoformat()
+    files.commit(state, history, memories)
+    scheduled = client.post(
+        "/api/body/step",
+        json={"presence": {"present": True, "fullscreen": False, "surface": "edge"}},
+    ).json()
+
+    interrupted = client.post(
+        "/api/body/step",
+        json={
+            "presence": {"present": True, "fullscreen": False, "surface": "full"},
+            "activity_receipt": {
+                "activity_id": scheduled["activity"]["id"],
+                "status": "interrupted",
+                "reason": "activity_replaced",
+            },
+        },
+    ).json()
+    after = json.loads(files.state_path.read_text(encoding="utf-8"))
+    full_poll = client.post(
+        "/api/body/step",
+        json={"presence": {"present": True, "fullscreen": False, "surface": "full"}},
+    ).json()
+
+    assert interrupted["activity_confirmed"] is True
+    assert interrupted["expression"] is None
+    assert after["reading"]["next_passage"] == 0
+    assert after["pending_activity"] is None
+    assert _history(data_dir) == []
+    assert full_poll["activity"] is None
+    assert full_poll["time_status"] == "not_due"
+    assert provider.calls == 0
+
+
+def test_surface_mismatch_discards_legacy_pending_read_without_a_false_receipt(api) -> None:
+    client, provider, data_dir = api
+    files = MindFiles(data_dir)
+    now = datetime.now(UTC).astimezone()
+    state, history, memories = files.load(now)
+    state["last_step_at"] = (now - timedelta(minutes=6)).isoformat()
+    files.commit(state, history, memories)
+    scheduled = client.post("/api/body/step", json={}).json()
+    state, history, memories = files.load(now)
+    state["pending_activity"].pop("presentation", None)
+    files.commit(state, history, memories)
+
+    response = client.post(
+        "/api/body/step",
+        json={"presence": {"present": True, "fullscreen": False, "surface": "edge"}},
+    ).json()
+    final_state = json.loads(files.state_path.read_text(encoding="utf-8"))
+
+    assert scheduled["activity"]["type"] == "read"
+    assert response["activity"] is None
+    assert final_state["pending_activity"] is None
+    assert final_state["reading"]["next_passage"] == 0
+    assert _history(data_dir) == []
     assert provider.calls == 0
 
 
