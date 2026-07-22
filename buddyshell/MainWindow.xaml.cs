@@ -42,6 +42,7 @@ public partial class MainWindow : Window
     private bool _touchReporting;
     private bool _raiseDragging;
     private bool _raiseReporting;
+    private bool _edgeRevealReporting;
     private EdgeSide? _edgeSide;
     private bool _edgePeeked;
     private bool _edgeHiddenForFullscreen;
@@ -64,11 +65,12 @@ public partial class MainWindow : Window
             _edgeHoverTimer.Stop();
             if (_edgePeeked) ReturnToEdgeMain();
         };
-        PreviewMouseLeftButtonDown += (_, args) =>
+        PreviewMouseLeftButtonDown += async (_, args) =>
         {
             if (_edgeSide is null) return;
             args.Handled = true;
-            ExitEdge();
+            ExitEdge(poll: false);
+            await ReportEdgeRevealAsync();
         };
         Closing += (_, _) => SaveWindowPosition();
         Closed += (_, _) => DisposeServices();
@@ -148,9 +150,13 @@ public partial class MainWindow : Window
                 if (_edgeSide is not null) ExitEdge();
                 ShowSettings();
             };
-            _tray.ShowRequested += (_, _) =>
+            _tray.ShowRequested += async (_, _) =>
             {
-                if (_edgeSide is not null) ExitEdge();
+                if (_edgeSide is not null)
+                {
+                    ExitEdge(poll: false);
+                    await ReportEdgeRevealAsync();
+                }
                 else { Show(); Activate(); }
             };
             _tray.ExitRequested += (_, _) => Close();
@@ -252,6 +258,38 @@ public partial class MainWindow : Window
         finally
         {
             _raiseReporting = false;
+        }
+    }
+
+    private async Task ReportEdgeRevealAsync()
+    {
+        if (_client is null || _edgeRevealReporting) return;
+        _edgeRevealReporting = true;
+        var bodyEvent = new BodyEvent
+        {
+            EventId = $"edge-reveal-{Guid.NewGuid():N}",
+            Type = "edge_reveal",
+        };
+        try
+        {
+            var response = await StepAsync(bodyEvent);
+            if (response.EventStatus is not ("processed" or "duplicate" or "cooldown")) return;
+            ApplyActivity(response);
+            if (response.Expression is not null)
+            {
+                ShowBodyExpression(response.Expression);
+                await ConfirmShownAsync();
+            }
+            SetMindConnectionState(response);
+        }
+        catch (BridgeRequestException exception)
+        {
+            SetConnectionState("未连接；这次点出只完成了本地展开", ConnectionState.Warning);
+            App.LogMessage($"event=edge_reveal_unreported event_id={bodyEvent.EventId} reason={exception.Message}");
+        }
+        finally
+        {
+            _edgeRevealReporting = false;
         }
     }
 
@@ -595,7 +633,7 @@ public partial class MainWindow : Window
         App.LogMessage($"event=edge_enter side={_settings.EdgeSide} top_ratio={topRatio:F3}");
     }
 
-    private void ExitEdge()
+    private void ExitEdge(bool poll = true)
     {
         if (_edgeSide is not { } side) return;
         InterruptEdgeRead();
@@ -626,7 +664,7 @@ public partial class MainWindow : Window
         SaveWindowPosition();
         Show();
         Activate();
-        _ = _stateLoop?.PollAsync();
+        if (poll) _ = _stateLoop?.PollAsync();
         App.LogMessage($"event=edge_exit side={side.ToString().ToLowerInvariant()}");
     }
 

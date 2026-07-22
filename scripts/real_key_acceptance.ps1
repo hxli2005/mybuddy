@@ -1,4 +1,4 @@
-# 一键真实-key 验收:chat/touch/raise 事件腿 + read/walk/ambient 时间腿。
+# 一键真实-key 验收:chat/touch/raise/edge-reveal 事件腿 + read/walk/ambient 时间腿。
 # 脚本以身体层身份与引擎对话;key 始终只被引擎进程读取,本脚本不读取、不打印。
 # quiet/ambient 依赖时间流逝,采用与 S13 验收相同的"停机→回拨 last_step_at→重启"。
 param(
@@ -71,10 +71,11 @@ function Set-ClockBack([int]$Minutes = 31) {
 }
 
 try {
-    Start-Engine                                    # 运行 1:三条事件腿
+    Start-Engine                                    # 运行 1:四条事件腿
     Invoke-Leg "chat" "real-acceptance-chat-001"
     Invoke-Leg "touch-head" "real-acceptance-touch-001"
     Invoke-Leg "raise" "real-acceptance-raise-001"
+    Invoke-Leg "edge-reveal" "real-acceptance-edge-reveal-001"
     Stop-Engine
 
     Set-ClockBack; Start-Engine                     # 运行 2:安静阅读第 0 段

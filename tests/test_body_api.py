@@ -23,6 +23,7 @@ class StubProvider(BaseLLMProvider):
         )
         is_touch = incoming is not None and incoming["type"] == "body_touch"
         is_raise = incoming is not None and incoming["type"] == "body_raise"
+        is_edge_reveal = incoming is not None and incoming["type"] == "body_edge_reveal"
         chooses_read = incoming is not None and incoming.get("content") == "你继续读吧"
         touch_zone = incoming.get("zone") if is_touch else None
         expression = (
@@ -40,6 +41,8 @@ class StubProvider(BaseLLMProvider):
             if touch_zone == "body"
             else "刚才被你提起来晃了一小段，又稳稳落地了。"
             if is_raise
+            else "欸，你把我从边上点出来了。那我就在这里站一会儿。"
+            if is_edge_reveal
             else "忙完就好。先在我这儿松口气。"
         )
         expression_act = "reflect" if is_life_ambient else "respond" if expression else None
@@ -59,11 +62,11 @@ class StubProvider(BaseLLMProvider):
                             "attention": "阅读"
                             if is_reading
                             else "身体感受"
-                            if is_touch or is_raise
+                            if is_touch or is_raise or is_edge_reveal
                             else "对话",
                         },
                         "memory_operations": []
-                        if is_touch or is_expression_only
+                        if is_touch or is_expression_only or is_edge_reveal
                         else [
                             {
                                 "action": "record",
@@ -294,6 +297,69 @@ def test_raise_is_a_raw_idempotent_body_fact(api) -> None:
     assert authored.status_code == 422
 
 
+def test_edge_reveal_is_invited_direct_with_restart_safe_cooldown(api) -> None:
+    from fastapi.testclient import TestClient
+
+    client, provider, data_dir = api
+    files = MindFiles(data_dir)
+    first = client.post(
+        "/api/body/step",
+        json={"event": {"event_id": "edge-reveal-1", "type": "edge_reveal"}},
+    ).json()
+    assert first["event_status"] == "processed"
+    assert first["expression"]["kind"] == "direct"
+    client.post("/api/body/step", json={"shown_id": first["expression"]["id"]})
+
+    duplicate = client.post(
+        "/api/body/step",
+        json={"event": {"event_id": "edge-reveal-1", "type": "edge_reveal"}},
+    ).json()
+    client = TestClient(create_body_app(data_dir=data_dir, provider=provider))
+    before = _history(data_dir)
+    cooled = client.post(
+        "/api/body/step",
+        json={"event": {"event_id": "edge-reveal-2", "type": "edge_reveal"}},
+    ).json()
+
+    assert duplicate["event_status"] == "duplicate"
+    assert cooled["event_status"] == "cooldown"
+    assert cooled["expression"] is None
+    assert _history(data_dir) == before
+    assert provider.calls == 1
+    assert sum(item.get("expression_kind") == "ambient" for item in before) == 0
+
+    now = datetime.now(UTC).astimezone()
+    state, history, memories = files.load(now)
+    reveal = next(item for item in history if item.get("type") == "body_edge_reveal")
+    reveal["occurred_at"] = (now - timedelta(seconds=31)).isoformat()
+    files.commit(state, history, memories)
+    repeated_after_cooldown = client.post(
+        "/api/body/step",
+        json={"event": {"event_id": "edge-reveal-2", "type": "edge_reveal"}},
+    ).json()
+    assert repeated_after_cooldown["event_status"] == "duplicate"
+    assert repeated_after_cooldown["expression"] is None
+    assert provider.calls == 1
+
+    after_cooldown = client.post(
+        "/api/body/step",
+        json={"event": {"event_id": "edge-reveal-3", "type": "edge_reveal"}},
+    ).json()
+    assert after_cooldown["event_status"] == "processed"
+    assert after_cooldown["expression"]["kind"] == "direct"
+    assert provider.calls == 2
+
+
+@pytest.mark.parametrize("extra", [{"content": "替身体解释"}, {"meaning": "用户想听我说话"}])
+def test_edge_reveal_rejects_body_authored_content(api, extra) -> None:  # noqa: ANN001
+    client, _, _ = api
+    response = client.post(
+        "/api/body/step",
+        json={"event": {"event_id": "edge-reveal-invalid", "type": "edge_reveal", **extra}},
+    )
+    assert response.status_code == 422
+
+
 @pytest.mark.parametrize(
     ("provider", "expected"),
     [(UnavailableProvider(), "unavailable"), (RejectingProvider(), "rejected")],
@@ -338,6 +404,7 @@ def test_mind_status_does_not_call_a_fallback_connected(provider, expected, tmp_
     (
         {"event_id": "touch-failure", "type": "touch_head"},
         {"event_id": "raise-failure", "type": "raise"},
+        {"event_id": "edge-failure", "type": "edge_reveal"},
     ),
 )
 def test_body_rejections_use_the_same_untracked_static_catch(event, tmp_path) -> None:  # noqa: ANN001

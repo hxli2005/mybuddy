@@ -34,7 +34,7 @@ def main() -> None:
     parser.add_argument("--text", default=DEFAULT_TEXT)
     parser.add_argument(
         "--scenario",
-        choices=("chat", "touch-head", "raise", "quiet", "ambient"),
+        choices=("chat", "touch-head", "raise", "edge-reveal", "quiet", "ambient"),
         default="chat",
     )
     args = parser.parse_args()
@@ -45,6 +45,8 @@ def main() -> None:
         payload = {"event": {"event_id": args.event_id, "type": "touch_head"}}
     elif args.scenario == "raise":
         payload = {"event": {"event_id": args.event_id, "type": "raise"}}
+    elif args.scenario == "edge-reveal":
+        payload = {"event": {"event_id": args.event_id, "type": "edge_reveal"}}
     elif args.scenario == "ambient":
         payload = {"presence": {"present": True, "fullscreen": False}}
     else:

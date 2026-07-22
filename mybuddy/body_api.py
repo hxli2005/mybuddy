@@ -13,6 +13,7 @@ from mybuddy.config import load_config
 from mybuddy.llm import BaseLLMProvider, make_provider
 from mybuddy.mind import (
     READING_PATH,
+    RECENT_EVENT_LIMIT,
     MindFiles,
     PendingExpression,
     ReceiptResult,
@@ -25,11 +26,13 @@ from mybuddy.mind import (
     offer_latest_life_ambient,
 )
 
+EDGE_REVEAL_COOLDOWN = timedelta(seconds=30)
+
 
 class BodyEvent(BaseModel):
     model_config = ConfigDict(extra="forbid")
     event_id: str = Field(min_length=1, max_length=160)
-    type: Literal["chat", "touch_head", "touch_body", "raise"]
+    type: Literal["chat", "touch_head", "touch_body", "raise", "edge_reveal"]
     content: str | None = Field(default=None, max_length=4000)
 
     @field_validator("event_id")
@@ -116,7 +119,7 @@ class BodyStepResponse(BaseModel):
     expression: PendingExpression | None
     shown_confirmed: bool
     activity_confirmed: bool
-    event_status: Literal["none", "processed", "duplicate", "waiting_for_shown"]
+    event_status: Literal["none", "processed", "duplicate", "cooldown", "waiting_for_shown"]
     time_status: Literal["not_due", "scheduled", "waiting_for_activity", "waiting_for_shown"]
     mind_status: Literal["not_run", "accepted", "rejected", "unavailable"]
 
@@ -326,18 +329,22 @@ class BodyBridge:
     async def _process_event(
         self, event: BodyEvent | None, now: datetime
     ) -> tuple[
-        Literal["none", "processed", "duplicate", "waiting_for_shown"],
+        Literal["none", "processed", "duplicate", "cooldown", "waiting_for_shown"],
         Literal["not_run", "accepted", "rejected", "unavailable"],
         PendingExpression | None,
     ]:
         if event is None:
             return "none", "not_run", None
-        state, _, _ = self.files.load(now)
+        state, history, memories = self.files.load(now)
         recent = [item for item in state.get("recent_event_ids", []) if isinstance(item, str)]
         if event.event_id in recent:
             return "duplicate", "not_run", None
         if state.get("pending_expression") is not None:
             return "waiting_for_shown", "not_run", None
+        if event.type == "edge_reveal" and self._edge_reveal_on_cooldown(history, now):
+            state["recent_event_ids"] = [*recent, event.event_id][-RECENT_EVENT_LIMIT:]
+            self.files.commit(state, history, memories)
+            return "cooldown", "not_run", None
 
         if event.type == "chat":
             result = await mind_step(
@@ -357,10 +364,19 @@ class BodyBridge:
                 now=now,
                 event_id=event.event_id,
             )
-        else:
+        elif event.type == "raise":
             result = await mind_step(
                 None,
                 experience_type="body_raise",
+                provider=self.provider,
+                files=self.files,
+                now=now,
+                event_id=event.event_id,
+            )
+        else:
+            result = await mind_step(
+                None,
+                experience_type="body_edge_reveal",
                 provider=self.provider,
                 files=self.files,
                 now=now,
@@ -375,6 +391,22 @@ class BodyBridge:
         if presence is not None:
             self._last_present = presence.present
         return presence is not None and previous is False and presence.present
+
+    @staticmethod
+    def _edge_reveal_on_cooldown(history: list[dict], now: datetime) -> bool:
+        latest = next(
+            (item for item in reversed(history) if item.get("type") == "body_edge_reveal"),
+            None,
+        )
+        if latest is None:
+            return False
+        try:
+            occurred_at = datetime.fromisoformat(str(latest["occurred_at"]))
+            if occurred_at.tzinfo is None:
+                occurred_at = occurred_at.replace(tzinfo=now.tzinfo)
+        except (KeyError, TypeError, ValueError):
+            return False
+        return now - occurred_at.astimezone(now.tzinfo) < EDGE_REVEAL_COOLDOWN
 
     @staticmethod
     def _receipt_result_status(

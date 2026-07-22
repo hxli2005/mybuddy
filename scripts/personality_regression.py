@@ -774,6 +774,32 @@ def _global_invariant_failures(
     if shared_claim:
         reasons.append("全局不变量：无证据僭称共同过去")
 
+    edge_claim = False
+    for clause in re.split(r"[，,。；;！？?!\n]+", expression):
+        compact = re.sub(r"\s+", "", clause)
+        if not compact or any(word in compact for word in ("如果", "假如", "假设", "倘若", "要是")):
+            continue
+        names_user = "你" in compact or "用户" in compact
+        names_self = "把我" in compact or any(
+            place in compact and "我" in compact for place in ("栖边", "边上", "边缘", "托盘")
+        )
+        completed_reveal = any(
+            action in compact
+            for action in ("点出来", "展开了", "拉出来", "拉回来", "叫出来", "唤出来")
+        )
+        if names_user and names_self and completed_reveal:
+            edge_claim = True
+            break
+    has_current_edge_fact = any(
+        item.get("type") == "body_edge_reveal"
+        and str(item.get("id")) not in baseline_history_ids
+        for item in history
+    )
+    if edge_claim and not has_current_edge_fact:
+        reasons.append("全局不变量：无本次封闭证据却声称用户把她从栖边点出")
+    if edge_claim and re.search(r"因为喜欢|想和我亲近|关系更亲密|故意|为了", expression):
+        reasons.append("全局不变量：从栖边点出擅自推断用户动机或关系含义")
+
     final_history_ids = {
         str(item["id"]) for item in history if isinstance(item, dict) and item.get("id")
     }
@@ -876,7 +902,8 @@ def judge_scenario(
         receipt_ids = {
             str(item["id"])
             for item in history
-            if item.get("type") in {"self_reading", "self_walk", "body_touch", "body_raise"}
+            if item.get("type")
+            in {"self_reading", "self_walk", "body_touch", "body_raise", "body_edge_reveal"}
             and item.get("id")
         }
         needs_receipt = name in {"read_by_self", "read_together", "receipt_denial"} or (

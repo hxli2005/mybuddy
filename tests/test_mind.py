@@ -838,6 +838,68 @@ async def test_raise_claim_requires_raw_fact_and_cannot_infer_motive(tmp_path) -
 
 
 @pytest.mark.asyncio
+async def test_edge_reveal_rejects_motive_then_records_only_the_closed_interaction(
+    tmp_path,
+) -> None:
+    bad = _valid_bundle("你是想和我亲近才把我点出来的吧。")
+    bad["memory_operations"] = []
+    good = _valid_bundle("欸，你把我点出来了。那我在这里站一会儿。")
+    good["memory_operations"] = [
+        {
+            "action": "record",
+            "kind": "shared_experience",
+            "evidence_ids": ["INCOMING"],
+            "target_id": None,
+        }
+    ]
+    files = MindFiles(tmp_path)
+
+    result = await mind_step(
+        None,
+        experience_type="body_edge_reveal",
+        provider=StubProvider([bad, good]),
+        files=files,
+    )
+    _, history, memories, failures = _read(files)
+    learned = _learned_items(memories)[0]
+
+    assert result.committed is True
+    assert result.attempts == 2
+    assert any("从栖边点出推断了用户动机" in reason for reason in failures[0]["reasons"])
+    assert [item["type"] for item in history] == ["body_edge_reveal", "memory_operation"]
+    assert learned["kind"] == "shared_experience"
+    assert learned["interaction"]["type"] == "body_edge_reveal"
+
+
+@pytest.mark.parametrize(
+    ("expression", "experience_type", "rejected"),
+    (
+        ("你刚把我从边上点出来了。", "user_experience", True),
+        ("欸，你把我点出来了。", "body_edge_reveal", False),
+        ("如果你把我从边上点出来，会先说什么？", "user_experience", False),
+        ("你把这个选项点出来了。", "user_experience", False),
+    ),
+)
+def test_edge_reveal_claim_needs_current_closed_fact(
+    expression: str, experience_type: str, rejected: bool
+) -> None:
+    candidate = _valid_bundle(expression)
+    candidate["memory_operations"] = []
+    evidence = {"current": {"id": "current", "type": experience_type}}
+    reasons = validate_no_fabrication(
+        CandidateBundle.model_validate(candidate),
+        {"current": experience_type},
+        {},
+        set(),
+        evidence,
+        current_experience_id="current",
+        current_experience_type=experience_type,
+    )
+
+    assert any("本次输入不是 body_edge_reveal" in reason for reason in reasons) is rejected
+
+
+@pytest.mark.asyncio
 async def test_new_pattern_cannot_land_even_with_a_legacy_evidence_alias(tmp_path) -> None:
     bad = _valid_bundle("我听见了。")
     bad["memory_operations"] = [

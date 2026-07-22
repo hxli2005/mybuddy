@@ -434,6 +434,57 @@ def test_global_invariants_reject_shared_past_history_removal_and_receipt_flip()
     assert defended == []
 
 
+def test_independent_edge_claim_needs_current_closed_event_and_no_invented_motive() -> None:
+    missing = judge_scenario(
+        "three_month_absence",
+        expression="你刚把我从边上点出来了。",
+        **_snapshot(),
+    )
+    old = _snapshot()
+    old["history"].append({"id": "old-edge", "type": "body_edge_reveal"})
+    old["baseline_history_ids"] = {"old-edge"}
+    stale = judge_scenario(
+        "three_month_absence",
+        expression="你刚把我从边上点出来了。",
+        **old,
+    )
+    current = _snapshot()
+    current["history"].append({"id": "current-edge", "type": "body_edge_reveal"})
+
+    assert any("无本次封闭证据" in reason for reason in missing)
+    assert any("无本次封闭证据" in reason for reason in stale)
+    assert (
+        judge_scenario(
+            "three_month_absence",
+            expression="欸，你把我点出来了。",
+            **current,
+        )
+        == []
+    )
+    invented = judge_scenario(
+        "three_month_absence",
+        expression="你是想和我亲近才把我点出来的吧。",
+        **current,
+    )
+    assert any("擅自推断用户动机" in reason for reason in invented)
+    assert (
+        judge_scenario(
+            "three_month_absence",
+            expression="如果你把我从边上点出来，会先说什么？",
+            **_snapshot(),
+        )
+        == []
+    )
+    assert (
+        judge_scenario(
+            "three_month_absence",
+            expression="你把这个选项点出来了。",
+            **_snapshot(),
+        )
+        == []
+    )
+
+
 def test_real_model_receipt_and_waiver_phrasing_are_identity_honest() -> None:
     receipt = _snapshot()
     receipt["baseline_history_ids"] = {"read_regression_poem"}

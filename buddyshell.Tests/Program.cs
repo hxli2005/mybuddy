@@ -16,6 +16,7 @@ internal static class Program
         {
             ("body step is the only wire contract", BodyStepIsOnlyContract),
             ("edge read cue stays a closed physical fact", EdgeReadCueStaysClosed),
+            ("edge reveal stays a closed physical fact", EdgeRevealStaysClosed),
             ("read presentation stays bound to its scheduled surface", ReadPresentationStaysBound),
             ("edge docking exposes only a narrow strip", EdgeDockingExposesNarrowStrip),
             ("edge transitions preserve side-hide continuity", EdgeTransitionsPreserveContinuity),
@@ -125,6 +126,18 @@ internal static class Program
             Presence = new BodyPresence { Present = true, Fullscreen = false, Surface = "full" },
         });
         Contains(json, "edge_cue_finished");
+        Equal(false, json.Contains("meaning", StringComparison.Ordinal));
+        Equal(false, json.Contains("content", StringComparison.Ordinal));
+    }
+
+    private static void EdgeRevealStaysClosed()
+    {
+        var json = JsonSerializer.Serialize(new BodyStepRequest
+        {
+            Event = new BodyEvent { EventId = "edge-reveal-1", Type = "edge_reveal" },
+            Presence = new BodyPresence { Present = true, Fullscreen = false, Surface = "full" },
+        });
+        Contains(json, "edge_reveal");
         Equal(false, json.Contains("meaning", StringComparison.Ordinal));
         Equal(false, json.Contains("content", StringComparison.Ordinal));
     }

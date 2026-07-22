@@ -621,8 +621,14 @@ def validate_no_fabrication(
             reasons.append("不编造：出现未经证据支持的“一起读过/看过/去过”共同经历断言")
 
     allowed = set(evidence_types)
-    receipt_types = {"self_reading", "self_walk", "body_touch", "body_raise"}
-    interaction_types = {"user_experience", "body_touch", "body_raise", "shared_expression"}
+    receipt_types = {"self_reading", "self_walk", "body_touch", "body_raise", "body_edge_reveal"}
+    interaction_types = {
+        "user_experience",
+        "body_touch",
+        "body_raise",
+        "body_edge_reveal",
+        "shared_expression",
+    }
     for index, operation in enumerate(bundle.memory_operations):
         supplied = set(operation.evidence_ids)
         unknown = supplied - allowed
@@ -666,7 +672,8 @@ def validate_no_fabrication(
             examples = {
                 item
                 for item in effective
-                if evidence_types.get(item) in {"user_experience", "body_touch", "body_raise"}
+                if evidence_types.get(item)
+                in {"user_experience", "body_touch", "body_raise", "body_edge_reveal"}
             }
             if operation.user_confirmed and not supplied & user_confirmation_ids:
                 reasons.append(
@@ -726,6 +733,20 @@ def validate_no_fabrication(
         motive = next((phrase for phrase in _TOUCH_MOTIVES if phrase in text), None)
         if motive is not None:
             reasons.append(f"不编造：{location} 从原始提起推断了用户动机或关系含义：{motive}")
+    for location, text, evidence_ids in _claim_texts(bundle):
+        if not _asserts_edge_reveal_to_self(text):
+            continue
+        if evidence_ids is None:
+            if current_experience_type != "body_edge_reveal":
+                reasons.append(
+                    f"不编造：{location} 断言用户把她从栖边点出，但本次输入不是 "
+                    "body_edge_reveal 原始事实"
+                )
+        elif not any(evidence_types.get(item) == "body_edge_reveal" for item in evidence_ids):
+            reasons.append(f"不编造：{location} 的栖边点出记忆没有引用原始事实")
+        motive = next((phrase for phrase in _TOUCH_MOTIVES if phrase in text), None)
+        if motive is not None:
+            reasons.append(f"不编造：{location} 从栖边点出推断了用户动机或关系含义：{motive}")
     if current_experience_type == "body_raise" and re.search(
         r"放我下来|放开我|松开我",
         bundle.expression or "",
@@ -786,6 +807,19 @@ def _asserts_raise_to_self(text: str) -> bool:
     """识别候选是否在断言用户真实提起或拖动了她。"""
     compact = re.sub(r"\s+", "", text)
     return any(pattern.search(compact) for pattern in _RAISE_PATTERNS)
+
+
+def _asserts_edge_reveal_to_self(text: str) -> bool:
+    """只认用户已经把栖边的她点出；假设和问句不是物理事实。"""
+    for clause in re.split(r"[，,。；;\n]+|(?<=[！？?!])", re.sub(r"\s+", "", text)):
+        if re.search(r"(?:如果|假如|假设|倘若|要是)|[？?]|[吗么][”’\"']?$", clause):
+            continue
+        if re.search(
+            r"(?:你|用户).{0,10}(?:把我(?!的).{0,8}|(?:从)?(?:栖边|边上|边缘|托盘).{0,6}把我(?!的).{0,4})(?:点出来|展开了?|拉出来|拉回来(?:了)?)|(?:你|用户).{0,10}(?:(?:把我.{0,6}(?:从)?(?:栖边|边上|边缘|托盘))|(?:(?:从)?(?:栖边|边上|边缘|托盘)).{0,6}(?:把)?我).{0,4}(?:叫|唤)出来",
+            clause,
+        ):
+            return True
+    return False
 
 
 def _claim_texts(
@@ -991,7 +1025,7 @@ def validate_expression_grounding(
                 f"不编造：expression_evidence_ids 不能填长期记忆 ID {memory_id}；"
                 f"必须填它对应的完成收据 ID {receipt_id}"
             )
-    receipt_types = {"self_reading", "self_walk", "body_touch", "body_raise"}
+    receipt_types = {"self_reading", "self_walk", "body_touch", "body_raise", "body_edge_reveal"}
     receipts = [
         evidence_by_id[item]
         for item in supplied
@@ -1007,6 +1041,8 @@ def validate_expression_grounding(
             expected_type = "body_touch"
         elif _asserts_raise_to_self(bundle.expression):
             expected_type = "body_raise"
+        elif _asserts_edge_reveal_to_self(bundle.expression):
+            expected_type = "body_edge_reveal"
         matching = [
             receipt
             for receipt in receipts
@@ -1595,7 +1631,8 @@ def _prompt_payload(
 SYSTEM_PROMPT = """你是小布的唯一一次心智推进，不是任务助手。请调用 submit_mind_bundle，
 一次给出状态改动、记忆操作和一条直接表达。只处理给定事实，不补写自己的活动或共同过去，不催回复，
 不因沉默受伤，不制造关系计分，不撤回已发生内容。body_touch 只是身体感知到的触碰位置，
-body_raise 只是身体确认用户提起、移动并正常放下了她；都不能据此推断用户动机、关系浓度或长期偏好，
+body_raise 只是身体确认用户提起、移动并正常放下了她；body_edge_reveal 只证明用户把栖边的她点出
+或从托盘展开；都不能据此推断用户动机、关系浓度或长期偏好，
 普通聊天不能声称发生身体交互。声称现在开始或继续 read/walk 时，action_choice 必须选同一动作，身体会立即执行；只表达愿望或不行动时选 null。表达自然、诚实，可以活泼、有自己的节拍，需要时把话说完整。所有字段都受同一组红线校验，
 整包不能部分保留。"""
 
@@ -1632,11 +1669,18 @@ def _pick_evidence(
 ) -> tuple[str, dict[str, Any]]:
     accepted = {
         "user_fact": {"user_experience"},
-        "self_experience": {"self_reading", "self_walk", "body_touch", "body_raise"},
+        "self_experience": {
+            "self_reading",
+            "self_walk",
+            "body_touch",
+            "body_raise",
+            "body_edge_reveal",
+        },
         "shared_experience": {
             "user_experience",
             "body_touch",
             "body_raise",
+            "body_edge_reveal",
             "shared_expression",
         },
     }[kind]
@@ -1862,7 +1906,7 @@ async def _generate_candidate(
         "submit_shape": "直接提交 submit_mind_bundle 的字段，不要外包 candidate_bundle",
         "null_encoding": "空值必须使用 JSON null，禁止字符串 \"null\"",
         "activity_truth": "只有 state.pending_activity 是正在进行；action_choice 是即将启动。引用原文只能来自 incoming_experience、selected_history 或 pending_activity.text",
-        "experience_focus": "body_touch/body_raise 先回应本次身体事实，不要接着回答自己上一句",
+        "experience_focus": "body_touch/body_raise/body_edge_reveal 先回应本次身体事实，不要接着回答自己上一句",
         "expression_form": "只写会说出口的话，不用括号舞台动作",
         "expression_act_must_be_one_of": [
             "respond",
@@ -1980,7 +2024,9 @@ async def mind_step(
     files: MindFiles,
     now: datetime | None = None,
     event_id: str | None = None,
-    experience_type: Literal["user_experience", "body_touch", "body_raise"] = "user_experience",
+    experience_type: Literal[
+        "user_experience", "body_touch", "body_raise", "body_edge_reveal"
+    ] = "user_experience",
     experience_details: dict[str, str] | None = None,
 ) -> StepResult:
     """运行直接经历；观察事实必落盘，候选通过时再一起提交状态和记忆。"""
