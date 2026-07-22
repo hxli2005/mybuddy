@@ -13,6 +13,7 @@ from mybuddy.mind import (
     SYSTEM_PROMPT,
     CandidateBundle,
     MindFiles,
+    _reading_source,
     _replace_texts,
     advance_time,
     complete_reading,
@@ -1535,6 +1536,27 @@ async def test_real_txt_progress_waits_for_completed_body_receipt(tmp_path) -> N
     second = advance_time(files=files, now=start + timedelta(minutes=33))
     assert second.status == "not_due"
     assert len(provider.calls) == 1
+
+
+def test_reading_txt_uses_first_block_and_removes_site_watermark_lines(tmp_path) -> None:
+    reading = tmp_path / "private.txt"
+    reading.write_bytes(
+        (
+            "\ufeff本机策展书名\r\n\r\n"
+            "本书来自 www.example.com 免费TXT小说下载站\r\n\r\n"
+            "第一段第一行。\r\n第一段第二行。\r\n\r\n"
+            "【https://www.example.com】\r\n\r\n"
+            "第二段。\r\n"
+        ).encode("utf-8")
+    )
+
+    source = _reading_source(reading)
+
+    assert source == {
+        "source": "private.txt",
+        "title": "本机策展书名",
+        "passages": ["第一段第一行。\n第一段第二行。", "第二段。"],
+    }
 
 
 @pytest.mark.asyncio

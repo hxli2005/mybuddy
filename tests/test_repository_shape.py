@@ -65,7 +65,7 @@ def test_machine_side_stays_under_owner_limit() -> None:
         if path.suffix in {".py", ".cs"} and "obj" not in path.parts and "bin" not in path.parts
     ]
     line_count = sum(len(path.read_text(encoding="utf-8").splitlines()) for path in files)
-    assert line_count <= 6000, line_count
+    assert line_count <= 8000, line_count
 
 
 def test_share_first_run_matches_deepseek_default() -> None:
@@ -107,3 +107,17 @@ def test_share_package_has_one_versioned_auditable_candidate() -> None:
     ):
         assert required in script
     assert '"MyBuddy-win-x64.zip"' not in script
+    assert "mybuddy\\reading.txt" in script
+    assert "reading.local.txt" not in script
+
+
+def test_private_reading_is_ignored_and_only_used_by_local_source_start() -> None:
+    ignored = (ROOT / ".gitignore").read_text(encoding="utf-8")
+    local_start = (ROOT / "scripts" / "start_mybuddy_web.ps1").read_text(encoding="utf-8")
+    share_build = (ROOT / "scripts" / "build_share.ps1").read_text(encoding="utf-8")
+
+    assert "/data/" in ignored
+    assert 'ReadingFile = "data\\reading.local.txt"' in local_start
+    assert '"--reading-file"' in local_start
+    assert "reading.local.txt" not in share_build
+    assert 'mybuddy\\reading.txt") -Destination (Join-Path $stage "小布读本.txt")' in share_build

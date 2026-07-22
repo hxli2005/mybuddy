@@ -1121,8 +1121,43 @@ def validate_bundle(
     ]
 
 
+_SITE_WATERMARK_MARKERS = (
+    "本书来自",
+    "本电子书由",
+    "更多精校电子书",
+    "更多电子书",
+    "请记住本站",
+    "手机用户请访问",
+    "最新网址",
+    "小说下载尽在",
+    "电子书下载",
+    "txt小说下载",
+    "章节报错",
+    "加入书签",
+    "投推荐票",
+)
+_STANDALONE_SITE_URL = re.compile(
+    r"^[\s\[\]【】()（）]*(?:https?://|www\.)[^\s\[\]【】()（）]+[\s\[\]【】()（）]*$",
+    re.IGNORECASE,
+)
+
+
+def _without_site_watermarks(text: str) -> str:
+    kept = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        folded = stripped.casefold()
+        if _STANDALONE_SITE_URL.fullmatch(stripped) or any(
+            marker in folded for marker in _SITE_WATERMARK_MARKERS
+        ):
+            continue
+        kept.append(line.rstrip())
+    return "\n".join(kept)
+
+
 def _reading_source(path: Path) -> dict[str, Any]:
-    blocks = [block.strip() for block in re.split(r"\n\s*\n", path.read_text(encoding="utf-8"))]
+    text = _without_site_watermarks(path.read_text(encoding="utf-8-sig"))
+    blocks = [block.strip() for block in re.split(r"\n\s*\n", text)]
     blocks = [block for block in blocks if block]
     if len(blocks) < 2:
         raise ValueError(f"{path} 必须包含书名和至少一段正文，段落之间留空行")
