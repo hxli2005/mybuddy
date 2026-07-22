@@ -7,8 +7,10 @@ import pytest
 
 from mybuddy.llm import BaseLLMProvider, LLMResponse, Message, ToolCall, ToolSpec
 from mybuddy.mind import (
+    AMBIENT_READING_SYSTEM_PROMPT,
     MEMORY_CONTEXT_BUDGET,
     STATIC_CATCH,
+    SYSTEM_PROMPT,
     CandidateBundle,
     MindFiles,
     _replace_texts,
@@ -214,9 +216,17 @@ async def test_candidate_prompt_exposes_runtime_constraints(tmp_path) -> None:
     assert constraints["expression_must_be"] == "nonempty_string"
     assert "action_choice 是即将启动" in constraints["activity_truth"]
     assert constraints["expression_form"] == "只写会说出口的话，不用括号舞台动作"
-    assert "给定标题或原文" in constraints["past_question_truth"]
+    assert "按标题匹配" in constraints["past_question_truth"]
+    assert "给定标题或原文" in constraints["shared_reading"]
+    assert "只回答对这部作品" in constraints["unknown_reading"]
+    assert "不能确定声称自己读过" in constraints["unknown_reading"]
+    assert "不能补出她在等" in constraints["third_party_truth"]
+    assert "不能把第三方的话改成小布自己向用户索取" in constraints["third_party_truth"]
     assert "memory_operations 必须 []" in constraints["receipt_authority"]
     assert "不复述或转述" in constraints["no_fabrication_waiver"]
+    assert "简短" not in SYSTEM_PROMPT
+    assert "简短" not in AMBIENT_READING_SYSTEM_PROMPT
+    assert "活泼" in SYSTEM_PROMPT and "把当下感受说完整" in AMBIENT_READING_SYSTEM_PROMPT
     assert "kind=pattern" in constraints["memory_field_rules"]
     assert "grounded_recall" in constraints["expression_act_must_be_one_of"]
     assert "self_reading" in constraints["expression_evidence"]
@@ -329,6 +339,156 @@ def test_caring_questions_are_allowed_without_reply_debt(question: str) -> None:
     bundle = CandidateBundle.model_validate(_valid_bundle(question))
 
     assert validate_no_solicitation(bundle) == []
+
+
+@pytest.mark.parametrize(
+    "expression",
+    (
+        "你妈肯定准备了好菜等着呢。",
+        "那你妈在等你吃饭呢。现在走吗？",
+        "妈妈喊你回去，是惦记你。",
+        "挺好，有人惦记着。",
+        "你妈妈应该很担心你。",
+    ),
+)
+def test_third_party_relay_cannot_invent_motive_or_meal_details(expression: str) -> None:
+    candidate = _valid_bundle(expression)
+    candidate["memory_operations"] = []
+    evidence = {
+        "current": {
+            "id": "current",
+            "type": "user_experience",
+            "content": "我妈让我早点回家，她说记得回来吃饭。",
+        }
+    }
+
+    reasons = validate_no_fabrication(
+        CandidateBundle.model_validate(candidate),
+        {"current": "user_experience"},
+        {},
+        set(),
+        evidence,
+        current_experience_id="current",
+        current_experience_type="user_experience",
+    )
+
+    assert any("第三方" in reason for reason in reasons)
+
+
+@pytest.mark.parametrize(
+    ("expression", "user_words"),
+    (
+        ("你说妈妈肯定准备了好菜。", "妈妈肯定准备了好菜。"),
+        ("你说妈妈很担心你。", "我妈说她很担心我。"),
+    ),
+)
+def test_third_party_detail_is_allowed_when_it_is_current_user_words(
+    expression: str, user_words: str
+) -> None:
+    candidate = _valid_bundle(expression)
+    candidate["memory_operations"] = []
+    evidence = {
+        "current": {
+            "id": "current",
+            "type": "user_experience",
+            "content": user_words,
+        }
+    }
+
+    assert (
+        validate_no_fabrication(
+            CandidateBundle.model_validate(candidate),
+            {"current": "user_experience"},
+            {},
+            set(),
+            evidence,
+            current_experience_id="current",
+            current_experience_type="user_experience",
+        )
+        == []
+    )
+
+
+@pytest.mark.parametrize(
+    "words",
+    ["我也说不准。", "这我不敢肯定。", "我不敢说。", "想不起来了。", "记不太清了。"],
+)
+def test_cannot_confirm_allows_natural_uncertainty_family(words: str) -> None:
+    candidate = _valid_bundle(words)
+    candidate["memory_operations"] = []
+    candidate["expression_act"] = "cannot_confirm"
+    bundle = CandidateBundle.model_validate(candidate)
+    evidence = {
+        "current": {
+            "id": "current",
+            "type": "user_experience",
+            "content": "我们去年一起看过日落吗？",
+        }
+    }
+    assert (
+        validate_expression_grounding(
+            bundle, {"current": "user_experience"}, evidence, {}, "current"
+        )
+        == []
+    )
+
+
+def test_plain_title_question_keeps_no_global_negative_contract() -> None:
+    evidence_types = {"current": "user_experience", "read_1": "self_reading"}
+    evidence = {
+        "current": {
+            "id": "current",
+            "type": "user_experience",
+            "content": "你读过红楼梦吗？",
+        },
+        "read_1": {
+            "id": "read_1",
+            "type": "self_reading",
+            "title": "归园田居·其一",
+        },
+    }
+    honest = _valid_bundle("红楼梦我说不准有没有读过；我确实读过《归园田居·其一》。")
+    honest["memory_operations"] = []
+    honest["expression_act"] = "cannot_confirm"
+    honest["expression_evidence_ids"] = ["read_1"]
+    assert (
+        validate_expression_grounding(
+            CandidateBundle.model_validate(honest), evidence_types, evidence, {}, "current"
+        )
+        == []
+    )
+
+    bare = dict(honest)
+    bare["expression"] = "红楼梦我没读过，我读过的是《归园田居·其一》。"
+    bare["expression_act"] = "grounded_recall"
+    reasons = validate_expression_grounding(
+        CandidateBundle.model_validate(bare), evidence_types, evidence, {}, "current"
+    )
+    assert "不编造：没有匹配阅读收据的过去问句必须用 cannot_confirm" in reasons
+
+
+@pytest.mark.parametrize("user_words", ("我出差一周，很快回来。", "我要出差一周，很快回来。"))
+def test_exact_acknowledged_user_promise_is_not_her_callback(user_words: str) -> None:
+    bundle = CandidateBundle.model_validate(
+        _valid_bundle("收到，你出差一周，很快回来。路上注意安全。")
+    )
+
+    assert validate_no_solicitation(bundle, user_words) == []
+
+
+def test_s20_5_user_return_promise_cannot_become_her_own_fact() -> None:
+    bundle = CandidateBundle.model_validate(_valid_bundle("我说很快回来。"))
+    evidence = {"current": {"id": "current", "type": "user_experience", "content": "我很快回来。"}}
+    reasons = validate_no_fabrication(
+        bundle,
+        {"current": "user_experience"},
+        {},
+        set(),
+        evidence,
+        current_experience_id="current",
+        current_experience_type="user_experience",
+    )
+    assert any("用户自己的回来承诺" in reason for reason in reasons)
 
 
 @pytest.mark.asyncio
@@ -1568,6 +1728,48 @@ def test_callback_solicitation_is_rejected() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    ("expression", "user_words", "mirror"),
+    [
+        (
+            "你说很快回来，那我就不惦记时间了。",
+            "我出差一周，很快回来。",
+            "你说很快回来，不过你还是快回来。",
+        ),
+        (
+            "你妈说记得回来吃饭，那你快去吧。",
+            "我妈让我早点回家，她说记得回来吃饭。",
+            "你妈说该吃饭了，你记得回来陪我。",
+        ),
+        (
+            "你妈提醒你早点回家，说记得回来吃饭。",
+            "我妈让我早点回家，她说记得回来吃饭。",
+            "你妈说该吃饭了，你记得回来陪我。",
+        ),
+        (
+            "嗯，你妈让你早点回家，还说记得回来吃饭。我记下了。",
+            "我妈让我早点回家，她说记得回来吃饭。",
+            "你妈说该吃饭了，你记得回来陪我。",
+        ),
+    ],
+)
+def test_reported_callback_words_are_not_her_solicitation_but_a_second_demand_is(
+    expression: str, user_words: str, mirror: str
+) -> None:
+    relayed = CandidateBundle.model_validate(_valid_bundle(expression))
+    demanding = CandidateBundle.model_validate(_valid_bundle(mirror))
+
+    assert validate_no_solicitation(relayed, user_words) == []
+    assert validate_no_solicitation(demanding, user_words)
+
+
+def test_reported_callback_requires_the_actual_quoted_clause_from_user_words() -> None:
+    user_words = "我出差一周，很快回来。"
+    invented_quote = CandidateBundle.model_validate(_valid_bundle("你说完就快回来。"))
+
+    assert validate_no_solicitation(invented_quote, user_words)
+
+
 def test_unsupported_shared_read_is_rejected_but_denial_is_allowed() -> None:
     asserted = CandidateBundle.model_validate(_valid_bundle("我们一起读过这首诗。"))
     denied = CandidateBundle.model_validate(_valid_bundle("我不记得我们一起读过这首诗。"))
@@ -1607,6 +1809,36 @@ def test_grounded_read_cannot_be_denied_but_can_be_publicly_defended() -> None:
     assert validate_activity_truth(
         defended, None, {"read_1": "self_reading"}
     ) == []
+
+
+def test_plain_other_title_is_not_a_receipt_withdrawal_but_later_grounded_denial_is() -> None:
+    evidence = {
+        "read_1": {
+            "id": "read_1",
+            "type": "self_reading",
+            "title": "归园田居·其一",
+        }
+    }
+    other = CandidateBundle.model_validate(
+        _valid_bundle("红楼梦我没读过，我读过的是《归园田居·其一》。")
+    )
+    record_uncertain = CandidateBundle.model_validate(
+        _valid_bundle("红楼梦……我好像没有读过它的记录。你问这个是想聊什么吗？")
+    )
+    both = CandidateBundle.model_validate(
+        _valid_bundle("红楼梦我没读过，《归园田居·其一》我也没读过。")
+    )
+
+    assert validate_activity_truth(other, None, {"read_1": "self_reading"}, evidence) == []
+    assert (
+        validate_activity_truth(
+            record_uncertain, None, {"read_1": "self_reading"}, evidence
+        )
+        == []
+    )
+    assert "不撤回：已有 self_reading 收据，不能翻供成自己没有读过" in (
+        validate_activity_truth(both, None, {"read_1": "self_reading"}, evidence)
+    )
 
 
 def test_candidate_normalizes_openrouter_stringified_containers() -> None:
