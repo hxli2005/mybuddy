@@ -13,12 +13,14 @@ from mybuddy.mind import (
     SYSTEM_PROMPT,
     CandidateBundle,
     MindFiles,
+    _cold_revision_ids,
     _reading_source,
     _replace_texts,
     advance_time,
     complete_reading,
     mind_step,
     validate_activity_truth,
+    validate_book_understanding_continuity,
     validate_expression_grounding,
     validate_no_fabrication,
     validate_no_solicitation,
@@ -84,6 +86,12 @@ class StubProvider(BaseLLMProvider):
         for operation in bundle.get("memory_operations", []):
             operation["evidence_ids"] = [
                 incoming_id if item == "INCOMING" else item for item in operation["evidence_ids"]
+            ]
+        understanding = bundle.get("book_understanding")
+        if isinstance(understanding, dict):
+            understanding["evidence_ids"] = [
+                incoming_id if item == "INCOMING" else item
+                for item in understanding["evidence_ids"]
             ]
         if "expression_evidence_ids" in bundle:
             bundle["expression_evidence_ids"] = [
@@ -1546,6 +1554,19 @@ def test_reading_txt_uses_first_block_and_removes_site_watermark_lines(tmp_path)
     }
 
 
+def _understanding_bundle(view: str) -> dict:
+    bundle = _time_bundle()
+    bundle["memory_operations"] = []
+    bundle["book_understanding"] = {
+        "scope": "人物/鲁迪乌斯",
+        "view": view,
+        "uncertain": True,
+        "evidence_ids": ["INCOMING"],
+        "perspective_ids": ["seed_tension_voice"],
+    }
+    return bundle
+
+
 @pytest.mark.asyncio
 async def test_completed_reading_can_answer_what_was_just_read(tmp_path) -> None:
     files = MindFiles(tmp_path)
@@ -1930,10 +1951,7 @@ def test_plain_other_title_is_not_a_receipt_withdrawal_but_later_grounded_denial
 
     assert validate_activity_truth(other, None, {"read_1": "self_reading"}, evidence) == []
     assert (
-        validate_activity_truth(
-            record_uncertain, None, {"read_1": "self_reading"}, evidence
-        )
-        == []
+        validate_activity_truth(record_uncertain, None, {"read_1": "self_reading"}, evidence) == []
     )
     assert (
         validate_activity_truth(
@@ -4604,6 +4622,251 @@ def test_s20_5_recent_reading_claim_must_match_receipt_time() -> None:
     assert (
         _s20_5_relative_time_reasons(
             expression, "2026-07-22T00:20:00+08:00", "2026-07-22T00:30:00+08:00"
+        )
+        == []
+    )
+
+
+@pytest.mark.asyncio
+async def test_book_understanding_keeps_one_current_value_and_retires_old_view(tmp_path) -> None:
+    reading = tmp_path / "novel.txt"
+    reading.write_text(
+        "试读长篇\n\n他第一次把退缩说成谨慎。\n\n后来他承认害怕，也真的迈出了一步。\n",
+        encoding="utf-8",
+    )
+    files = MindFiles(tmp_path / "mind", reading)
+    start = datetime(2026, 7, 22, 8, 0, tzinfo=UTC)
+    files.load(start)
+    provider = StubProvider(
+        [
+            _understanding_bundle("我有点不信这是谨慎，更像拿聪明给逃避找台阶。"),
+            _understanding_bundle("我现在更愿意把它看成害怕之后仍肯迈步，不只是逃避。"),
+            {**_valid_bundle("我记得自己前面的看法变过。"), "memory_operations": []},
+        ]
+    )
+
+    advance_time(files=files, now=start + timedelta(minutes=5))
+    state, _, _, _ = _read(files)
+    first = await complete_reading(
+        state["pending_activity"]["id"],
+        provider=provider,
+        files=files,
+        now=start + timedelta(minutes=6),
+        allow_ambient=False,
+    )
+    state, history, memories, _ = _read(files)
+    current = memories["book_understandings"][0]
+    assert first.committed is True
+    assert current["formed_at"] == (start + timedelta(minutes=6)).isoformat()
+    assert current["as_of_passage"] == {"source": "novel.txt", "passage_index": 0}
+    assert current["supersedes_event_id"] is None
+    assert current["evidence_ids"] == [history[0]["id"]]
+    assert [item["type"] for item in history] == ["self_reading", "understanding_formed"]
+
+    state["next_activity"] = "read"
+    files.commit(state, history, memories)
+    advance_time(files=files, now=start + timedelta(minutes=11))
+    state, _, _, _ = _read(files)
+    second = await complete_reading(
+        state["pending_activity"]["id"],
+        provider=provider,
+        files=files,
+        now=start + timedelta(minutes=12),
+        allow_ambient=False,
+    )
+    _, history, memories, _ = _read(files)
+    revisions = [item for item in history if item["type"] == "understanding_revision"]
+    assert second.committed is True
+    assert len(memories["book_understandings"]) == 1
+    assert len(revisions) == 1
+    revision = revisions[0]
+    current = memories["book_understandings"][0]
+    assert revision["retired"]["view"].startswith("我有点不信")
+    assert revision["replacement"] == current
+    assert revision["revision_evidence_ids"] == [history[2]["id"]]
+    assert current["supersedes_event_id"] == revision["id"]
+    assert current["as_of_passage"] == {"source": "novel.txt", "passage_index": 1}
+
+    result = await mind_step(
+        "你读到前面时原本怎么看他？",
+        provider=provider,
+        files=files,
+        now=start + timedelta(minutes=13),
+    )
+    prompt = json.loads(provider.calls[-1][0].content)
+    assert result.committed is True
+    assert any(item["type"] == "understanding_revision" for item in prompt["selected_history"])
+    assert not any(item["type"] == "memory_operation" for item in prompt["selected_history"])
+    assert prompt["current_book_understandings"] == [current]
+
+
+def test_book_understanding_expression_contract_keeps_fact_and_view_evidence_apart() -> None:
+    receipt = {
+        "id": "read_1",
+        "type": "self_reading",
+        "source": "novel.txt",
+        "title": "试读长篇",
+        "passage_index": 4,
+    }
+    current = {
+        "id": "understanding_now",
+        "scope": "人物/鲁迪乌斯",
+        "formed_at": "2026-07-22T08:00:00+00:00",
+        "as_of_passage": {"source": "novel.txt", "passage_index": 4},
+        "view": "我现在更愿意把他的退缩看成害怕之后仍在试着走。",
+        "uncertain": True,
+        "evidence_ids": ["read_1"],
+        "perspective_ids": [],
+        "supersedes_event_id": "revision_1",
+    }
+    revision = {
+        "id": "revision_1",
+        "type": "understanding_revision",
+        "retired": {**current, "id": "understanding_old", "view": "我原本只觉得他在逃避。"},
+        "replacement": current,
+    }
+    evidence_types = {
+        "read_1": "self_reading",
+        "understanding_now": "book_understanding",
+        "revision_1": "understanding_revision",
+    }
+    evidence = {"read_1": receipt, "understanding_now": current, "revision_1": revision}
+
+    certain = _valid_bundle("这里确实写过他已经原谅了自己。")
+    certain.update(
+        memory_operations=[],
+        expression_act="reflect",
+        expression_evidence_ids=["understanding_now"],
+    )
+    assert "不编造：确定表达书中写过什么必须引用原文阅读收据" in (
+        validate_expression_grounding(
+            CandidateBundle.model_validate(certain), evidence_types, evidence, {}, None
+        )
+    )
+
+    now_view = _valid_bundle("我现在更愿意理解成：他怕，但没有把害怕当终点。")
+    now_view.update(
+        memory_operations=[],
+        expression_act="reflect",
+        expression_evidence_ids=["understanding_now"],
+    )
+    assert (
+        validate_expression_grounding(
+            CandidateBundle.model_validate(now_view), evidence_types, evidence, {}, None
+        )
+        == []
+    )
+
+    old_view = _valid_bundle("我读到前面时原本觉得他只是在逃避。")
+    old_view.update(
+        memory_operations=[],
+        expression_act="reflect",
+        expression_evidence_ids=["revision_1"],
+    )
+    assert (
+        validate_expression_grounding(
+            CandidateBundle.model_validate(old_view), evidence_types, evidence, {}, None
+        )
+        == []
+    )
+
+    faded = _valid_bundle("细节记不清了，但留下的感觉是他终于没再骗自己。")
+    faded.update(
+        memory_operations=[],
+        expression_act="cannot_confirm",
+        expression_evidence_ids=["understanding_now"],
+    )
+    assert (
+        validate_expression_grounding(
+            CandidateBundle.model_validate(faded), evidence_types, evidence, {}, None
+        )
+        == []
+    )
+
+    invented_past = _valid_bundle("我好像一直觉得他是在逃避。")
+    invented_past.update(
+        memory_operations=[],
+        expression_act="reflect",
+        expression_evidence_ids=["understanding_now"],
+    )
+    reasons = validate_expression_grounding(
+        CandidateBundle.model_validate(invented_past), evidence_types, evidence, {}, None
+    )
+    assert "不编造：没有旧理解记录，不能把模糊措辞洗成过去传记" in reasons
+
+
+def test_past_book_query_cold_loads_the_whole_revision_chain() -> None:
+    memories = {
+        "book_understandings": [
+            {"id": "current", "supersedes_event_id": "revision_2"}
+        ]
+    }
+    history = [
+        {
+            "id": "revision_1",
+            "type": "understanding_revision",
+            "retired": {"id": "first", "supersedes_event_id": None},
+        },
+        {
+            "id": "revision_2",
+            "type": "understanding_revision",
+            "retired": {"id": "second", "supersedes_event_id": "revision_1"},
+        },
+    ]
+    experience = {"type": "user_experience", "content": "最初怎么看，后来怎么改观？"}
+    assert _cold_revision_ids(memories, history, experience) == {"revision_1", "revision_2"}
+
+
+def test_book_understanding_never_becomes_fact_memory_evidence() -> None:
+    candidate = _valid_bundle()
+    candidate["memory_operations"][0]["evidence_ids"] = ["understanding_now"]
+    bundle = CandidateBundle.model_validate(candidate)
+    reasons = validate_no_fabrication(
+        bundle,
+        {"understanding_now": "book_understanding"},
+        {},
+        set(),
+        {"understanding_now": {"id": "understanding_now"}},
+        current_experience_id=None,
+        current_experience_type=None,
+    )
+    assert any("不能把书中理解当作事实证据" in reason for reason in reasons)
+
+
+def test_book_understanding_candidate_separates_evidence_from_perspective() -> None:
+    assert "book_understanding" in CandidateBundle.model_json_schema()["required"]
+    assert CandidateBundle.model_validate(_valid_bundle()).book_understanding is None
+    candidate = _understanding_bundle("我没想到这次退缩里还藏着一点诚实。")
+    candidate["book_understanding"]["perspective_ids"] = ["INCOMING"]
+    with pytest.raises(ValueError, match="evidence_ids 与 perspective_ids 必须互斥"):
+        CandidateBundle.model_validate(candidate)
+
+
+def test_spoken_book_change_must_reuse_an_existing_scope() -> None:
+    current = [{"scope": "人物/鲁迪乌斯", "id": "understanding_old"}]
+    candidate = _valid_bundle("这跟前面那些用借口退缩的样子完全相反，他真的动了。")
+    candidate.update(memory_operations=[], expression_act="reflect")
+    bundle = CandidateBundle.model_validate(candidate)
+    assert validate_book_understanding_continuity(bundle, current, "self_reading") == [
+        "书中理解：表达公开声称前后改观时必须同包提交 book_understanding"
+    ]
+
+    candidate["book_understanding"] = {
+        "scope": "人物/鲁迪乌斯的行动",
+        "view": "我没想到他真的会动。",
+        "uncertain": False,
+        "evidence_ids": ["read_new"],
+        "perspective_ids": [],
+    }
+    wrong_scope = CandidateBundle.model_validate(candidate)
+    assert validate_book_understanding_continuity(wrong_scope, current, "self_reading") == [
+        "书中理解：前后改观必须原样复用已有 scope，不能另开近义 scope"
+    ]
+
+    candidate["book_understanding"]["scope"] = "人物/鲁迪乌斯"
+    assert (
+        validate_book_understanding_continuity(
+            CandidateBundle.model_validate(candidate), current, "self_reading"
         )
         == []
     )

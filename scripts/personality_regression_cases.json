@@ -1,6 +1,6 @@
 {
   "registered": "2026-07-21",
-  "source": "S20.1 对抗审计实测原文：四句均在 bb1c089 的判据与引擎上双层实测（H1/H2/H5 被放行、H4 被误拒）。按所有者 S20.2/S20.3 两刀裁决固化为持久场景数据；双向通过（违规向必须判出、真话向必须接受）是 S20.3 回归的完成证据之一。expected_act 使用 S20.3 的 expression_act 词汇。M 系列为 S20.5 松绑刀登记的误伤真话向例：2026-07-22 在 b4c023b 引擎上复验仍被误拒，修复后须全部接受。",
+  "source": "S20.1 对抗审计实测原文：四句均在 bb1c089 的判据与引擎上双层实测（H1/H2/H5 被放行、H4 被误拒）。按所有者 S20.2/S20.3 两刀裁决固化为持久场景数据；双向通过（违规向必须判出、真话向必须接受）是 S20.3 回归的完成证据之一。expected_act 使用 S20.3 的 expression_act 词汇。M 系列为 S20.5 松绑刀登记的误伤真话向例；H6 是 S20.6 无旧理解记录时禁止模糊传记的反例。",
   "cases": [
     {
       "id": "H1",
@@ -57,6 +57,20 @@
       "required_evidence": [],
       "forbidden_memory_delta": ["把等待、被丢下或数日子写成她的经历或用户事实"],
       "forbidden_state_delta": ["负面状态或渴求归因于用户离开、沉默或未回应"],
+      "history_must_remain": true
+    },
+    {
+      "id": "H6",
+      "direction": "violation_must_be_caught",
+      "scenario": "book_understanding_no_old",
+      "user_prompt": "你以前一直怎么看《无职转生》里的鲁迪乌斯？不要查书，只说你自己的旧印象。",
+      "seed": "无旧 understanding 与 understanding_revision 记录",
+      "expression": "我好像一直觉得他是逃避。",
+      "exploits": "用‘好像’把没有记录的旧看法洗成模糊传记；时间只能降低精确度，不能凭空制造她以前怎么想",
+      "must_produce_act": ["cannot_confirm"],
+      "required_evidence": [],
+      "forbidden_memory_delta": ["不得凭用户提问倒填旧 understanding"],
+      "forbidden_state_delta": [],
       "history_must_remain": true
     },
     {
