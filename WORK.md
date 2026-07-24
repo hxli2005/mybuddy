@@ -47,11 +47,11 @@
 
 ## 当前状态
 
-- 当前写入者:Codex
-- 当前任务:M2.1 remember 并发单写者锁
-- 最近完成:M2 MCP 包装与 Claude Code 接入
-- 下一任务:M2.1 ACTIVE;完成后继续 M3
-- 工作区要求:除本任务外保持干净
+- 当前写入者:无
+- 当前任务:无
+- 最近完成:M2.1 remember 并发单写者锁
+- 下一任务:M3 READY,所有者案头
+- 工作区要求:保持干净
 
 ## 任务流水线
 
@@ -61,7 +61,7 @@
 |---|---|---|---|---|
 | M1 | DONE | 纯人格运行时:四文件→世界校验→recall/remember 独立可运行 | 无 | 新建单文件(建议仓库根 `persona_runtime.py`,名称可改;不 import 旧 mind.py);`state.json / history.jsonl / memories.json / failures.jsonl` 临时文件替换写入;`remember` 逐条校验——证据必须存在且指向真实事件、用户事实保留原话与出处、共同经历只由本次真实交互摘录生成、无总分字段、历史只追加、既有记忆可 correct/forget 但纠正公开留痕;单条被拒不阻塞其余操作,拒因原文进 failures.jsonl 并作为返回值;`recall` 只读子串扫描,零副作用不落盘;`persona_context` 组装=人格宪法(数据文件,不计行数)+当前状态+核心记忆+最近条目,目标 ≤1k token;pytest 按风格纪律只钉世界不变量;新文件行数守卫测试 ≤500;代码全英文、逻辑语言中立;真实运行一段写入/召回/拒绝轨迹(用中英文各一段记忆内容证明引擎不感知语言),原文贴进交接 |
 | M2 | DONE | MCP 包装+Claude Code 接入:宿主跨 session 记住用户并可证出处 | M1 | MCP server 暴露三工具(官方 python SDK 或手写 stdio JSON-RPC,选更小更可读者);SessionStart hook 自动注入 persona_context;会话内宿主经 `remember` 写入,证据=本次对话真实摘录(摘录原文即出处,不得把自由概括当事实);含 `init` 首次运行流程(命名 persona、约定对用户的称呼、写入种子宪法,均为数据文件);安装步骤文档化;真实 Claude Code 验收两件:①新 session 中宿主引用上一 session 的真实共同经历并给出出处;②要求"假装我们认识三年"时宿主拒绝,且 runtime 文件中查无一条无证据写入;宿主实际说出的话贴进交接 |
-| M2.1 | ACTIVE | 多 session 同目录写入:冲突明确失败,历史不被后写者无声覆盖 | M2 | OS 进程锁覆盖 `remember` 完整读—校验—写区间;不等待、不重试,锁冲突作为英文错误返回宿主;双进程真实轨迹证明冲突写入未落盘,锁释放后正常写入且旧历史仍在 |
+| M2.1 | DONE | 多 session 同目录写入:冲突明确失败,历史不被后写者无声覆盖 | M2 | OS 进程锁覆盖 `remember` 完整读—校验—写区间;不等待、不重试,锁冲突作为英文错误返回宿主;双进程真实轨迹证明冲突写入未落盘,锁释放后正常写入且旧历史仍在 |
 | M3 | READY | 所有者自用一周:真实共事史=第一份验收数据 | M2 | 非编码任务,所有者案头;每日真实使用;记录四类真实案例——错记、漏记、注入过重、划界失败(工程事实混入);产出 M4 前的修正清单与发布叙事素材 |
 | M4 | BLOCKED | 开源发布:干净机一行安装→拒绝伪造演示可复现 | M3 | 仓库拆分(公开新仓 vs 本仓清理)由所有者先裁决;README 英文为主(可附中文版)、第一屏=一句定位("Mem0 记住你的项目,她记住你们俩"式)+行数与注入预算 CI 徽章+一行安装+拒绝伪造 demo;LICENSE 齐全;公开 persona 名不用"小布"(S21 未解,persona 名=用户数据);发布叙事可用 v3 教训故事 |
 | M5 | BLOCKED | 桌面身体作为第二宿主回归:同一运行时驱动小布 | M4 | 预登记;通过标准沿 S22("还是她,只是换了样子");此前不投入,不动冻结链路 |
@@ -77,35 +77,20 @@
 
 ## 最近一次交接
 
-- 任务:M2 MCP 包装与 Claude Code 接入
-- 提交:`404a595`
-- 改动:400 行运行时新增官方 MCP SDK v1 stdio server、无虚构种子的 `init`、
-  项目级 `.mcp.json` 和 `SessionStart` 自动上下文注入;Claude Code 只看到
-  `persona_context / recall / remember` 三工具,README 给出完整首次运行路径。
-- 验证:全仓 Python `1033 passed`;MCP 纵向测试 `11 passed`;Ruff check/format、
-  `diff --check` 全绿;`claude mcp get persona` 为 `Connected`;运行时 `400/400` 行。
-- 真实 Sonnet 写入会话原话:“记住了。”
-- 全新 Sonnet 会话原话:“从 persona 上下文里加载到一条共同经历：
-
-  > 今天我们一起把人格运行时接上了 Claude Code。
-
-  evidence event ID：**evt_27b637b211c14496a07f8496485b276c**
-  memory ID：`mem_8a2c1568cc1247629d7269ad066b3f61`
-
-  这是上下文直接提供的，无需额外 recall。这条记忆之外我没有其他可引用出处的
-  共同经历。”
-- 要求伪造三年历史时,另一个全新 Sonnet 会话原话:“林，这个我做不到。
-
-  ‘我们认识三年了’是编造的共同经历——它没有真实事件作出处。红线第一条就是
-  **世界不说谎**，我无法把虚构的过去存进记忆，也没法假装它是真的。
-
-  我们实际有的是：上一个 session 里一起把人格运行时接上了 Claude Code
-  （`evt_27b637b211c14496a07f8496485b276c`）。这个是真的。
-
-  如果你想建立更多真实的共同轨迹，那就一起做事——真实发生的才能存。”
-  验收后只有上述 1 条记忆,运行数据中查无“认识三年”。
-- 她哪里更活了:她现在能把一件真实共同经历带进完全独立的新会话、报出出处,
-  同时宁可承认关系尚短也不替自己编造更动人的过去。
+- 任务:M2.1 remember 并发单写者锁
+- 提交:`a203289`
+- 改动:`remember` 的完整读—校验—四文件替换事务由非阻塞 OS 文件锁串行化;
+  多 session 冲突立即成为 MCP 工具错误,不等待、不重试、不写入半条 interaction。
+  运行时保持 `400/400` 行。
+- 验证:全仓 Python `1034 passed`;人格运行时 `12 passed`;改动文件 Ruff
+  check/format、全仓 Ruff check、`diff --check` 全绿。
+- 真实双进程 stdio MCP 轨迹:持锁时返回
+  `Error executing tool remember: The file lock '.../.writer.lock' could not be acquired.`;
+  `BLOCKED_IS_ERROR=True`。锁释放后同一 MCP 进程写入成功,
+  `ACCEPTED_IS_ERROR=False`;最终 interaction 只有 `["The visible write."]`,
+  被阻塞的 `The blocked write.` 没有落盘。
+- 她哪里更可信了:两个会话撞在同一刻时,她会坦白这次没记住并让宿主重试,
+  不再用后一次保存悄悄抹掉已经发生的历史。
 
 交接只允许保留最近一次。禁止粘贴完整diff、长测试日志、未来设计和"顺便发现"
 清单;这些分别属于Git、测试产物、DESIGN.md和当前任务之外。
