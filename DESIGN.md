@@ -1,33 +1,5 @@
 # 最小人格引擎 —— 唯一设计文档
 
-## 现役运行时(M2 后事实)
-
-现役产品是仓库根目录的开源 MCP 人格运行时内核,不是下文的旧桌面闭环。
-`persona_runtime.py` 是 400 行单文件,人格宪法在数据目录的 `constitution.md`;
-未初始化时可回退到仓库的 `persona.md`。运行数据只有
-`state.json / history.jsonl / memories.json / failures.jsonl`,由单进程单写者
-通过同目录临时文件替换写入,不使用数据库、向量或云。
-
-宿主模型是大脑和嘴。内核只提供 `persona_context / recall / remember` 三个
-边界:`persona_context` 在 3200 UTF-8 字节预算内组装宪法、当前状态、核心记忆
-与最近记忆;`recall` 做大小写不敏感的字面子串只读扫描;`remember` 先把本次真实
-交互记为事件,再逐条接受或拒绝记忆操作。
-
-运行时以 MCP Python SDK v1 的 stdio server 暴露这三个工具。项目级 `.mcp.json`
-负责让 Claude Code 启动 server,`SessionStart` hook 在启动、恢复、清空和压缩后
-自动注入 `persona_context`。`init` 只把 persona 名称、对用户的称呼和种子宪法
-写入本地数据目录,不预造共同经历;数据目录由 `PERSONA_DATA_DIR` 指定,默认位于
-项目的 `data/persona`。
-
-世界校验集中在一处:用户事实和共同经历必须逐字复制本次交互中的证据摘录;
-persona 自身经历必须引用相应收据,pattern 必须引用既存事件;操作采用封闭字段,
-因此不存在关系总分写入位置。合法项不被同批非法项阻塞;非法项的原始操作和英文
-拒因同时进入失败留档与返回值。`correct / forget` 只改变当前记忆,旧内容、纠正
-与遗忘动作继续留在只追加历史中。空交互在读取文件前失败,因此沉默零写入。
-
-下文记录的是已冻结桌面链路的设计事实,只作为 M5 第二宿主回归的素材;在 M5 前
-不再施工,与本节冲突处以本节和 `WORK.md` 的所有者裁决为准。
-
 ## 定位
 
 MyBuddy mini 不是任务助手、聊天机器人、角色卡或通用 Agent 框架，而是一个

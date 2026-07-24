@@ -21,8 +21,6 @@ dist/
 .idea/
 *.swp
 .claude/
-!.claude/
-!.claude/settings.json
 
 # Runtime data (含隐私)
 /data/
