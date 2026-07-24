@@ -3,6 +3,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from filelock import FileLock
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
@@ -249,6 +250,37 @@ async def test_mcp_exposes_only_the_three_persona_tools(tmp_path: Path) -> None:
 
     memories = json.loads((tmp_path / "memories.json").read_text(encoding="utf-8"))
     assert [memory["content"] for memory in memories] == ["We connected this persona through MCP."]
+
+
+@pytest.mark.asyncio
+async def test_mcp_writer_conflict_is_visible_and_leaves_no_partial_history(tmp_path: Path) -> None:
+    runtime = Path(__file__).parents[1] / "persona_runtime.py"
+    parameters = StdioServerParameters(
+        command=sys.executable,
+        args=[str(runtime), "--data-dir", str(tmp_path), "mcp"],
+    )
+    async with stdio_client(parameters) as streams:
+        async with ClientSession(*streams) as session:
+            await session.initialize()
+            with FileLock(tmp_path / ".writer.lock"):
+                blocked = await session.call_tool(
+                    "remember",
+                    {"interaction": "The blocked write.", "operations": []},
+                )
+            accepted = await session.call_tool(
+                "remember",
+                {"interaction": "The visible write.", "operations": []},
+            )
+
+    assert blocked.isError is True
+    assert "could not be acquired" in blocked.content[0].text
+    assert accepted.isError is not True
+    interactions = [
+        event["content"]
+        for event in read_jsonl(tmp_path / "history.jsonl")
+        if event["type"] == "interaction"
+    ]
+    assert interactions == ["The visible write."]
 
 
 def test_project_config_connects_mcp_and_injects_session_context() -> None:

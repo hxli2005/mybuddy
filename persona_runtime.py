@@ -1,5 +1,4 @@
-"""A local memory boundary for a model-hosted continuing persona.
-The host supplies language; this module preserves evidenced memory for one writer."""
+"""A single-writer memory boundary for a model-hosted continuing persona."""
 
 from __future__ import annotations
 
@@ -11,6 +10,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from filelock import FileLock
 from mcp.server.fastmcp import FastMCP
 
 CONTEXT_BYTE_BUDGET = 3_200
@@ -193,41 +193,42 @@ def remember(
         raise ValueError("operations must be a list")
 
     directory = Path(data_dir)
-    state, history, memories, failures = _load_store(directory)
-    current_event = _event("interaction", datetime.now(UTC).isoformat(), content=interaction)
-    history.append(current_event)
-    history_by_id = {event["id"]: event for event in history}
-    memories_by_id = {memory["id"]: memory for memory in memories}
-    accepted: list[dict[str, Any]] = []
-    rejected: list[dict[str, Any]] = []
-
-    for index, raw_operation in enumerate(operations):
-        try:
-            operation = _validate_operation(
-                raw_operation,
-                interaction,
-                current_event["id"],
-                history_by_id,
-                memories_by_id,
-            )
-        except ValueError as error:
-            reason = str(error)
-            failure = {
-                "at": datetime.now(UTC).isoformat(),
-                "interaction_id": current_event["id"],
-                "operation": raw_operation,
-                "reason": reason,
-            }
-            failures.append(failure)
-            rejected.append({"index": index, "reason": reason})
-            continue
-
-        memory_id = _apply_operation(operation, memories, history)
+    with FileLock(directory / ".writer.lock", timeout=0):
+        state, history, memories, failures = _load_store(directory)
+        current_event = _event("interaction", datetime.now(UTC).isoformat(), content=interaction)
+        history.append(current_event)
+        history_by_id = {event["id"]: event for event in history}
         memories_by_id = {memory["id"]: memory for memory in memories}
-        accepted.append({"index": index, "memory_id": memory_id})
+        accepted: list[dict[str, Any]] = []
+        rejected: list[dict[str, Any]] = []
 
-    _save_store(directory, state, history, memories, failures)
-    return {"interaction_id": current_event["id"], "accepted": accepted, "rejected": rejected}
+        for index, raw_operation in enumerate(operations):
+            try:
+                operation = _validate_operation(
+                    raw_operation,
+                    interaction,
+                    current_event["id"],
+                    history_by_id,
+                    memories_by_id,
+                )
+            except ValueError as error:
+                reason = str(error)
+                failure = {
+                    "at": datetime.now(UTC).isoformat(),
+                    "interaction_id": current_event["id"],
+                    "operation": raw_operation,
+                    "reason": reason,
+                }
+                failures.append(failure)
+                rejected.append({"index": index, "reason": reason})
+                continue
+
+            memory_id = _apply_operation(operation, memories, history)
+            memories_by_id = {memory["id"]: memory for memory in memories}
+            accepted.append({"index": index, "memory_id": memory_id})
+
+        _save_store(directory, state, history, memories, failures)
+        return {"interaction_id": current_event["id"], "accepted": accepted, "rejected": rejected}
 
 
 def recall(query: str, data_dir: str | Path = "data/persona") -> list[dict[str, Any]]:
@@ -360,7 +361,6 @@ def _serve_mcp(data_dir: Path) -> None:
     @server.tool(name="remember")
     def store_memories(interaction: str, operations: list[object]) -> dict[str, Any]:
         """Store personal memories from an exact current-conversation excerpt.
-
         record uses action, kind, content, and evidence_quote for current user facts
         or shared experiences, or evidence_ids for persona experiences and patterns.
         correct uses action, memory_id, content, and evidence_quote; forget omits
