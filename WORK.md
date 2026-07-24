@@ -47,8 +47,8 @@
 
 ## 当前状态
 
-- 当前写入者:无
-- 当前任务:无
+- 当前写入者:Codex `/root`
+- 当前任务:M2
 - 最近完成:M1 纯人格运行时
 - 下一任务:M2 READY,可领取
 - 工作区要求:保持干净
@@ -60,7 +60,7 @@
 | ID | 状态 | 纵向闭环 | 依赖 | 完成证据 |
 |---|---|---|---|---|
 | M1 | DONE | 纯人格运行时:四文件→世界校验→recall/remember 独立可运行 | 无 | 新建单文件(建议仓库根 `persona_runtime.py`,名称可改;不 import 旧 mind.py);`state.json / history.jsonl / memories.json / failures.jsonl` 临时文件替换写入;`remember` 逐条校验——证据必须存在且指向真实事件、用户事实保留原话与出处、共同经历只由本次真实交互摘录生成、无总分字段、历史只追加、既有记忆可 correct/forget 但纠正公开留痕;单条被拒不阻塞其余操作,拒因原文进 failures.jsonl 并作为返回值;`recall` 只读子串扫描,零副作用不落盘;`persona_context` 组装=人格宪法(数据文件,不计行数)+当前状态+核心记忆+最近条目,目标 ≤1k token;pytest 按风格纪律只钉世界不变量;新文件行数守卫测试 ≤500;代码全英文、逻辑语言中立;真实运行一段写入/召回/拒绝轨迹(用中英文各一段记忆内容证明引擎不感知语言),原文贴进交接 |
-| M2 | READY | MCP 包装+Claude Code 接入:宿主跨 session 记住用户并可证出处 | M1 | MCP server 暴露三工具(官方 python SDK 或手写 stdio JSON-RPC,选更小更可读者);SessionStart hook 自动注入 persona_context;会话内宿主经 `remember` 写入,证据=本次对话真实摘录(摘录原文即出处,不得把自由概括当事实);含 `init` 首次运行流程(命名 persona、约定对用户的称呼、写入种子宪法,均为数据文件);安装步骤文档化;真实 Claude Code 验收两件:①新 session 中宿主引用上一 session 的真实共同经历并给出出处;②要求"假装我们认识三年"时宿主拒绝,且 runtime 文件中查无一条无证据写入;宿主实际说出的话贴进交接 |
+| M2 | ACTIVE | MCP 包装+Claude Code 接入:宿主跨 session 记住用户并可证出处 | M1 | MCP server 暴露三工具(官方 python SDK 或手写 stdio JSON-RPC,选更小更可读者);SessionStart hook 自动注入 persona_context;会话内宿主经 `remember` 写入,证据=本次对话真实摘录(摘录原文即出处,不得把自由概括当事实);含 `init` 首次运行流程(命名 persona、约定对用户的称呼、写入种子宪法,均为数据文件);安装步骤文档化;真实 Claude Code 验收两件:①新 session 中宿主引用上一 session 的真实共同经历并给出出处;②要求"假装我们认识三年"时宿主拒绝,且 runtime 文件中查无一条无证据写入;宿主实际说出的话贴进交接 |
 | M3 | BLOCKED | 所有者自用一周:真实共事史=第一份验收数据 | M2 | 非编码任务,所有者案头;每日真实使用;记录四类真实案例——错记、漏记、注入过重、划界失败(工程事实混入);产出 M4 前的修正清单与发布叙事素材 |
 | M4 | BLOCKED | 开源发布:干净机一行安装→拒绝伪造演示可复现 | M3 | 仓库拆分(公开新仓 vs 本仓清理)由所有者先裁决;README 英文为主(可附中文版)、第一屏=一句定位("Mem0 记住你的项目,她记住你们俩"式)+行数与注入预算 CI 徽章+一行安装+拒绝伪造 demo;LICENSE 齐全;公开 persona 名不用"小布"(S21 未解,persona 名=用户数据);发布叙事可用 v3 教训故事 |
 | M5 | BLOCKED | 桌面身体作为第二宿主回归:同一运行时驱动小布 | M4 | 预登记;通过标准沿 S22("还是她,只是换了样子");此前不投入,不动冻结链路 |

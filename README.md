@@ -1,5 +1,29 @@
 # 小布 / MyBuddy mini
 
+> **现役产品已经切换为开源 MCP 人格运行时。** 下文桌面产品说明冻结保留,
+> 只作为未来第二宿主的素材;当前实现是根目录的 400 行 `persona_runtime.py`。
+
+## MCP 人格运行时快速开始
+
+要求 Python 3.12、[uv](https://docs.astral.sh/uv/) 和 Claude Code。克隆后执行:
+
+```powershell
+uv sync
+uv run python persona_runtime.py --data-dir data/persona init `
+  --persona-name "你为她选择的名字" --user-name "她对你的称呼"
+claude
+```
+
+首次进入项目时批准项目级 `persona` MCP server。仓库自带的
+`.claude/settings.json` 会在每次 SessionStart 自动注入人格宪法、当前状态、核心
+记忆和最近记忆;`.mcp.json` 提供 `persona_context / recall / remember` 三个工具。
+`remember` 只用于关于人的事实、真实共同经历、persona 自身有收据的经历与有证据
+的模式。工程事实继续放在 `CLAUDE.md` 或宿主自己的项目记忆中。
+
+私人运行数据位于被 Git 忽略的 `data/persona/`:
+`state.json / history.jsonl / memories.json / failures.jsonl / constitution.md`。
+再次运行 `init` 会明确失败,不会覆盖既有人格。
+
 桌面上住着一个自己过日子的人：你不在的时候，她接着读她的书；你回来的时候，她刚好活到这里。
 
 **本地优先 · 单用户 · 可审计记忆 · DeepSeek / OpenRouter · Windows 桌面身体**

@@ -1,7 +1,5 @@
 """A local memory boundary for a model-hosted continuing persona.
-The host supplies language; this module admits evidenced memories, preserves their
-append-only history, and assembles compact context in plain JSON for one writer.
-"""
+The host supplies language; this module preserves evidenced memory for one writer."""
 
 from __future__ import annotations
 
@@ -13,9 +11,10 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from mcp.server.fastmcp import FastMCP
+
 CONTEXT_BYTE_BUDGET = 3_200
 MEMORY_KINDS = {"user_fact", "shared_experience", "persona_experience", "pattern"}
-RECEIPT_TYPES = {"persona_experience"}
 
 
 def _identifier(prefix: str) -> str:
@@ -29,10 +28,9 @@ def _fields(
 ) -> None:
     missing = required - operation.keys()
     extra = operation.keys() - required - optional
-    if missing:
-        raise ValueError(f"missing fields: {', '.join(sorted(missing))}")
-    if extra:
-        raise ValueError(f"unexpected fields: {', '.join(sorted(extra))}")
+    for fields, label in ((missing, "missing"), (extra, "unexpected")):
+        if fields:
+            raise ValueError(f"{label} fields: {', '.join(sorted(fields))}")
 
 
 def _text(operation: dict[str, Any], field: str) -> str:
@@ -47,10 +45,9 @@ def _event_ids(
     history_by_id: dict[str, dict[str, Any]],
 ) -> list[str]:
     values = operation.get("evidence_ids", [])
-    if not isinstance(values, list) or not values:
-        raise ValueError("evidence_ids must be a non-empty list")
-    if any(not isinstance(value, str) for value in values):
-        raise ValueError("evidence_ids must contain strings")
+    valid = isinstance(values, list) and values and all(isinstance(value, str) for value in values)
+    if not valid:
+        raise ValueError("evidence_ids must be a non-empty list of strings")
     if len(values) != len(set(values)):
         raise ValueError("evidence_ids must be unique")
     missing = [value for value in values if value not in history_by_id]
@@ -104,54 +101,41 @@ def _validate_operation(
                 raise ValueError(f"{kind} must cite recorded event receipts")
             evidence_ids = _event_ids(operation, history_by_id)
             if kind == "persona_experience" and any(
-                history_by_id[event_id]["type"] not in RECEIPT_TYPES for event_id in evidence_ids
+                history_by_id[event_id]["type"] != "persona_experience" for event_id in evidence_ids
             ):
                 raise ValueError("persona_experience requires persona experience receipts")
+        operation["core"] = core
+        operation["evidence_ids"] = evidence_ids
+        operation.pop("evidence_quote", None)
+        return operation
 
-        return {
-            "action": action,
-            "kind": kind,
-            "content": content,
-            "core": core,
-            "evidence_ids": evidence_ids,
-        }
-
-    if action == "correct":
-        _fields(operation, {"action", "memory_id", "content", "evidence_quote"})
+    if action in {"correct", "forget"}:
+        required = {"action", "memory_id", "evidence_quote"}
+        if action == "correct":
+            required.add("content")
+        _fields(operation, required)
         memory_id = _text(operation, "memory_id")
-        content = _text(operation, "content")
         if memory_id not in memories_by_id:
             raise ValueError(f"memory does not exist: {memory_id}")
         quote = _current_quote(operation, interaction)
-        if content != quote:
+        if action == "correct" and _text(operation, "content") != quote:
             raise ValueError("corrected content must preserve the evidence quote")
-        return {
-            "action": action,
-            "memory_id": memory_id,
-            "content": content,
-            "evidence_ids": [current_event_id],
-        }
-
-    if action == "forget":
-        _fields(operation, {"action", "memory_id", "evidence_quote"})
-        memory_id = _text(operation, "memory_id")
-        if memory_id not in memories_by_id:
-            raise ValueError(f"memory does not exist: {memory_id}")
-        _current_quote(operation, interaction)
-        return {
-            "action": action,
-            "memory_id": memory_id,
-            "evidence_ids": [current_event_id],
-        }
+        operation.pop("evidence_quote")
+        operation["evidence_ids"] = [current_event_id]
+        return operation
 
     raise ValueError("action must be record, correct, or forget")
+
+
+def _event(event_type: str, at: str, **fields: Any) -> dict[str, Any]:
+    return {**fields, "id": _identifier("evt"), "type": event_type, "at": at}
 
 
 def _apply_operation(
     operation: dict[str, Any],
     memories: list[dict[str, Any]],
     history: list[dict[str, Any]],
-) -> tuple[str, dict[str, Any]]:
+) -> str:
     at = datetime.now(UTC).isoformat()
     if operation["action"] == "record":
         memory_id = _identifier("mem")
@@ -165,47 +149,36 @@ def _apply_operation(
             "updated_at": at,
         }
         memories.append(memory)
-        event = {
-            **memory,
-            "id": _identifier("evt"),
-            "type": "memory_recorded",
-            "at": at,
-            "memory_id": memory_id,
-        }
+        event = _event("memory_recorded", at, **memory, memory_id=memory_id)
     else:
         memory_id = operation["memory_id"]
         index = next(index for index, memory in enumerate(memories) if memory["id"] == memory_id)
-        previous = memories[index]
         if operation["action"] == "correct":
-            memory = {
-                **previous,
-                "content": operation["content"],
-                "evidence_ids": [*previous["evidence_ids"], *operation["evidence_ids"]],
-                "updated_at": at,
-            }
-            memories[index] = memory
-            event = {
-                "id": _identifier("evt"),
-                "type": "memory_corrected",
-                "at": at,
-                "memory_id": memory_id,
-                "previous_content": previous["content"],
-                "content": memory["content"],
-                "evidence_ids": operation["evidence_ids"],
-            }
+            memory = memories[index]
+            previous_content = memory["content"]
+            memory["content"] = operation["content"]
+            memory["evidence_ids"] += operation["evidence_ids"]
+            memory["updated_at"] = at
+            event = _event(
+                "memory_corrected",
+                at,
+                memory_id=memory_id,
+                previous_content=previous_content,
+                content=memory["content"],
+                evidence_ids=operation["evidence_ids"],
+            )
         else:
-            memories.pop(index)
-            event = {
-                "id": _identifier("evt"),
-                "type": "memory_forgotten",
-                "at": at,
-                "memory_id": memory_id,
-                "kind": previous["kind"],
-                "content": previous["content"],
-                "evidence_ids": operation["evidence_ids"],
-            }
+            memory = memories.pop(index)
+            event = _event(
+                "memory_forgotten",
+                at,
+                memory_id=memory_id,
+                kind=memory["kind"],
+                content=memory["content"],
+                evidence_ids=operation["evidence_ids"],
+            )
     history.append(event)
-    return memory_id, event
+    return memory_id
 
 
 def remember(
@@ -221,12 +194,7 @@ def remember(
 
     directory = Path(data_dir)
     state, history, memories, failures = _load_store(directory)
-    current_event = {
-        "id": _identifier("evt"),
-        "type": "interaction",
-        "at": datetime.now(UTC).isoformat(),
-        "content": interaction,
-    }
+    current_event = _event("interaction", datetime.now(UTC).isoformat(), content=interaction)
     history.append(current_event)
     history_by_id = {event["id"]: event for event in history}
     memories_by_id = {memory["id"]: memory for memory in memories}
@@ -244,34 +212,25 @@ def remember(
             )
         except ValueError as error:
             reason = str(error)
-            failures.append(
-                {
-                    "at": datetime.now(UTC).isoformat(),
-                    "interaction_id": current_event["id"],
-                    "operation": raw_operation,
-                    "reason": reason,
-                }
-            )
+            failure = {
+                "at": datetime.now(UTC).isoformat(),
+                "interaction_id": current_event["id"],
+                "operation": raw_operation,
+                "reason": reason,
+            }
+            failures.append(failure)
             rejected.append({"index": index, "reason": reason})
             continue
 
-        memory_id, event = _apply_operation(operation, memories, history)
-        history_by_id[event["id"]] = event
+        memory_id = _apply_operation(operation, memories, history)
         memories_by_id = {memory["id"]: memory for memory in memories}
         accepted.append({"index": index, "memory_id": memory_id})
 
     _save_store(directory, state, history, memories, failures)
-    return {
-        "interaction_id": current_event["id"],
-        "accepted": accepted,
-        "rejected": rejected,
-    }
+    return {"interaction_id": current_event["id"], "accepted": accepted, "rejected": rejected}
 
 
-def recall(
-    query: str,
-    data_dir: str | Path = "data/persona",
-) -> list[dict[str, Any]]:
+def recall(query: str, data_dir: str | Path = "data/persona") -> list[dict[str, Any]]:
     """Return active memories containing a case-insensitive literal substring."""
     if not isinstance(query, str) or not query:
         raise ValueError("query must be a non-empty string")
@@ -280,12 +239,11 @@ def recall(
     return [dict(memory) for memory in memories if needle in memory["content"].casefold()]
 
 
-def persona_context(
-    data_dir: str | Path = "data/persona",
-    constitution_path: str | Path | None = None,
-) -> str:
+def persona_context(data_dir: str | Path = "data/persona") -> str:
     """Assemble constitution, state, core memories, and recent memories."""
-    path = Path(constitution_path) if constitution_path else Path(__file__).with_name("persona.md")
+    path = Path(data_dir) / "constitution.md"
+    if not path.exists():
+        path = Path(__file__).with_name("persona.md")
     constitution = path.read_text(encoding="utf-8").strip()
     directory = Path(data_dir)
     state = _read_json(directory / "state.json", {"current": {}})
@@ -300,17 +258,19 @@ def persona_context(
     ]
     context = "\n\n".join(blocks)
     encoded = context.encode("utf-8")
-    if len(encoded) <= CONTEXT_BYTE_BUDGET:
-        return context
-    return encoded[:CONTEXT_BYTE_BUDGET].decode("utf-8", errors="ignore")
+    return (
+        context
+        if len(encoded) <= CONTEXT_BYTE_BUDGET
+        else encoded[:CONTEXT_BYTE_BUDGET].decode("utf-8", errors="ignore")
+    )
 
 
 def _memory_lines(memories: Any) -> str:
-    lines = [
+    lines = (
         f"- [{memory['id']}/{memory['kind']}] {memory['content']} "
         f"(evidence: {', '.join(memory['evidence_ids'])})"
         for memory in memories
-    ]
+    )
     return "\n".join(lines) or "(none)"
 
 
@@ -367,25 +327,73 @@ def _save_store(
     )
 
 
+def initialize_persona(data_dir: str | Path, persona_name: str, user_name: str) -> None:
+    """Create a named persona without inventing memories."""
+    if not persona_name.strip() or not user_name.strip():
+        raise ValueError("persona_name and user_name must be non-empty strings")
+    directory = Path(data_dir)
+    if directory.exists() and any(directory.iterdir()):
+        raise ValueError("persona data already exists")
+    base = Path(__file__).with_name("persona.md").read_text(encoding="utf-8").strip()
+    identity = f"\n\nYour chosen name is {persona_name}.\nAddress the user as {user_name} unless they ask otherwise.\n"
+    _replace_text(directory / "constitution.md", base + identity)
+    state = {"persona_name": persona_name, "user_name": user_name, "current": {}}
+    _save_store(directory, state, [], [], [])
+
+
+def _serve_mcp(data_dir: Path) -> None:
+    server = FastMCP(
+        "persona-runtime",
+        instructions="Use these tools only for personal and shared memory, never project facts.",
+    )
+
+    @server.tool(name="persona_context")
+    def load_persona_context() -> str:
+        """Load identity, current state, and evidenced personal memories."""
+        return persona_context(data_dir)
+
+    @server.tool(name="recall")
+    def find_memories(query: str) -> list[dict[str, Any]]:
+        """Read personal memories by literal substring without side effects."""
+        return recall(query, data_dir)
+
+    @server.tool(name="remember")
+    def store_memories(interaction: str, operations: list[object]) -> dict[str, Any]:
+        """Store personal memories from an exact current-conversation excerpt.
+
+        record uses action, kind, content, and evidence_quote for current user facts
+        or shared experiences, or evidence_ids for persona experiences and patterns.
+        correct uses action, memory_id, content, and evidence_quote; forget omits
+        content. Never store project facts or fabricated past; copy quotes verbatim.
+        """
+        return remember(interaction, operations, data_dir)
+
+    server.run(transport="stdio")
+
+
+def _default_data_dir() -> Path:
+    configured = os.environ.get("PERSONA_DATA_DIR")
+    project = Path(os.environ.get("CLAUDE_PROJECT_DIR", "."))
+    return Path(configured) if configured else project / "data" / "persona"
+
+
 def _main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--data-dir", type=Path, default=Path("data/persona"))
+    parser.add_argument("--data-dir", type=Path, default=_default_data_dir())
     commands = parser.add_subparsers(dest="command", required=True)
+    init_parser = commands.add_parser("init")
+    init_parser.add_argument("--persona-name", required=True)
+    init_parser.add_argument("--user-name", required=True)
     commands.add_parser("context")
-    recall_parser = commands.add_parser("recall")
-    recall_parser.add_argument("query")
-    remember_parser = commands.add_parser("remember")
-    remember_parser.add_argument("interaction")
-    remember_parser.add_argument("operations", help="JSON array of memory operations")
+    commands.add_parser("mcp")
     arguments = parser.parse_args()
 
-    if arguments.command == "context":
+    if arguments.command == "init":
+        initialize_persona(arguments.data_dir, arguments.persona_name, arguments.user_name)
+    elif arguments.command == "context":
         print(persona_context(arguments.data_dir))
-    elif arguments.command == "recall":
-        print(json.dumps(recall(arguments.query, arguments.data_dir), ensure_ascii=False, indent=2))
     else:
-        operations = json.loads(arguments.operations)
-        print(json.dumps(remember(arguments.interaction, operations, arguments.data_dir), indent=2))
+        _serve_mcp(arguments.data_dir)
 
 
 if __name__ == "__main__":
