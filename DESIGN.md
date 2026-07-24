@@ -1,9 +1,10 @@
 # 最小人格引擎 —— 唯一设计文档
 
-## 现役运行时(M1 后事实)
+## 现役运行时(M2 后事实)
 
 现役产品是仓库根目录的开源 MCP 人格运行时内核,不是下文的旧桌面闭环。
-`persona_runtime.py` 是 392 行单文件,人格宪法在 `persona.md`;运行数据只有
+`persona_runtime.py` 是 400 行单文件,人格宪法在数据目录的 `constitution.md`;
+未初始化时可回退到仓库的 `persona.md`。运行数据只有
 `state.json / history.jsonl / memories.json / failures.jsonl`,由单进程单写者
 通过同目录临时文件替换写入,不使用数据库、向量或云。
 
@@ -11,6 +12,12 @@
 边界:`persona_context` 在 3200 UTF-8 字节预算内组装宪法、当前状态、核心记忆
 与最近记忆;`recall` 做大小写不敏感的字面子串只读扫描;`remember` 先把本次真实
 交互记为事件,再逐条接受或拒绝记忆操作。
+
+运行时以 MCP Python SDK v1 的 stdio server 暴露这三个工具。项目级 `.mcp.json`
+负责让 Claude Code 启动 server,`SessionStart` hook 在启动、恢复、清空和压缩后
+自动注入 `persona_context`。`init` 只把 persona 名称、对用户的称呼和种子宪法
+写入本地数据目录,不预造共同经历;数据目录由 `PERSONA_DATA_DIR` 指定,默认位于
+项目的 `data/persona`。
 
 世界校验集中在一处:用户事实和共同经历必须逐字复制本次交互中的证据摘录;
 persona 自身经历必须引用相应收据,pattern 必须引用既存事件;操作采用封闭字段,
