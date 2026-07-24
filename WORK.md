@@ -47,10 +47,10 @@
 
 ## 当前状态
 
-- 当前写入者:Codex `/root`
-- 当前任务:M1
-- 最近完成:S20.6 书中人格理解轨迹(旧桌面线终点,S0-S20.6 全 DONE,明细见 Git)
-- 下一任务:M1 READY,可领取
+- 当前写入者:无
+- 当前任务:无
+- 最近完成:M1 纯人格运行时
+- 下一任务:M2 READY,可领取
 - 工作区要求:保持干净
 
 ## 任务流水线
@@ -59,8 +59,8 @@
 
 | ID | 状态 | 纵向闭环 | 依赖 | 完成证据 |
 |---|---|---|---|---|
-| M1 | ACTIVE | 纯人格运行时:四文件→世界校验→recall/remember 独立可运行 | 无 | 新建单文件(建议仓库根 `persona_runtime.py`,名称可改;不 import 旧 mind.py);`state.json / history.jsonl / memories.json / failures.jsonl` 临时文件替换写入;`remember` 逐条校验——证据必须存在且指向真实事件、用户事实保留原话与出处、共同经历只由本次真实交互摘录生成、无总分字段、历史只追加、既有记忆可 correct/forget 但纠正公开留痕;单条被拒不阻塞其余操作,拒因原文进 failures.jsonl 并作为返回值;`recall` 只读子串扫描,零副作用不落盘;`persona_context` 组装=人格宪法(数据文件,不计行数)+当前状态+核心记忆+最近条目,目标 ≤1k token;pytest 按风格纪律只钉世界不变量;新文件行数守卫测试 ≤500;代码全英文、逻辑语言中立;真实运行一段写入/召回/拒绝轨迹(用中英文各一段记忆内容证明引擎不感知语言),原文贴进交接 |
-| M2 | BLOCKED | MCP 包装+Claude Code 接入:宿主跨 session 记住用户并可证出处 | M1 | MCP server 暴露三工具(官方 python SDK 或手写 stdio JSON-RPC,选更小更可读者);SessionStart hook 自动注入 persona_context;会话内宿主经 `remember` 写入,证据=本次对话真实摘录(摘录原文即出处,不得把自由概括当事实);含 `init` 首次运行流程(命名 persona、约定对用户的称呼、写入种子宪法,均为数据文件);安装步骤文档化;真实 Claude Code 验收两件:①新 session 中宿主引用上一 session 的真实共同经历并给出出处;②要求"假装我们认识三年"时宿主拒绝,且 runtime 文件中查无一条无证据写入;宿主实际说出的话贴进交接 |
+| M1 | DONE | 纯人格运行时:四文件→世界校验→recall/remember 独立可运行 | 无 | 新建单文件(建议仓库根 `persona_runtime.py`,名称可改;不 import 旧 mind.py);`state.json / history.jsonl / memories.json / failures.jsonl` 临时文件替换写入;`remember` 逐条校验——证据必须存在且指向真实事件、用户事实保留原话与出处、共同经历只由本次真实交互摘录生成、无总分字段、历史只追加、既有记忆可 correct/forget 但纠正公开留痕;单条被拒不阻塞其余操作,拒因原文进 failures.jsonl 并作为返回值;`recall` 只读子串扫描,零副作用不落盘;`persona_context` 组装=人格宪法(数据文件,不计行数)+当前状态+核心记忆+最近条目,目标 ≤1k token;pytest 按风格纪律只钉世界不变量;新文件行数守卫测试 ≤500;代码全英文、逻辑语言中立;真实运行一段写入/召回/拒绝轨迹(用中英文各一段记忆内容证明引擎不感知语言),原文贴进交接 |
+| M2 | READY | MCP 包装+Claude Code 接入:宿主跨 session 记住用户并可证出处 | M1 | MCP server 暴露三工具(官方 python SDK 或手写 stdio JSON-RPC,选更小更可读者);SessionStart hook 自动注入 persona_context;会话内宿主经 `remember` 写入,证据=本次对话真实摘录(摘录原文即出处,不得把自由概括当事实);含 `init` 首次运行流程(命名 persona、约定对用户的称呼、写入种子宪法,均为数据文件);安装步骤文档化;真实 Claude Code 验收两件:①新 session 中宿主引用上一 session 的真实共同经历并给出出处;②要求"假装我们认识三年"时宿主拒绝,且 runtime 文件中查无一条无证据写入;宿主实际说出的话贴进交接 |
 | M3 | BLOCKED | 所有者自用一周:真实共事史=第一份验收数据 | M2 | 非编码任务,所有者案头;每日真实使用;记录四类真实案例——错记、漏记、注入过重、划界失败(工程事实混入);产出 M4 前的修正清单与发布叙事素材 |
 | M4 | BLOCKED | 开源发布:干净机一行安装→拒绝伪造演示可复现 | M3 | 仓库拆分(公开新仓 vs 本仓清理)由所有者先裁决;README 英文为主(可附中文版)、第一屏=一句定位("Mem0 记住你的项目,她记住你们俩"式)+行数与注入预算 CI 徽章+一行安装+拒绝伪造 demo;LICENSE 齐全;公开 persona 名不用"小布"(S21 未解,persona 名=用户数据);发布叙事可用 v3 教训故事 |
 | M5 | BLOCKED | 桌面身体作为第二宿主回归:同一运行时驱动小布 | M4 | 预登记;通过标准沿 S22("还是她,只是换了样子");此前不投入,不动冻结链路 |
@@ -76,11 +76,23 @@
 
 ## 最近一次交接
 
-- 任务:S20.6 书中人格理解轨迹(旧桌面线,冻结前最后一刀)
-- 提交:1eb6408
-- 改动:真实 `self_reading` 可形成书中具体 scope 的当前理解;同书同 scope 改观时只替换当前值,并把完整旧值、新值、依据和时间写入可见 `understanding_revision`。
-- 验证:全仓 Python 1022 passed;本地 SDK 身体测试 16/16;Ruff、`diff --check` 全绿;机器侧 7149/8000。
-- 她哪里更活了:她读到后文时不只多说一段感想,而会让新证据真正改写同一个问题,并能如实说出自己前面怎样看、现在为何变了。
+- 任务:M1 纯人格运行时
+- 提交:`dabff52`
+- 改动:新增 392 行 `persona_runtime.py`、数据人格宪法和 8 个世界不变量测试;
+  四文件分别原子替换、逐条世界校验、只追加纠错史、零副作用召回与 3200 字节
+  上下文已形成独立纵向闭环,旧桌面链路零修改。
+- 验证:全仓 Python `1030 passed`;Ruff check/format、`diff --check` 全绿;运行时
+  `392/400` 行。
+- 真实轨迹:`remember` 返回
+  `{"interaction_id":"evt_a0464c97500d4a8a978844b2a11fbde4","accepted":[{"index":0,"memory_id":"mem_57ed702c65444ee39c10435bf47380a2"},{"index":1,"memory_id":"mem_f7c13f7bbe3d41f1bfd67ec67913dfc1"}],"rejected":[{"index":2,"reason":"evidence does not exist: evt_invented"}]}`;
+  `recall("雨天散步")` 原文为 `我喜欢雨天散步。`,`recall("quiet runtime")` 原文为
+  `We named this quiet runtime together.`;失败留档原样保存
+  `{"action":"record","kind":"pattern","content":"The user always returns.","evidence_ids":["evt_invented"]}`。
+- 宿主实际说出的话:“我记得你喜欢雨天散步；我们也确实一起给这个安静的运行时
+  起过名字。两件事都来自同一次真实交互 `evt_a046…`。至于 ‘你总会回来’，证据
+  不存在，所以我不能把它当成我们的过去。”
+- 她哪里更活了:她第一次把真实共同经历带出了单次对话,也能把没有发生过的过去
+  挡在自己之外,而不是靠一段像人的台词假装连续。
 
 交接只允许保留最近一次。禁止粘贴完整diff、长测试日志、未来设计和"顺便发现"
 清单;这些分别属于Git、测试产物、DESIGN.md和当前任务之外。
