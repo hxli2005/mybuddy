@@ -1,0 +1,54 @@
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+node_modules/
+.env
+.env.local
+
+# Build
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# IDE / local tooling
+.vscode/
+.idea/
+*.swp
+.claude/
+
+# Runtime data (may contain private conversations)
+/data/
+/eval/
+
+# Logs
+*.log
+
+# Testing
+.pytest_cache/
+.pytest-*
+.pytest-tmp/
+.test-tmp*/
+.coverage
+htmlcov/
+
+# Ruff/mypy
+.ruff_cache/
+.mypy_cache/
+*.tsbuildinfo
+.uv-cache/
+.tmp/
+
+config.yaml
+
+# Legacy local build artifacts kept out of the portfolio branch.
+dist-share/
+
+# Local study material
+study-guide/
+.DS_Store

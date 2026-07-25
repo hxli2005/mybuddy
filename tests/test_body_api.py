@@ -1,0 +1,1521 @@
+import json
+from datetime import UTC, datetime, timedelta
+
+import pytest
+
+from mybuddy.body_api import BodyPresence, create_body_app
+from mybuddy.llm import BaseLLMProvider, LLMResponse, ToolCall
+from mybuddy.mind import STATIC_CATCH, MindFiles
+
+
+class StubProvider(BaseLLMProvider):
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def generate(self, messages, tools=None, **kwargs):  # noqa: ANN001, ANN202
+        self.calls += 1
+        incoming = json.loads(messages[0].content)["incoming_experience"]
+        is_reading = incoming is not None and incoming["type"] == "self_reading"
+        is_walk = incoming is not None and incoming["type"] == "self_walk"
+        is_life_ambient = (is_reading or is_walk) and "ambient" in kwargs.get("system", "")
+        is_expression_only = "state_changes 与 memory_operations 必须为空" in kwargs.get(
+            "system", ""
+        )
+        is_touch = incoming is not None and incoming["type"] == "body_touch"
+        is_raise = incoming is not None and incoming["type"] == "body_raise"
+        is_edge_reveal = incoming is not None and incoming["type"] == "body_edge_reveal"
+        chooses_read = incoming is not None and incoming.get("content") == "你继续读吧"
+        touch_zone = incoming.get("zone") if is_touch else None
+        expression = (
+            "我继续读诗了。"
+            if chooses_read
+            else "刚读到一句很想回到自在处的话。你今天还好吗？"
+            if is_reading and is_life_ambient
+            else "刚沿着桌面走了一小段，换个角度看这里也挺新鲜。"
+            if is_walk and is_life_ambient
+            else None
+            if is_reading
+            else "呀，碰到我头发了。"
+            if touch_zone == "head"
+            else "唔，碰到我衣角了。"
+            if touch_zone == "body"
+            else "刚才被你提起来晃了一小段，又稳稳落地了。"
+            if is_raise
+            else "欸，你把我从边上点出来了。那我就在这里站一会儿。"
+            if is_edge_reveal
+            else "忙完就好。先在我这儿松口气。"
+        )
+        expression_act = "reflect" if is_life_ambient else "respond" if expression else None
+        expression_evidence_ids = [incoming["id"]] if is_life_ambient else []
+        return LLMResponse(
+            tool_calls=[
+                ToolCall(
+                    id="call_1",
+                    name="submit_mind_bundle",
+                    arguments={
+                        "action_choice": "read" if chooses_read else None,
+                        "state_changes": {}
+                        if is_expression_only
+                        else {
+                            "mood": "放松",
+                            "energy": "平稳",
+                            "attention": "阅读"
+                            if is_reading
+                            else "身体感受"
+                            if is_touch or is_raise or is_edge_reveal
+                            else "对话",
+                        },
+                        "memory_operations": []
+                        if is_touch or is_expression_only or is_edge_reveal
+                        else [
+                            {
+                                "action": "record",
+                                "kind": "self_experience",
+                                "evidence_ids": [incoming["id"]],
+                                "target_id": None,
+                            }
+                        ]
+                        if is_raise
+                        else [
+                            {
+                                "action": "record",
+                                "kind": "self_experience" if is_reading else "user_fact",
+                                "evidence_ids": [incoming["id"]],
+                                "target_id": None,
+                            }
+                        ],
+                        "expression": expression,
+                        "expression_act": expression_act,
+                        "expression_evidence_ids": expression_evidence_ids,
+                        "expression_target_id": None,
+                    },
+                )
+            ]
+        )
+
+
+class UnavailableProvider(BaseLLMProvider):
+    async def generate(self, messages, tools=None, **kwargs):  # noqa: ANN001, ANN202
+        raise RuntimeError("network down")
+
+
+class RejectingProvider(BaseLLMProvider):
+    async def generate(self, messages, tools=None, **kwargs):  # noqa: ANN001, ANN202
+        return LLMResponse(tool_calls=[ToolCall(id="bad", name="submit_mind_bundle", arguments={})])
+
+
+@pytest.fixture
+def api(tmp_path):
+    pytest.importorskip("fastapi")
+    from fastapi.testclient import TestClient
+
+    provider = StubProvider()
+    app = create_body_app(data_dir=tmp_path, provider=provider)
+    return TestClient(app), provider, tmp_path
+
+
+def _history(data_dir):  # noqa: ANN001, ANN202
+    path = data_dir / "history.jsonl"
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+
+
+def _walk_motion(start_left: float = 100, end_left: float = 220) -> dict:
+    return {
+        "start_left": start_left,
+        "start_top": 80,
+        "end_left": end_left,
+        "end_top": 80,
+        "window_width": 200,
+        "window_height": 240,
+        "work_left": 0,
+        "work_top": 0,
+        "work_right": 800,
+        "work_bottom": 600,
+    }
+
+
+def _schedule_walk(client, data_dir):  # noqa: ANN001, ANN202
+    files = MindFiles(data_dir)
+    now = datetime.now(UTC).astimezone()
+    state, history, memories = files.load(now)
+    state["next_activity"] = "walk"
+    state["last_step_at"] = (now - timedelta(minutes=31)).isoformat()
+    files.commit(state, history, memories)
+    return client.post("/api/body/step", json={}).json()
+
+
+def test_expression_is_non_destructive_and_event_id_is_idempotent(api) -> None:
+    client, provider, data_dir = api
+    event = {"event_id": "chat-001", "type": "chat", "content": "今天终于忙完了。"}
+
+    first = client.post("/api/body/step", json={"event": event})
+    assert first.status_code == 200
+    first_body = first.json()
+    expression = first_body["expression"]
+    before_shown = _history(data_dir)
+
+    repeated = client.post("/api/body/step", json={"event": event})
+    assert repeated.status_code == 200
+    assert repeated.json()["event_status"] == "duplicate"
+    assert repeated.json()["expression"] == expression
+    assert _history(data_dir) == before_shown
+    assert provider.calls == 1
+    assert expression["text"] not in [item.get("content") for item in before_shown]
+    assert expression["act"] == "respond"
+    assert expression["evidence_ids"] == []
+    assert expression["target_id"] is None
+
+    confirmed = client.post("/api/body/step", json={"shown_id": expression["id"], "event": event})
+    assert confirmed.status_code == 200
+    assert confirmed.json() == {
+        "activity": None,
+        "activity_confirmed": False,
+        "expression": None,
+        "shown_confirmed": True,
+        "event_status": "duplicate",
+        "time_status": "not_due",
+        "mind_status": "not_run",
+    }
+    after_shown = _history(data_dir)
+    assert after_shown[:-1] == before_shown
+    assert after_shown[-1]["type"] == "shared_expression"
+    assert after_shown[-1]["content"] == expression["text"]
+    assert after_shown[-1]["expression_id"] == expression["id"]
+    assert after_shown[-1]["expression_act"] == "respond"
+    assert after_shown[-1]["expression_evidence_ids"] == []
+    assert after_shown[-1]["expression_target_id"] is None
+    assert provider.calls == 1
+
+    repeated_receipt = client.post("/api/body/step", json={"shown_id": expression["id"]})
+    assert repeated_receipt.json()["shown_confirmed"] is False
+    assert _history(data_dir) == after_shown
+
+
+def test_direct_read_choice_returns_action_with_its_words(api) -> None:
+    client, _, data_dir = api
+    response = client.post(
+        "/api/body/step",
+        json={
+            "event": {"event_id": "chat-read-now", "type": "chat", "content": "你继续读吧"},
+            "presence": {"present": True, "fullscreen": False},
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["expression"]["text"] == "我继续读诗了。"
+    assert body["activity"]["duration_ms"] >= 15_000
+    assert body["activity"]["type"] == "read"
+    state = json.loads((data_dir / "state.json").read_text(encoding="utf-8"))
+    assert state["pending_activity"]["id"] == body["activity"]["id"]
+    assert state["pending_activity"]["passage_index"] == 0
+    assert state["pending_activity"]["duration_ms"] == body["activity"]["duration_ms"]
+
+
+def test_new_event_waits_in_body_until_previous_expression_is_shown(api) -> None:
+    client, provider, _ = api
+    first = client.post(
+        "/api/body/step",
+        json={"event": {"event_id": "first", "type": "chat", "content": "第一句"}},
+    ).json()
+    second = client.post(
+        "/api/body/step",
+        json={"event": {"event_id": "second", "type": "chat", "content": "第二句"}},
+    ).json()
+
+    assert second["event_status"] == "waiting_for_shown"
+    assert second["expression"] == first["expression"]
+    assert provider.calls == 1
+
+
+def test_same_step_confirms_shown_before_processing_next_event(api) -> None:
+    client, provider, data_dir = api
+    first = client.post(
+        "/api/body/step",
+        json={"event": {"event_id": "first", "type": "chat", "content": "第一句"}},
+    ).json()
+    second = client.post(
+        "/api/body/step",
+        json={
+            "shown_id": first["expression"]["id"],
+            "event": {"event_id": "second", "type": "chat", "content": "第二句"},
+        },
+    ).json()
+
+    assert second["shown_confirmed"] is True
+    assert second["event_status"] == "processed"
+    assert second["expression"] is not None
+    assert provider.calls == 2
+    history = _history(data_dir)
+    assert [item["type"] for item in history] == [
+        "user_experience",
+        "memory_operation",
+        "shared_expression",
+        "user_experience",
+        "memory_operation",
+    ]
+    assert history[2]["expression_id"] == first["expression"]["id"]
+    assert history[3]["content"] == "第二句"
+
+
+def test_wrong_shown_id_does_not_destroy_pending_expression(api) -> None:
+    client, _, _ = api
+    first = client.post(
+        "/api/body/step",
+        json={"event": {"event_id": "first", "type": "chat", "content": "在吗"}},
+    ).json()
+    wrong = client.post("/api/body/step", json={"shown_id": "expr_wrong"}).json()
+
+    assert wrong["shown_confirmed"] is False
+    assert wrong["expression"] == first["expression"]
+
+
+def test_raise_is_a_raw_idempotent_body_fact(api) -> None:
+    client, provider, data_dir = api
+    event = {"event_id": "raise-001", "type": "raise"}
+
+    first = client.post("/api/body/step", json={"event": event})
+    assert first.status_code == 200
+    assert first.json()["event_status"] == "processed"
+    assert first.json()["expression"]["text"] == "刚才被你提起来晃了一小段，又稳稳落地了。"
+    duplicate = client.post("/api/body/step", json={"event": event})
+    assert duplicate.status_code == 200
+    assert duplicate.json()["event_status"] == "duplicate"
+    assert provider.calls == 1
+
+    history = _history(data_dir)
+    assert [item["type"] for item in history] == ["body_raise", "memory_operation"]
+    assert "content" not in history[0]
+    assert history[1]["evidence_ids"] == [history[0]["id"]]
+    state = json.loads((data_dir / "state.json").read_text(encoding="utf-8"))
+    assert "score" not in json.dumps(state, ensure_ascii=False).lower()
+
+    authored = client.post(
+        "/api/body/step",
+        json={"event": {"event_id": "raise-authored", "type": "raise", "content": "想亲近"}},
+    )
+    assert authored.status_code == 422
+
+
+def test_edge_reveal_is_invited_direct_with_history_cooldown(api) -> None:
+    client, provider, data_dir = api
+    from fastapi.testclient import TestClient
+
+    files = MindFiles(data_dir)
+    first = client.post(
+        "/api/body/step",
+        json={"event": {"event_id": "edge-reveal-1", "type": "edge_reveal"}},
+    ).json()
+    assert first["event_status"] == "processed"
+    assert first["expression"]["kind"] == "direct"
+    client.post("/api/body/step", json={"shown_id": first["expression"]["id"]})
+
+    duplicate = client.post(
+        "/api/body/step",
+        json={"event": {"event_id": "edge-reveal-1", "type": "edge_reveal"}},
+    ).json()
+    client = TestClient(create_body_app(data_dir=data_dir, provider=provider))
+    before = _history(data_dir)
+    cooled = client.post(
+        "/api/body/step",
+        json={"event": {"event_id": "edge-reveal-2", "type": "edge_reveal"}},
+    ).json()
+
+    assert duplicate["event_status"] == "duplicate"
+    assert cooled["event_status"] == "cooldown"
+    assert cooled["expression"] is None
+    assert _history(data_dir) == before
+    assert provider.calls == 1
+    assert sum(item.get("expression_kind") == "ambient" for item in before) == 0
+
+    now = datetime.now(UTC).astimezone()
+    state, history, memories = files.load(now)
+    reveal = next(item for item in history if item.get("type") == "body_edge_reveal")
+    reveal["occurred_at"] = (now - timedelta(seconds=31)).isoformat()
+    files.commit(state, history, memories)
+    repeated_after_cooldown = client.post(
+        "/api/body/step",
+        json={"event": {"event_id": "edge-reveal-2", "type": "edge_reveal"}},
+    ).json()
+    assert repeated_after_cooldown["event_status"] == "duplicate"
+    assert repeated_after_cooldown["expression"] is None
+    assert provider.calls == 1
+
+    after_cooldown = client.post(
+        "/api/body/step",
+        json={"event": {"event_id": "edge-reveal-3", "type": "edge_reveal"}},
+    ).json()
+    assert after_cooldown["event_status"] == "processed"
+    assert after_cooldown["expression"]["kind"] == "direct"
+    assert provider.calls == 2
+
+
+@pytest.mark.parametrize(
+    "event",
+    (
+        {"event_id": "chat-drops-ambient", "type": "chat", "content": "在吗"},
+        {"event_id": "touch-drops-ambient", "type": "touch_head"},
+        {"event_id": "raise-drops-ambient", "type": "raise"},
+        {"event_id": "edge-drops-ambient", "type": "edge_reveal"},
+    ),
+)
+def test_direct_event_discards_a_fresh_ambient_before_reply(api, event) -> None:  # noqa: ANN001
+    client, provider, data_dir = api
+    files = MindFiles(data_dir)
+    now = datetime.now(UTC).astimezone()
+    state, history, memories = files.load(now)
+    state["pending_expression"] = {
+        "id": "expr-before-reveal",
+        "text": "这句不该从栖边漏出来。",
+        "created_at": now.isoformat(),
+        "kind": "ambient",
+    }
+    files.commit(state, history, memories)
+
+    response = client.post(
+        "/api/body/step",
+        json={
+            "presence": {"present": True, "fullscreen": False, "surface": "full"},
+            "event": event,
+        },
+    ).json()
+
+    assert response["event_status"] == "processed"
+    assert response["expression"]["kind"] == "direct"
+    assert response["expression"]["text"] != "这句不该从栖边漏出来。"
+    assert all(item.get("content") != "这句不该从栖边漏出来。" for item in _history(data_dir))
+    assert provider.calls == 1
+
+
+def test_walk_receipt_and_chat_same_step_skip_ambient_call(api) -> None:
+    client, provider, data_dir = api
+    scheduled = _schedule_walk(client, data_dir)
+
+    response = client.post(
+        "/api/body/step",
+        json={
+            "activity_receipt": {
+                "activity_id": scheduled["activity"]["id"],
+                "status": "completed",
+                "reason": "animation_finished",
+                "motion": _walk_motion(),
+            },
+            "event": {"event_id": "chat-with-walk", "type": "chat", "content": "回来啦"},
+            "presence": {"present": True, "fullscreen": False, "surface": "full"},
+        },
+    ).json()
+
+    assert response["activity_confirmed"] is True
+    assert response["event_status"] == "processed"
+    assert response["expression"]["kind"] == "direct"
+    assert provider.calls == 1
+    assert [item["type"] for item in _history(data_dir)] == [
+        "self_walk",
+        "user_experience",
+        "memory_operation",
+    ]
+
+
+def test_read_receipt_and_chat_same_step_use_quiet_read_then_direct(api) -> None:
+    client, provider, data_dir = api
+    files = MindFiles(data_dir)
+    now = datetime.now(UTC).astimezone()
+    state, history, memories = files.load(now)
+    state["last_step_at"] = (now - timedelta(minutes=6)).isoformat()
+    files.commit(state, history, memories)
+    scheduled = client.post(
+        "/api/body/step",
+        json={"presence": {"present": True, "fullscreen": False, "surface": "full"}},
+    ).json()
+
+    response = client.post(
+        "/api/body/step",
+        json={
+            "activity_receipt": {
+                "activity_id": scheduled["activity"]["id"],
+                "status": "completed",
+                "reason": "animation_finished",
+            },
+            "event": {"event_id": "chat-with-read", "type": "chat", "content": "回来啦"},
+            "presence": {"present": True, "fullscreen": False, "surface": "full"},
+        },
+    ).json()
+
+    assert response["activity_confirmed"] is True
+    assert response["event_status"] == "processed"
+    assert response["expression"]["kind"] == "direct"
+    assert provider.calls == 2
+    assert [item["type"] for item in _history(data_dir)] == [
+        "self_reading",
+        "memory_operation",
+        "user_experience",
+        "memory_operation",
+    ]
+
+
+@pytest.mark.parametrize("extra", [{"content": "替身体解释"}, {"meaning": "用户想听我说话"}])
+def test_edge_reveal_rejects_body_authored_content(api, extra) -> None:  # noqa: ANN001
+    client, _, _ = api
+    response = client.post(
+        "/api/body/step",
+        json={"event": {"event_id": "edge-reveal-invalid", "type": "edge_reveal", **extra}},
+    )
+    assert response.status_code == 422
+
+
+@pytest.mark.parametrize(
+    ("provider", "expected"),
+    [(UnavailableProvider(), "unavailable"), (RejectingProvider(), "rejected")],
+)
+def test_mind_status_does_not_call_a_fallback_connected(provider, expected, tmp_path) -> None:  # noqa: ANN001
+    pytest.importorskip("fastapi")
+    from fastapi.testclient import TestClient
+
+    client = TestClient(create_body_app(data_dir=tmp_path, provider=provider))
+    response = client.post(
+        "/api/body/step",
+        json={"event": {"event_id": "chat-failure", "type": "chat", "content": "在吗"}},
+    ).json()
+
+    assert response["event_status"] == "processed"
+    assert response["mind_status"] == expected
+    assert response["expression"]["text"] == STATIC_CATCH
+
+    before_shown = _history(tmp_path)
+    assert [(item["type"], item["content"]) for item in before_shown] == [
+        ("user_experience", "在吗")
+    ]
+
+    repeated = client.post(
+        "/api/body/step",
+        json={"event": {"event_id": "chat-failure", "type": "chat", "content": "在吗"}},
+    ).json()
+    assert repeated["event_status"] == "duplicate"
+    assert repeated["expression"] is None
+    assert _history(tmp_path) == before_shown
+
+    confirmed = client.post(
+        "/api/body/step",
+        json={"shown_id": response["expression"]["id"]},
+    ).json()
+    assert confirmed["shown_confirmed"] is False
+    after_shown = _history(tmp_path)
+    assert after_shown == before_shown
+
+
+@pytest.mark.parametrize(
+    "event",
+    (
+        {"event_id": "touch-failure", "type": "touch_head"},
+        {"event_id": "raise-failure", "type": "raise"},
+        {"event_id": "edge-failure", "type": "edge_reveal"},
+    ),
+)
+def test_body_rejections_use_the_same_honest_static_catch(event, tmp_path) -> None:  # noqa: ANN001
+    pytest.importorskip("fastapi")
+    from fastapi.testclient import TestClient
+
+    client = TestClient(create_body_app(data_dir=tmp_path, provider=RejectingProvider()))
+    response = client.post("/api/body/step", json={"event": event}).json()
+
+    assert response["event_status"] == "processed"
+    assert response["mind_status"] == "rejected"
+    assert response["expression"]["text"] == STATIC_CATCH
+
+
+def test_cross_day_unshown_ambient_is_discarded_without_erasing_life(api) -> None:
+    client, provider, data_dir = api
+    files = MindFiles(data_dir)
+    now = datetime.now(UTC).astimezone()
+    state, history, memories = files.load(now)
+    history.append({"id": "life-kept", "type": "self_reading", "content": "昨晚读完一页。"})
+    memories["items"] = [
+        {
+            "id": "memory-kept",
+            "kind": "self_experience",
+            "receipt_id": "life-kept",
+            "receipt": {"type": "self_reading", "content": "昨晚读完一页。"},
+            "evidence_ids": ["life-kept"],
+            "created_at": now.isoformat(),
+            "core": False,
+        }
+    ]
+    state["pending_expression"] = {
+        "id": "expr-stale",
+        "text": "我刚读完这一页。",
+        "created_at": (now - timedelta(days=1)).isoformat(),
+        "kind": "ambient",
+    }
+    files.commit(state, history, memories)
+
+    response = client.post("/api/body/step", json={}).json()
+    final_state, final_history, final_memories = files.load(now)
+
+    assert response["expression"] is None
+    assert response["mind_status"] == "not_run"
+    assert final_state["pending_expression"] is None
+    assert final_history == history
+    assert final_memories == memories
+    assert provider.calls == 0
+
+
+def test_stale_ambient_with_matching_receipt_is_confirmed_before_discard(api) -> None:
+    client, provider, data_dir = api
+    files = MindFiles(data_dir)
+    now = datetime.now(UTC).astimezone()
+    state, history, memories = files.load(now)
+    state["pending_expression"] = {
+        "id": "expr-stale-shown",
+        "text": "昨晚真正显示过的话。",
+        "created_at": (now - timedelta(days=1)).isoformat(),
+        "kind": "ambient",
+    }
+    files.commit(state, history, memories)
+
+    response = client.post("/api/body/step", json={"shown_id": "expr-stale-shown"}).json()
+
+    assert response["shown_confirmed"] is True
+    assert _history(data_dir)[-1]["content"] == "昨晚真正显示过的话。"
+    assert provider.calls == 0
+
+
+@pytest.mark.parametrize("kind", ["direct", "ambient"])
+def test_direct_or_same_day_expression_is_not_discarded(api, kind) -> None:  # noqa: ANN001
+    client, provider, data_dir = api
+    files = MindFiles(data_dir)
+    now = datetime.now(UTC).astimezone()
+    state, history, memories = files.load(now)
+    created_at = (now - timedelta(days=1)).isoformat() if kind == "direct" else now.isoformat()
+    state["pending_expression"] = {
+        "id": f"expr-{kind}",
+        "text": "仍应等待显示。",
+        "created_at": created_at,
+        "kind": kind,
+    }
+    files.commit(state, history, memories)
+
+    response = client.post("/api/body/step", json={}).json()
+
+    assert response["expression"]["id"] == f"expr-{kind}"
+    assert response["time_status"] == "waiting_for_shown"
+    assert provider.calls == 0
+
+
+@pytest.mark.parametrize(
+    "presence",
+    [
+        {"present": False, "fullscreen": False},
+        {"present": True, "fullscreen": True},
+    ],
+)
+def test_fresh_ambient_is_discarded_when_presence_cannot_show_it(api, presence) -> None:  # noqa: ANN001
+    client, provider, data_dir = api
+    files = MindFiles(data_dir)
+    now = datetime.now(UTC).astimezone()
+    state, history, memories = files.load(now)
+    state["pending_expression"] = {
+        "id": "expr-unshowable-ambient",
+        "text": "没显示就不留下。",
+        "created_at": now.isoformat(),
+        "kind": "ambient",
+    }
+    files.commit(state, history, memories)
+
+    response = client.post("/api/body/step", json={"presence": presence}).json()
+    final_state = json.loads(files.state_path.read_text(encoding="utf-8"))
+
+    assert response["expression"] is None
+    assert final_state["pending_expression"] is None
+    assert _history(data_dir) == []
+    assert provider.calls == 0
+    returned = client.post(
+        "/api/body/step",
+        json={"presence": {"present": True, "fullscreen": False, "surface": "full"}},
+    ).json()
+    assert returned["expression"] is None
+    assert _history(data_dir) == []
+
+
+def test_request_rejects_missing_event_id_and_extra_protocol_fields(api) -> None:
+    client, _, _ = api
+    missing = client.post("/api/body/step", json={"event": {"type": "chat", "content": "在吗"}})
+    extra = client.post("/api/body/step", json={"events": []})
+
+    assert missing.status_code == 422
+    assert extra.status_code == 422
+
+
+@pytest.mark.parametrize(
+    ("event_type", "zone", "expression"),
+    [
+        ("touch_head", "head", "呀，碰到我头发了。"),
+        ("touch_body", "body", "唔，碰到我衣角了。"),
+    ],
+)
+def test_touch_is_raw_fact_for_mind_without_relationship_score(
+    api, event_type: str, zone: str, expression: str
+) -> None:
+    client, provider, data_dir = api
+    event = {"event_id": "touch-001", "type": event_type}
+
+    first = client.post("/api/body/step", json={"event": event})
+    assert first.status_code == 200
+    body = first.json()
+    assert body["event_status"] == "processed"
+    assert body["expression"]["text"] == expression
+
+    history = _history(data_dir)
+    assert history[0]["type"] == "body_touch"
+    assert history[0]["zone"] == zone
+    assert "content" not in history[0]
+    state = json.loads((data_dir / "state.json").read_text(encoding="utf-8"))
+    serialized = json.dumps(state, ensure_ascii=False).lower()
+    assert all(
+        field not in serialized
+        for field in ("warmth", "relationship_score", "好感度", "亲密度", "关系分")
+    )
+
+    repeated = client.post("/api/body/step", json={"event": event}).json()
+    assert repeated["event_status"] == "duplicate"
+    assert provider.calls == 1
+
+
+def test_touch_rejects_body_authored_meaning(api) -> None:
+    client, _, _ = api
+    response = client.post(
+        "/api/body/step",
+        json={
+            "event": {
+                "event_id": "touch-with-meaning",
+                "type": "touch_body",
+                "content": "用户是在表达喜欢",
+            }
+        },
+    )
+
+    assert response.status_code == 422
+
+
+def test_due_step_waits_for_completed_read_receipt_before_progress(api) -> None:
+    client, provider, data_dir = api
+    files = MindFiles(data_dir)
+    state, history, memories = files.load(datetime(2020, 1, 1, tzinfo=UTC))
+    state["last_step_at"] = datetime(2020, 1, 1, tzinfo=UTC).isoformat()
+    files.commit(state, history, memories)
+
+    first = client.post("/api/body/step", json={}).json()
+    activity = first["activity"]
+
+    assert first["event_status"] == "none"
+    assert first["time_status"] == "scheduled"
+    assert activity["type"] == "read"
+    assert first["expression"] is None
+    assert _history(data_dir) == []
+    assert provider.calls == 0
+
+    second = client.post("/api/body/step", json={}).json()
+    assert second["time_status"] == "waiting_for_activity"
+    assert second["activity"] == activity
+    assert _history(data_dir) == []
+    assert provider.calls == 0
+
+    receipt = {"activity_id": activity["id"], "status": "completed"}
+    completed = client.post("/api/body/step", json={"activity_receipt": receipt}).json()
+    recorded = _history(data_dir)
+    state = json.loads((data_dir / "state.json").read_text(encoding="utf-8"))
+    assert completed["activity_confirmed"] is True
+    assert completed["activity"] is None
+    assert [item["type"] for item in recorded] == ["self_reading", "memory_operation"]
+    assert recorded[0]["content"].startswith("少无适俗韵")
+    assert state["reading"]["next_passage"] == 1
+    assert provider.calls == 1
+
+    duplicate = client.post("/api/body/step", json={"activity_receipt": receipt}).json()
+    assert duplicate["activity_confirmed"] is True
+    assert provider.calls == 1
+
+
+def test_completed_read_can_offer_caring_ambient_until_body_reports_shown(api) -> None:
+    client, provider, data_dir = api
+    files = MindFiles(data_dir)
+    now = datetime.now(UTC).astimezone()
+    state, history, memories = files.load(now)
+    state["last_step_at"] = (now - timedelta(minutes=31)).isoformat()
+    files.commit(state, history, memories)
+    presence = {"present": True, "fullscreen": False}
+
+    first = client.post("/api/body/step", json={"presence": presence}).json()
+    activity = first["activity"]
+
+    assert first["time_status"] == "scheduled"
+    assert first["expression"] is None
+    assert _history(data_dir) == []
+    assert provider.calls == 0
+
+    completed = client.post(
+        "/api/body/step",
+        json={
+            "activity_receipt": {"activity_id": activity["id"], "status": "completed"},
+            "presence": presence,
+        },
+    ).json()
+    expression = completed["expression"]
+    assert completed["activity_confirmed"] is True
+    assert expression["kind"] == "ambient"
+    assert expression["text"] == "刚读到一句很想回到自在处的话。你今天还好吗？"
+    assert [item["type"] for item in _history(data_dir)] == [
+        "self_reading",
+        "memory_operation",
+    ]
+
+    repeated = client.post("/api/body/step", json={"presence": presence}).json()
+    assert repeated["time_status"] == "waiting_for_shown"
+    assert repeated["expression"] == expression
+    assert [item["type"] for item in _history(data_dir)] == [
+        "self_reading",
+        "memory_operation",
+    ]
+    assert provider.calls == 1
+
+    shown = client.post(
+        "/api/body/step",
+        json={"shown_id": expression["id"], "presence": presence},
+    ).json()
+    assert shown["shown_confirmed"] is True
+    assert shown["expression"] is None
+    recorded = _history(data_dir)
+    assert [item["type"] for item in recorded] == [
+        "self_reading",
+        "memory_operation",
+        "shared_expression",
+    ]
+    assert recorded[-1]["expression_kind"] == "ambient"
+
+
+@pytest.mark.parametrize(
+    "presence",
+    [
+        None,
+        {"present": False, "fullscreen": False},
+        {"present": True, "fullscreen": True},
+    ],
+)
+def test_absent_or_fullscreen_completed_read_stays_silent(api, presence) -> None:  # noqa: ANN001
+    client, provider, data_dir = api
+    files = MindFiles(data_dir)
+    now = datetime.now(UTC).astimezone()
+    state, history, memories = files.load(now)
+    state["last_step_at"] = (now - timedelta(minutes=31)).isoformat()
+    files.commit(state, history, memories)
+
+    payload = {} if presence is None else {"presence": presence}
+    scheduled = client.post("/api/body/step", json=payload).json()
+    receipt_payload = {
+        "activity_receipt": {
+            "activity_id": scheduled["activity"]["id"],
+            "status": "completed",
+        }
+    }
+    if presence is not None:
+        receipt_payload["presence"] = presence
+    response = client.post("/api/body/step", json=receipt_payload).json()
+
+    assert scheduled["time_status"] == "scheduled"
+    assert response["activity_confirmed"] is True
+    assert response["expression"] is None
+    assert [item["type"] for item in _history(data_dir)] == [
+        "self_reading",
+        "memory_operation",
+    ]
+
+
+def test_unanswered_ambient_creates_zero_debt_and_does_not_block_next_real_trigger(api) -> None:
+    client, provider, data_dir = api
+    files = MindFiles(data_dir)
+    now = datetime.now(UTC).astimezone()
+    state, history, memories = files.load(now)
+    state["last_step_at"] = (now - timedelta(minutes=31)).isoformat()
+    files.commit(state, history, memories)
+    presence = {"present": True, "fullscreen": False}
+    scheduled = client.post("/api/body/step", json={"presence": presence}).json()
+    first = client.post(
+        "/api/body/step",
+        json={
+            "activity_receipt": {
+                "activity_id": scheduled["activity"]["id"],
+                "status": "completed",
+            },
+            "presence": presence,
+        },
+    ).json()
+    client.post(
+        "/api/body/step",
+        json={"shown_id": first["expression"]["id"], "presence": presence},
+    )
+
+    state, history, memories = files.load(now)
+    state["last_step_at"] = (now - timedelta(minutes=31)).isoformat()
+    files.commit(state, history, memories)
+    scheduled_later = client.post("/api/body/step", json={"presence": presence}).json()
+    assert scheduled_later["activity"]["type"] == "walk"
+    later = client.post(
+        "/api/body/step",
+        json={
+            "activity_receipt": {
+                "activity_id": scheduled_later["activity"]["id"],
+                "status": "completed",
+                "reason": "animation_finished",
+                "motion": _walk_motion(),
+            },
+            "presence": presence,
+        },
+    ).json()
+    assert later["activity_confirmed"] is True
+    assert later["expression"]["kind"] == "ambient"
+    assert later["expression"]["evidence_ids"] == [scheduled_later["activity"]["id"]]
+    client.post(
+        "/api/body/step",
+        json={"shown_id": later["expression"]["id"], "presence": presence},
+    )
+    recorded = _history(data_dir)
+    assert sum(item.get("expression_kind") == "ambient" for item in recorded) == 2
+    assert all(item["type"] != "user_experience" for item in recorded)
+    assert "没回" not in json.dumps(recorded, ensure_ascii=False)
+    assert "不理我" not in json.dumps(recorded, ensure_ascii=False)
+    assert provider.calls == 2
+
+
+def test_ambient_cap_counts_only_five_shown_in_the_rolling_hour(api) -> None:
+    client, _, data_dir = api
+    bridge = client.app.state.body_bridge
+    files = MindFiles(data_dir)
+    now = datetime.now(UTC).astimezone()
+    state, history, memories = files.load(now)
+    history.extend(
+        {
+            "id": f"shown-cap-{index}",
+            "type": "shared_expression",
+            "content": f"第 {index} 次真实触发。",
+            "expression_id": f"expr-cap-{index}",
+            "expression_kind": "ambient",
+            "occurred_at": (now - timedelta(minutes=index * 10)).isoformat(),
+        }
+        for index in range(5)
+    )
+    history.append(
+        {
+            "id": "shown-invited-direct",
+            "type": "shared_expression",
+            "content": "这是被点出的直接回应。",
+            "expression_id": "expr-invited-direct",
+            "expression_kind": "direct",
+            "occurred_at": now.isoformat(),
+        }
+    )
+    state["relationship_score"] = 999
+    files.commit(state, history, memories)
+    presence = BodyPresence(present=True, fullscreen=False)
+
+    assert bridge._ambient_allowed(presence, now) is False
+    history[0]["occurred_at"] = (now - timedelta(minutes=61)).isoformat()
+    state["pending_expression"] = {
+        "id": "expr-unshown-does-not-count",
+        "text": "还没有真正显示。",
+        "created_at": now.isoformat(),
+        "kind": "ambient",
+        "act": "reflect",
+        "evidence_ids": [],
+        "target_id": None,
+    }
+    files.commit(state, history, memories)
+    assert bridge._ambient_allowed(presence, now) is True
+
+
+def test_life_ambient_may_choose_silence_without_spending_the_permission(tmp_path) -> None:
+    pytest.importorskip("fastapi")
+    from fastapi.testclient import TestClient
+
+    class SilentAmbientProvider(StubProvider):
+        async def generate(self, messages, tools=None, **kwargs):  # noqa: ANN001, ANN202
+            incoming = json.loads(messages[0].content)["incoming_experience"]
+            if incoming["type"] in {"self_reading", "self_walk"} and "ambient" in kwargs.get(
+                "system", ""
+            ):
+                self.calls += 1
+                return LLMResponse(
+                    tool_calls=[
+                        ToolCall(
+                            id="silent",
+                            name="submit_mind_bundle",
+                            arguments={
+                                "action_choice": None,
+                                "state_changes": {},
+                                "memory_operations": [],
+                                "expression": None,
+                                "expression_act": None,
+                                "expression_evidence_ids": [],
+                                "expression_target_id": None,
+                            },
+                        )
+                    ]
+                )
+            return await super().generate(messages, tools=tools, **kwargs)
+
+    provider = SilentAmbientProvider()
+    client = TestClient(create_body_app(data_dir=tmp_path, provider=provider))
+    files = MindFiles(tmp_path)
+    now = datetime.now(UTC).astimezone()
+    state, history, memories = files.load(now)
+    state["last_step_at"] = (now - timedelta(minutes=6)).isoformat()
+    files.commit(state, history, memories)
+    presence = {"present": True, "fullscreen": False}
+
+    scheduled = client.post("/api/body/step", json={"presence": presence}).json()
+    completed = client.post(
+        "/api/body/step",
+        json={
+            "activity_receipt": {
+                "activity_id": scheduled["activity"]["id"],
+                "status": "completed",
+            },
+            "presence": presence,
+        },
+    ).json()
+
+    assert completed["activity_confirmed"] is True
+    assert completed["expression"] is None
+    assert all(item.get("expression_kind") != "ambient" for item in _history(tmp_path))
+    assert client.app.state.body_bridge._ambient_allowed(
+        BodyPresence.model_validate(presence), datetime.now(UTC).astimezone()
+    )
+
+
+def test_presence_recovery_offers_latest_unspoken_life_receipt(api) -> None:
+    client, provider, data_dir = api
+    files = MindFiles(data_dir)
+    now = datetime.now(UTC).astimezone()
+    state, history, memories = files.load(now)
+    history.append(
+        {
+            "id": "walk-before-return",
+            "type": "self_walk",
+            "motion": _walk_motion(),
+            "occurred_at": now.isoformat(),
+        }
+    )
+    files.commit(state, history, memories)
+    present = {"present": True, "fullscreen": False}
+
+    first = client.post("/api/body/step", json={"presence": present}).json()
+    client.post(
+        "/api/body/step",
+        json={"presence": {"present": False, "fullscreen": False}},
+    )
+    returned = client.post("/api/body/step", json={"presence": present}).json()
+
+    assert first["expression"] is None
+    assert returned["expression"]["kind"] == "ambient"
+    assert returned["expression"]["evidence_ids"] == ["walk-before-return"]
+    assert provider.calls == 1
+
+
+def test_presence_rejects_extra_body_authored_meaning(api) -> None:
+    client, _, _ = api
+    response = client.post(
+        "/api/body/step",
+        json={
+            "presence": {
+                "present": True,
+                "fullscreen": False,
+                "meaning": "用户想听我说话",
+            }
+        },
+    )
+
+    assert response.status_code == 422
+
+
+def test_read_ambient_chat_touch_full_vertical_trace(api) -> None:
+    client, _, data_dir = api
+    files = MindFiles(data_dir)
+    now = datetime.now(UTC).astimezone()
+    state, history, memories = files.load(now)
+    state["last_step_at"] = (now - timedelta(minutes=31)).isoformat()
+    files.commit(state, history, memories)
+    presence = {"present": True, "fullscreen": False}
+
+    scheduled = client.post("/api/body/step", json={"presence": presence}).json()
+    ambient = client.post(
+        "/api/body/step",
+        json={
+            "activity_receipt": {
+                "activity_id": scheduled["activity"]["id"],
+                "status": "completed",
+            },
+            "presence": presence,
+        },
+    ).json()
+    ambient_shown = client.post(
+        "/api/body/step",
+        json={"shown_id": ambient["expression"]["id"], "presence": presence},
+    ).json()
+    chat = client.post(
+        "/api/body/step",
+        json={
+            "presence": presence,
+            "event": {
+                "event_id": "integration-chat",
+                "type": "chat",
+                "content": "今天终于忙完了。",
+            },
+        },
+    ).json()
+    chat_shown = client.post(
+        "/api/body/step",
+        json={"shown_id": chat["expression"]["id"], "presence": presence},
+    ).json()
+    touch = client.post(
+        "/api/body/step",
+        json={
+            "presence": presence,
+            "event": {"event_id": "integration-touch", "type": "touch_head"},
+        },
+    ).json()
+    touch_shown = client.post(
+        "/api/body/step",
+        json={"shown_id": touch["expression"]["id"], "presence": presence},
+    ).json()
+
+    recorded = _history(data_dir)
+    shown_words = [item["content"] for item in recorded if item["type"] == "shared_expression"]
+    final_state = json.loads((data_dir / "state.json").read_text(encoding="utf-8"))
+    trace = {
+        "statuses": [
+            scheduled["time_status"],
+            ambient["activity_confirmed"],
+            ambient_shown["shown_confirmed"],
+            chat["event_status"],
+            chat_shown["shown_confirmed"],
+            touch["event_status"],
+            touch_shown["shown_confirmed"],
+        ],
+        "shown_words": shown_words,
+        "history_types": [item["type"] for item in recorded],
+        "files": sorted(path.name for path in data_dir.iterdir()),
+    }
+    print("READING_TRACE=" + json.dumps(trace, ensure_ascii=False))
+
+    assert trace["statuses"] == ["scheduled", True, True, "processed", True, "processed", True]
+    assert shown_words == [
+        "刚读到一句很想回到自在处的话。你今天还好吗？",
+        "忙完就好。先在我这儿松口气。",
+        "呀，碰到我头发了。",
+    ]
+    assert trace["files"] == [
+        "failures.jsonl",
+        "history.jsonl",
+        "memories.json",
+        "state.json",
+    ]
+    assert final_state["pending_expression"] is None
+
+
+def test_completed_walk_records_only_verified_physical_life(api) -> None:
+    client, provider, data_dir = api
+    scheduled = _schedule_walk(client, data_dir)
+    activity = scheduled["activity"]
+    receipt = {
+        "activity_id": activity["id"],
+        "status": "completed",
+        "reason": "animation_finished",
+        "motion": _walk_motion(),
+    }
+
+    completed = client.post("/api/body/step", json={"activity_receipt": receipt}).json()
+    state = json.loads((data_dir / "state.json").read_text(encoding="utf-8"))
+    recorded = _history(data_dir)
+
+    assert activity["type"] == "walk"
+    assert completed["activity_confirmed"] is True
+    assert completed["activity"] is None
+    assert [item["type"] for item in recorded] == ["self_walk"]
+    assert recorded[0]["motion"] == _walk_motion()
+    assert state["next_activity"] == "read"
+    assert state["pending_expression"] is None
+    assert provider.calls == 0
+
+    duplicate = client.post("/api/body/step", json={"activity_receipt": receipt}).json()
+    assert duplicate["activity_confirmed"] is True
+    assert _history(data_dir) == recorded
+    assert provider.calls == 0
+
+
+def test_edge_cue_reason_cannot_complete_a_walk(api) -> None:
+    client, provider, data_dir = api
+    scheduled = _schedule_walk(client, data_dir)
+
+    response = client.post(
+        "/api/body/step",
+        json={
+            "activity_receipt": {
+                "activity_id": scheduled["activity"]["id"],
+                "status": "completed",
+                "reason": "edge_cue_finished",
+                "motion": _walk_motion(),
+            }
+        },
+    ).json()
+    state = json.loads((data_dir / "state.json").read_text(encoding="utf-8"))
+
+    assert response["activity_confirmed"] is False
+    assert response["mind_status"] == "rejected"
+    assert state["pending_activity"]["id"] == scheduled["activity"]["id"]
+    assert _history(data_dir) == []
+    assert provider.calls == 0
+
+
+@pytest.mark.parametrize(
+    ("status", "reason", "motion"),
+    [
+        ("interrupted", "touch", _walk_motion(end_left=140)),
+        ("interrupted", "raise", _walk_motion(end_left=180)),
+        ("failed", "animation_fault", None),
+    ],
+)
+def test_interrupted_or_failed_walk_closes_attempt_without_becoming_life(
+    api,
+    status,
+    reason,
+    motion,  # noqa: ANN001
+) -> None:
+    client, provider, data_dir = api
+    scheduled = _schedule_walk(client, data_dir)
+    memories_before = (data_dir / "memories.json").read_bytes()
+    receipt = {
+        "activity_id": scheduled["activity"]["id"],
+        "status": status,
+        "reason": reason,
+    }
+    if motion is not None:
+        receipt["motion"] = motion
+
+    response = client.post("/api/body/step", json={"activity_receipt": receipt}).json()
+    state = json.loads((data_dir / "state.json").read_text(encoding="utf-8"))
+
+    assert response["activity_confirmed"] is True
+    assert response["activity"] is None
+    assert state["pending_activity"] is None
+    assert _history(data_dir) == []
+    assert (data_dir / "memories.json").read_bytes() == memories_before
+    assert provider.calls == 0
+
+
+@pytest.mark.parametrize(
+    "motion",
+    [
+        _walk_motion(end_left=700),
+        _walk_motion(end_left=100),
+        {**_walk_motion(), "meaning": "因为用户没回所以走远一点"},
+    ],
+)
+def test_walk_receipt_rejects_out_of_bounds_zero_or_authored_meaning(api, motion) -> None:  # noqa: ANN001
+    client, provider, data_dir = api
+    scheduled = _schedule_walk(client, data_dir)
+
+    response = client.post(
+        "/api/body/step",
+        json={
+            "activity_receipt": {
+                "activity_id": scheduled["activity"]["id"],
+                "status": "completed",
+                "reason": "animation_finished",
+                "motion": motion,
+            }
+        },
+    )
+    state = json.loads((data_dir / "state.json").read_text(encoding="utf-8"))
+
+    assert response.status_code == 422
+    assert state["pending_activity"]["id"] == scheduled["activity"]["id"]
+    assert _history(data_dir) == []
+    assert provider.calls == 0
+
+
+def test_edge_surface_advances_only_read_with_an_honest_cue_receipt(api) -> None:
+    client, provider, data_dir = api
+    files = MindFiles(data_dir)
+    now = datetime.now(UTC).astimezone()
+    state, history, memories = files.load(now)
+    state["next_activity"] = "walk"
+    state["last_step_at"] = (now - timedelta(minutes=31)).isoformat()
+    files.commit(state, history, memories)
+    presence = {"present": True, "fullscreen": False, "surface": "edge"}
+
+    scheduled = client.post(
+        "/api/body/step",
+        json={"presence": presence},
+    ).json()
+    assert scheduled["time_status"] == "scheduled"
+    assert scheduled["activity"]["type"] == "read"
+    assert scheduled["activity"]["presentation"] == "edge"
+
+    completed = client.post(
+        "/api/body/step",
+        json={
+            "presence": {"present": True, "fullscreen": False, "surface": "full"},
+            "activity_receipt": {
+                "activity_id": scheduled["activity"]["id"],
+                "status": "completed",
+                "reason": "edge_cue_finished",
+            },
+        },
+    ).json()
+    final_state = json.loads(files.state_path.read_text(encoding="utf-8"))
+    recorded = _history(data_dir)
+
+    assert completed["activity_confirmed"] is True
+    assert completed["expression"] is None
+    assert final_state["reading"]["next_passage"] == 1
+    assert final_state["next_activity"] == "walk"
+    assert [item["type"] for item in recorded] == ["self_reading", "memory_operation"]
+    assert all(item["type"] != "self_walk" for item in recorded)
+    assert provider.calls == 1
+
+    state, history, memories = files.load(now)
+    state["last_step_at"] = (now - timedelta(minutes=6)).isoformat()
+    files.commit(state, history, memories)
+    next_edge = client.post("/api/body/step", json={"presence": presence}).json()
+    assert next_edge["activity"]["type"] == "read"
+
+
+@pytest.mark.parametrize(
+    ("scheduled_presence", "reason"),
+    [
+        ({"present": True, "fullscreen": False, "surface": "full"}, "edge_cue_finished"),
+        ({"present": True, "fullscreen": False, "surface": "edge"}, "animation_finished"),
+    ],
+)
+def test_read_completion_reason_matches_scheduled_presentation(
+    api,
+    scheduled_presence,
+    reason,  # noqa: ANN001
+) -> None:
+    client, provider, data_dir = api
+    files = MindFiles(data_dir)
+    now = datetime.now(UTC).astimezone()
+    state, history, memories = files.load(now)
+    state["last_step_at"] = (now - timedelta(minutes=6)).isoformat()
+    files.commit(state, history, memories)
+    scheduled = client.post("/api/body/step", json={"presence": scheduled_presence}).json()
+    assert scheduled["activity"]["presentation"] == scheduled_presence["surface"]
+
+    response = client.post(
+        "/api/body/step",
+        json={
+            "presence": scheduled_presence,
+            "activity_receipt": {
+                "activity_id": scheduled["activity"]["id"],
+                "status": "completed",
+                "reason": reason,
+            },
+        },
+    ).json()
+    final_state = json.loads(files.state_path.read_text(encoding="utf-8"))
+
+    assert response["activity_confirmed"] is False
+    assert final_state["reading"]["next_passage"] == 0
+    assert final_state["pending_activity"]["id"] == scheduled["activity"]["id"]
+    assert _history(data_dir) == []
+    assert provider.calls == 0
+
+
+def test_revealing_during_edge_read_interrupts_without_progress_or_full_replay(api) -> None:
+    client, provider, data_dir = api
+    files = MindFiles(data_dir)
+    now = datetime.now(UTC).astimezone()
+    state, history, memories = files.load(now)
+    state["last_step_at"] = (now - timedelta(minutes=6)).isoformat()
+    files.commit(state, history, memories)
+    scheduled = client.post(
+        "/api/body/step",
+        json={"presence": {"present": True, "fullscreen": False, "surface": "edge"}},
+    ).json()
+
+    interrupted = client.post(
+        "/api/body/step",
+        json={
+            "presence": {"present": True, "fullscreen": False, "surface": "full"},
+            "activity_receipt": {
+                "activity_id": scheduled["activity"]["id"],
+                "status": "interrupted",
+                "reason": "activity_replaced",
+            },
+        },
+    ).json()
+    after = json.loads(files.state_path.read_text(encoding="utf-8"))
+    full_poll = client.post(
+        "/api/body/step",
+        json={"presence": {"present": True, "fullscreen": False, "surface": "full"}},
+    ).json()
+
+    assert interrupted["activity_confirmed"] is True
+    assert interrupted["expression"] is None
+    assert after["reading"]["next_passage"] == 0
+    assert after["pending_activity"] is None
+    assert _history(data_dir) == []
+    assert full_poll["activity"] is None
+    assert full_poll["time_status"] == "not_due"
+    assert provider.calls == 0
+
+
+def test_surface_mismatch_discards_legacy_pending_read_without_a_false_receipt(api) -> None:
+    client, provider, data_dir = api
+    files = MindFiles(data_dir)
+    now = datetime.now(UTC).astimezone()
+    state, history, memories = files.load(now)
+    state["last_step_at"] = (now - timedelta(minutes=6)).isoformat()
+    files.commit(state, history, memories)
+    scheduled = client.post("/api/body/step", json={}).json()
+    state, history, memories = files.load(now)
+    state["pending_activity"].pop("presentation", None)
+    files.commit(state, history, memories)
+
+    response = client.post(
+        "/api/body/step",
+        json={"presence": {"present": True, "fullscreen": False, "surface": "edge"}},
+    ).json()
+    final_state = json.loads(files.state_path.read_text(encoding="utf-8"))
+
+    assert scheduled["activity"]["type"] == "read"
+    assert response["activity"] is None
+    assert final_state["pending_activity"] is None
+    assert final_state["reading"]["next_passage"] == 0
+    assert _history(data_dir) == []
+    assert provider.calls == 0
+
+
+def test_edge_surface_discards_unshown_ambient_without_recording_it(api) -> None:
+    client, provider, data_dir = api
+    files = MindFiles(data_dir)
+    now = datetime.now(UTC).astimezone()
+    state, history, memories = files.load(now)
+    state["pending_expression"] = {
+        "id": "expr-edge-ambient",
+        "text": "这一页有点绕。",
+        "created_at": now.isoformat(),
+        "kind": "ambient",
+    }
+    files.commit(state, history, memories)
+    history_before = files.history_path.read_bytes()
+    memories_before = files.memories_path.read_bytes()
+
+    response = client.post(
+        "/api/body/step",
+        json={
+            "presence": {
+                "present": True,
+                "fullscreen": False,
+                "surface": "edge",
+            }
+        },
+    )
+
+    final_state = json.loads(files.state_path.read_text(encoding="utf-8"))
+    assert response.status_code == 200
+    assert response.json()["expression"] is None
+    assert final_state["pending_expression"] is None
+    assert files.history_path.read_bytes() == history_before
+    assert files.memories_path.read_bytes() == memories_before
+    assert provider.calls == 0
+
+    invalid = client.post(
+        "/api/body/step",
+        json={
+            "presence": {
+                "present": True,
+                "fullscreen": False,
+                "surface": "imaginary",
+            }
+        },
+    )
+    assert invalid.status_code == 422
+
+
+def test_authoritative_generation_failure_returns_http_200_static_catch(tmp_path) -> None:
+    pytest.importorskip("fastapi")
+    from fastapi.testclient import TestClient
+
+    class EmptyHistoryProvider(BaseLLMProvider):
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def generate(self, messages, tools=None, **kwargs):  # noqa: ANN001, ANN202
+            self.calls += 1
+            return LLMResponse(
+                tool_calls=[
+                    ToolCall(
+                        id="empty-history",
+                        name="submit_mind_bundle",
+                        arguments={
+                            "action_choice": None,
+                            "state_changes": {},
+                            "memory_operations": [
+                                {
+                                    "action": "record",
+                                    "kind": "user_fact",
+                                    "evidence_ids": ["exp_empty"],
+                                    "target_id": None,
+                                }
+                            ],
+                            "expression": "我记住了。",
+                            "expression_act": "respond",
+                            "expression_evidence_ids": [],
+                            "expression_target_id": None,
+                        },
+                    )
+                ]
+            )
+
+    files = MindFiles(tmp_path)
+    now = datetime.now(UTC).astimezone()
+    state, history, memories = files.load(now)
+    history.append(
+        {
+            "id": "exp_empty",
+            "type": "user_experience",
+            "content": "",
+            "occurred_at": now.isoformat(),
+        }
+    )
+    files.commit(state, history, memories)
+    provider = EmptyHistoryProvider()
+    client = TestClient(create_body_app(data_dir=tmp_path, provider=provider))
+
+    response = client.post(
+        "/api/body/step",
+        json={
+            "event": {
+                "event_id": "chat-bad-authoritative-source",
+                "type": "chat",
+                "content": "把刚才那条记住。",
+            }
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["event_status"] == "processed"
+    assert body["mind_status"] == "rejected"
+    assert body["expression"]["text"] == STATIC_CATCH
+    history = _history(tmp_path)
+    assert [item["type"] for item in history] == ["user_experience", "user_experience"]
+    failures = [
+        json.loads(line)
+        for line in (tmp_path / "failures.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert provider.calls == 2
+    assert len(failures) == 2
+    assert all(
+        any("user_fact source has no original utterance" in reason for reason in item["reasons"])
+        for item in failures
+    )
