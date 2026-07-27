@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import Engine
 from sqlalchemy.exc import IntegrityError
@@ -25,6 +25,7 @@ class UserRecord:
     display_name: str
     status: str
     daily_message_limit: int
+    role: str = "user"
 
     @property
     def is_active(self) -> bool:
@@ -52,6 +53,7 @@ def _user_record(row: User) -> UserRecord:
         display_name=row.display_name,
         status=row.status,
         daily_message_limit=row.daily_message_limit,
+        role=row.role or "user",
     )
 
 
@@ -65,7 +67,7 @@ def _external_account_record(row: ExternalAccount) -> ExternalAccountRecord:
 
 def list_user_summaries(engine: Engine) -> list[UserSummaryRecord]:
     """列出测试用户、外部账号绑定和今天各渠道用量。"""
-    day = utcnow().date().isoformat()
+    day = _beijing_today()
     with session_scope(engine) as s:
         users = s.query(User).order_by(User.id.asc()).all()
         user_ids = [row.id for row in users]
@@ -361,7 +363,7 @@ def finish_inbound_event(
 
 
 def usage_count_today(engine: Engine, *, user_id: int, source: str = "chat") -> int:
-    day = utcnow().date().isoformat()
+    day = _beijing_today()
     clean_source = source.strip() or "chat"
     with session_scope(engine) as s:
         row = (
@@ -375,7 +377,7 @@ def usage_count_today(engine: Engine, *, user_id: int, source: str = "chat") -> 
 
 
 def increment_usage(engine: Engine, *, user_id: int, source: str = "chat", amount: int = 1) -> int:
-    day = utcnow().date().isoformat()
+    day = _beijing_today()
     clean_source = source.strip() or "chat"
     delta = max(0, int(amount))
     with session_scope(engine) as s:
@@ -413,3 +415,154 @@ def _clean_external_id(value: str) -> str:
     return clean
 
 
+def set_user_role(engine: Engine, user_id: int, role: str) -> UserRecord | None:
+    clean = role.strip() or "user"
+    if clean not in ("user", "admin"):
+        raise ValueError("role must be 'user' or 'admin'")
+    with session_scope(engine) as s:
+        row = s.get(User, user_id)
+        if row is None:
+            return None
+        row.role = clean
+        s.flush()
+        return _user_record(row)
+
+
+def get_admin_stats(engine: Engine) -> dict:
+    """返回管理员面板系统概览统计数据。"""
+    from mybuddy.storage.models import Message
+
+    day = _beijing_today()
+    with session_scope(engine) as s:
+        total_users = s.query(User).count()
+        active_users = s.query(User).filter(User.status == "active").count()
+        admin_users = s.query(User).filter(User.role == "admin").count()
+        disabled_users = s.query(User).filter(User.status == "disabled").count()
+        total_messages = s.query(Message).count()
+        today_start = utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+        messages_today = s.query(Message).filter(Message.created_at >= today_start).count()
+        usage_rows = s.query(UserUsage).filter(UserUsage.day == day).all()
+        total_usage_today = sum(int(r.message_count) for r in usage_rows)
+    return {
+        "total_users": total_users,
+        "active_users": active_users,
+        "admin_users": admin_users,
+        "disabled_users": disabled_users,
+        "total_messages": total_messages,
+        "messages_today": messages_today,
+        "total_usage_today": total_usage_today,
+    }
+
+
+def get_user_detail(engine: Engine, user_id: int) -> dict | None:
+    """返回单个用户的扩展信息，供管理员查看。"""
+    day = _beijing_today()
+    with session_scope(engine) as s:
+        row = s.get(User, user_id)
+        if row is None:
+            return None
+        usage_rows = (
+            s.query(UserUsage)
+            .filter(UserUsage.user_id == user_id)
+            .filter(UserUsage.day == day)
+            .all()
+        )
+        usage_today = {r.source: int(r.message_count) for r in usage_rows}
+        accounts = (
+            s.query(ExternalAccount)
+            .filter(ExternalAccount.user_id == user_id)
+            .all()
+        )
+        return {
+            "id": row.id,
+            "display_name": row.display_name,
+            "status": row.status,
+            "daily_message_limit": row.daily_message_limit,
+            "role": row.role or "user",
+            "is_guest": row.is_guest,
+            "created_at": _beijing_iso(row.created_at) if row.created_at else None,
+            "updated_at": _beijing_iso(row.updated_at) if row.updated_at else None,
+            "usage_today": usage_today,
+            "usage_total_today": sum(usage_today.values()),
+            "external_accounts": [
+                {"provider": a.provider, "external_id": a.external_id, "display_name": a.display_name}
+                for a in accounts
+            ],
+        }
+
+
+def count_admin_users(engine: Engine) -> int:
+    with session_scope(engine) as s:
+        return s.query(User).filter(User.role == "admin").count()
+
+
+def delete_user(engine: Engine, user_id: int) -> bool:
+    """删除用户及其关联数据。返回 True 表示已删除，False 表示用户不存在。"""
+    from mybuddy.storage.models import (
+        AssessmentCycle,
+        AssessmentDimension,
+        CbtEvent,
+        ExternalAccount,
+        InboundEvent,
+        Message,
+        MoodRecord,
+        SafetyEvent,
+        UserUsage,
+    )
+
+    with session_scope(engine) as s:
+        row = s.get(User, user_id)
+        if row is None:
+            return False
+        tables = [
+            Message,
+            MoodRecord,
+            SafetyEvent,
+            AssessmentDimension,
+            AssessmentCycle,
+            CbtEvent,
+            UserUsage,
+            ExternalAccount,
+            InboundEvent,
+        ]
+        for table in tables:
+            s.query(table).filter(table.user_id == user_id).delete()
+        s.delete(row)
+    return True
+
+
+import bcrypt
+
+_BEIJING = timezone(timedelta(hours=8))
+
+
+def _beijing_today() -> str:
+    """返回北京时间今天的日期字符串(YYYY-MM-DD)。"""
+    return datetime.now(timezone.utc).astimezone(_BEIJING).date().isoformat()
+
+
+def _beijing_iso(dt: datetime) -> str:
+    return dt.replace(tzinfo=timezone.utc).astimezone(_BEIJING).isoformat(timespec="minutes")
+
+
+def batch_set_quota(engine: Engine, user_ids: list[int], daily_message_limit: int) -> int:
+    """批量设置用户配额，返回实际更新的行数。"""
+    limit = max(0, int(daily_message_limit))
+    with session_scope(engine) as s:
+        count = (
+            s.query(User)
+            .filter(User.id.in_(user_ids))
+            .update({User.daily_message_limit: limit}, synchronize_session=False)
+        )
+    return count
+
+
+def reset_user_password(engine: Engine, user_id: int) -> bool:
+    """重置用户密码为 123456。返回 True 表示成功，False 表示用户不存在。"""
+    with session_scope(engine) as s:
+        row = s.get(User, user_id)
+        if row is None:
+            return False
+        row.password_hash = bcrypt.hashpw(b"123456", bcrypt.gensalt()).decode()
+        s.flush()
+    return True

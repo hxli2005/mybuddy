@@ -1,9 +1,14 @@
 import type {
+  AdminStats,
+  AdminUserResponse,
+  AdminUsersResponse,
   AssessmentHistoryResponse,
   AssessmentStatusResponse,
   AuthResponse,
   ChatResponse,
   CrisisResourcesResponse,
+  LLMConfigPayload,
+  LLMConfigUpdatePayload,
   MessagesPayload,
   MoodRecordsResponse,
   MoodStatsResponse,
@@ -174,4 +179,54 @@ export function exportUserData(): Promise<Record<string, unknown>> {
 
 export function clearUserData(): Promise<{ ok: boolean }> {
   return request<{ ok: boolean }>("/api/user/data", { method: "DELETE" });
+}
+
+/* ---- 管理员 ---- */
+
+export function fetchAdminStats(): Promise<AdminStats> {
+  return request<AdminStats>("/api/admin/stats");
+}
+
+export function fetchAdminUsers(): Promise<AdminUsersResponse> {
+  return request<AdminUsersResponse>("/api/admin/users");
+}
+
+export function fetchAdminUser(userId: number): Promise<AdminUserResponse> {
+  return request<AdminUserResponse>(`/api/admin/users/${userId}`);
+}
+
+export function updateAdminUser(
+  userId: number,
+  updates: { status?: string; daily_message_limit?: number; role?: string; display_name?: string },
+): Promise<AdminUserResponse> {
+  return request<AdminUserResponse>(`/api/admin/users/${userId}`, {
+    method: "PATCH",
+    body: JSON.stringify(updates),
+  });
+}
+
+export function fetchAdminConfig(): Promise<LLMConfigPayload> {
+  return request<LLMConfigPayload>("/api/admin/config");
+}
+
+export function updateAdminConfig(updates: LLMConfigUpdatePayload): Promise<{ ok: boolean }> {
+  return request<{ ok: boolean }>("/api/admin/config", {
+    method: "PATCH",
+    body: JSON.stringify(updates),
+  });
+}
+
+export function deleteAdminUser(userId: number): Promise<{ ok: boolean }> {
+  return request<{ ok: boolean }>(`/api/admin/users/${userId}`, { method: "DELETE" });
+}
+
+export function batchSetQuota(userIds: number[], dailyMessageLimit: number): Promise<{ ok: boolean; updated: number }> {
+  return request<{ ok: boolean; updated: number }>("/api/admin/users/batch-quota", {
+    method: "POST",
+    body: JSON.stringify({ user_ids: userIds, daily_message_limit: dailyMessageLimit }),
+  });
+}
+
+export function resetUserPassword(userId: number): Promise<{ ok: boolean }> {
+  return request<{ ok: boolean }>(`/api/admin/users/${userId}/reset-password`, { method: "POST" });
 }

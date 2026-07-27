@@ -5,10 +5,11 @@ export type AuthState = {
   isLoggedIn: boolean;
   userId: number | null;
   username: string | null;
+  isAdmin: boolean;
 };
 
 type AuthCtx = AuthState & {
-  login: (userId: number, username: string) => void;
+  login: (userId: number, username: string, isAdmin?: boolean) => void;
   logout: () => void;
   loading: boolean;
 };
@@ -17,19 +18,19 @@ const AuthContext = createContext<AuthCtx>({
   isLoggedIn: false,
   userId: null,
   username: null,
+  isAdmin: false,
   login: () => {},
   logout: () => {},
   loading: true,
 });
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [state, setState] = useState<AuthState>({ isLoggedIn: false, userId: null, username: null });
+  const [state, setState] = useState<AuthState>({ isLoggedIn: false, userId: null, username: null, isAdmin: false });
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    // 401 全局处理:清空登录态并跳到登录页
     setUnauthorizedHandler(() => {
-      setState({ isLoggedIn: false, userId: null, username: null });
+      setState({ isLoggedIn: false, userId: null, username: null, isAdmin: false });
       window.location.hash = "#/login";
     });
     return () => setUnauthorizedHandler(null);
@@ -39,15 +40,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     fetchCurrentUser()
       .then((data) => {
         if (data.user_id) {
-          setState({ isLoggedIn: true, userId: data.user_id, username: data.username || null });
+          setState({ isLoggedIn: true, userId: data.user_id, username: data.username || null, isAdmin: data.role === "admin" });
         }
       })
       .catch(() => {})
       .finally(() => setLoading(false));
   }, []);
 
-  const login = useCallback((userId: number, username: string) => {
-    setState({ isLoggedIn: true, userId, username });
+  const login = useCallback((userId: number, username: string, isAdmin: boolean = false) => {
+    setState({ isLoggedIn: true, userId, username, isAdmin });
   }, []);
 
   const logout = useCallback(async () => {
@@ -56,7 +57,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } catch {
       /* ignore */
     }
-    setState({ isLoggedIn: false, userId: null, username: null });
+    setState({ isLoggedIn: false, userId: null, username: null, isAdmin: false });
   }, []);
 
   return (

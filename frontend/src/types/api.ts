@@ -123,12 +123,14 @@ export type CrisisResourcesResponse = {
 export type AuthResponse = {
   user_id: number;
   username: string;
+  role?: string;
 };
 
 export type UserInfo = {
   user_id?: number;
   username?: string;
   display_name?: string;
+  role?: string;
 };
 
 export type MoodRecordsResponse = {
@@ -159,4 +161,57 @@ export type AssessmentCycle = {
 
 export type AssessmentHistoryResponse = {
   cycles: AssessmentCycle[];
+};
+
+/* ---- 管理员类型 ---- */
+
+export type AdminStats = {
+  total_users: number;
+  active_users: number;
+  admin_users: number;
+  disabled_users: number;
+  total_messages: number;
+  messages_today: number;
+  total_usage_today: number;
+};
+
+export type AdminUser = {
+  id: number;
+  display_name: string;
+  status: string;
+  daily_message_limit: number;
+  role: string;
+  is_guest: boolean;
+  created_at: string | null;
+  updated_at: string | null;
+  usage_today: Record<string, number>;
+  usage_total_today: number;
+  external_accounts: Array<{
+    provider: string;
+    external_id: string;
+    display_name: string;
+  }>;
+};
+
+export type AdminUsersResponse = { users: AdminUser[] };
+export type AdminUserResponse = { user: AdminUser };
+
+export type LLMConfigPayload = {
+  provider: string;
+  model: string;
+  small_model: string | null;
+  api_key: string;
+  base_url: string | null;
+  max_tokens: number;
+  temperature: number;
+};
+
+export type LLMConfigUpdatePayload = {
+  provider?: string;
+  model?: string;
+  small_model?: string | null;
+  api_key?: string;
+  base_url?: string | null;
+  max_tokens?: number;
+  temperature?: number;
 };

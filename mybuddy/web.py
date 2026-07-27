@@ -217,6 +217,57 @@ class DemoHandler(BaseHTTPRequestHandler):
                     return
                 self._send_json(self.server.state.export_user_data_payload(user_id))
                 return
+            if path == "/api/admin/stats":
+                if _require_admin_for_web(self) is None:
+                    return
+                from mybuddy.storage.users import get_admin_stats
+                self._send_json(get_admin_stats(self.server.state.engine))
+                return
+            if path == "/api/admin/users":
+                if _require_admin_for_web(self) is None:
+                    return
+                from mybuddy.storage.users import get_user_detail, list_user_summaries
+                engine = self.server.state.engine
+                summaries = list_user_summaries(engine)
+                users = []
+                for item in summaries:
+                    detail = get_user_detail(engine, item.user.id)
+                    if detail:
+                        users.append(detail)
+                self._send_json({"users": users})
+                return
+            admin_user_id = _match_admin_user_route(path)
+            if admin_user_id is not None:
+                if _require_admin_for_web(self) is None:
+                    return
+                from mybuddy.storage.users import get_user_detail
+                detail = get_user_detail(self.server.state.engine, admin_user_id)
+                if detail is None:
+                    self._send_error(HTTPStatus.NOT_FOUND, "用户不存在")
+                    return
+                self._send_json({"user": detail})
+                return
+            if path == "/api/admin/config":
+                if _require_admin_for_web(self) is None:
+                    return
+                cfg = self.server.state.cfg
+                llm = cfg.llm
+                api_key = llm.api_key
+                masked = ""
+                if api_key and len(api_key) > 4:
+                    masked = "***" + api_key[-4:]
+                elif api_key:
+                    masked = "***"
+                self._send_json({
+                    "provider": llm.provider,
+                    "model": llm.model,
+                    "small_model": llm.small_model,
+                    "api_key": masked,
+                    "base_url": llm.base_url,
+                    "max_tokens": llm.max_tokens,
+                    "temperature": llm.temperature,
+                })
+                return
             self._send_error(HTTPStatus.NOT_FOUND, "not found")
         except ValueError as e:
             self._send_error(HTTPStatus.BAD_REQUEST, str(e))
@@ -261,7 +312,7 @@ class DemoHandler(BaseHTTPRequestHandler):
                     self.send_response(HTTPStatus.OK)
                     self.send_header("Content-Type", "application/json; charset=utf-8")
                     self.send_header("Set-Cookie", AuthManager.make_cookie(result["user_id"]))
-                    body = json.dumps({"user_id": result["user_id"], "username": result["username"]}, ensure_ascii=False).encode("utf-8")
+                    body = json.dumps({"user_id": result["user_id"], "username": result["username"], "role": result["role"]}, ensure_ascii=False).encode("utf-8")
                     self.send_header("Content-Length", str(len(body)))
                     self.end_headers()
                     self.wfile.write(body)
@@ -280,7 +331,7 @@ class DemoHandler(BaseHTTPRequestHandler):
                     self.send_response(HTTPStatus.OK)
                     self.send_header("Content-Type", "application/json; charset=utf-8")
                     self.send_header("Set-Cookie", AuthManager.make_cookie(result["user_id"]))
-                    body = json.dumps({"user_id": result["user_id"], "username": result["username"]}, ensure_ascii=False).encode("utf-8")
+                    body = json.dumps({"user_id": result["user_id"], "username": result["username"], "role": result["role"]}, ensure_ascii=False).encode("utf-8")
                     self.send_header("Content-Length", str(len(body)))
                     self.end_headers()
                     self.wfile.write(body)
@@ -342,6 +393,29 @@ class DemoHandler(BaseHTTPRequestHandler):
                 )
                 self._send_json(payload)
                 return
+            if path == "/api/admin/users/batch-quota":
+                if _require_admin_for_web(self) is None:
+                    return
+                user_ids = data.get("user_ids") or []
+                limit = max(0, int(data.get("daily_message_limit", 0)))
+                if not isinstance(user_ids, list) or len(user_ids) == 0:
+                    self._send_error(HTTPStatus.BAD_REQUEST, "user_ids is required")
+                    return
+                from mybuddy.storage.users import batch_set_quota
+                count = batch_set_quota(self.server.state.engine, [int(u) for u in user_ids], limit)
+                self._send_json({"ok": True, "updated": count})
+                return
+            admin_user_reset = _match_admin_user_reset_password(path)
+            if admin_user_reset is not None:
+                if _require_admin_for_web(self) is None:
+                    return
+                from mybuddy.storage.users import reset_user_password
+                ok = reset_user_password(self.server.state.engine, admin_user_reset)
+                if not ok:
+                    self._send_error(HTTPStatus.NOT_FOUND, "用户不存在")
+                    return
+                self._send_json({"ok": True})
+                return
             self._send_error(HTTPStatus.NOT_FOUND, "not found")
         except RuntimeError as e:
             self._send_error(HTTPStatus.BAD_REQUEST, str(e))
@@ -366,6 +440,68 @@ class DemoHandler(BaseHTTPRequestHandler):
         try:
             path = urlparse(self.path).path
             data = self._read_json()
+            admin_user_id = _match_admin_user_route(path)
+            if admin_user_id is not None:
+                auth_user_id = _require_admin_for_web(self)
+                if auth_user_id is None:
+                    return
+                engine = self.server.state.engine
+                if admin_user_id == auth_user_id and data.get("role") is not None:
+                    self._send_error(HTTPStatus.BAD_REQUEST, "不能修改自己的角色")
+                    return
+                if data.get("status") is not None:
+                    from mybuddy.storage.users import set_user_status
+                    set_user_status(engine, admin_user_id, _clean_user_status(data["status"]))
+                if data.get("daily_message_limit") is not None:
+                    from mybuddy.storage.users import set_user_daily_limit
+                    set_user_daily_limit(engine, admin_user_id, data["daily_message_limit"])
+                if data.get("role") is not None:
+                    from mybuddy.storage.users import set_user_role
+                    set_user_role(engine, admin_user_id, data["role"])
+                if data.get("display_name") is not None:
+                    name = str(data["display_name"]).strip()
+                    if name:
+                        from mybuddy.storage.db import session_scope
+                        from mybuddy.storage.models import User as UserModel
+                        with session_scope(engine) as s:
+                            row = s.get(UserModel, admin_user_id)
+                            if row:
+                                row.display_name = name
+                                s.flush()
+                from mybuddy.storage.users import get_user_detail
+                detail = get_user_detail(engine, admin_user_id)
+                if detail is None:
+                    self._send_error(HTTPStatus.NOT_FOUND, "用户不存在")
+                    return
+                self._send_json({"user": detail})
+                return
+            if path == "/api/admin/config":
+                if _require_admin_for_web(self) is None:
+                    return
+                import yaml
+                config_path = self.server.state.config_path
+                p = Path(config_path)
+                raw: dict[str, Any] = {}
+                if p.exists():
+                    raw = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
+                llm_section = raw.get("llm", {})
+                if not isinstance(llm_section, dict):
+                    llm_section = {}
+                for key in ("provider", "model", "small_model", "base_url"):
+                    if data.get(key) is not None:
+                        llm_section[key] = data[key]
+                if data.get("api_key") is not None:
+                    ak = str(data["api_key"])
+                    if ak and not ak.startswith("***"):
+                        llm_section["api_key"] = ak
+                if data.get("max_tokens") is not None:
+                    llm_section["max_tokens"] = data["max_tokens"]
+                if data.get("temperature") is not None:
+                    llm_section["temperature"] = data["temperature"]
+                raw["llm"] = llm_section
+                p.write_text(yaml.dump(raw, allow_unicode=True, default_flow_style=False), encoding="utf-8")
+                self._send_json({"ok": True})
+                return
             user_id = _match_user_route(path)
             if user_id is not None:
                 payload = self.server.state.update_user_payload(
@@ -462,6 +598,26 @@ class DemoHandler(BaseHTTPRequestHandler):
                 tracker.reset_cycle()
                 self._send_json({"ok": True})
                 return
+            admin_user_id_del = _match_admin_user_route(path)
+            if admin_user_id_del is not None:
+                auth_user_id = _require_admin_for_web(self)
+                if auth_user_id is None:
+                    return
+                if admin_user_id_del == auth_user_id:
+                    self._send_error(HTTPStatus.BAD_REQUEST, "不能删除自己的账户")
+                    return
+                from mybuddy.storage.users import count_admin_users, delete_user, get_user_detail
+                engine = self.server.state.engine
+                detail = get_user_detail(engine, admin_user_id_del)
+                if detail is None:
+                    self._send_error(HTTPStatus.NOT_FOUND, "用户不存在")
+                    return
+                if detail["role"] == "admin" and count_admin_users(engine) <= 1:
+                    self._send_error(HTTPStatus.BAD_REQUEST, "至少需要保留一个管理员账户")
+                    return
+                delete_user(engine, admin_user_id_del)
+                self._send_json({"ok": True})
+                return
             self._send_error(HTTPStatus.NOT_FOUND, "not found")
         except RuntimeError as e:
             self._send_error(HTTPStatus.BAD_REQUEST, str(e))
@@ -531,6 +687,8 @@ def serve(
         )
     state = AppState(config_path=config_path, max_steps=max_steps, enable_scheduler=False)
     state.startup()
+    from mybuddy.auth.admin_seed import seed_admin
+    seed_admin(state.engine)
     server = DemoServer((host, port), DemoHandler, state=state, frontend_dir=frontend_dir)
     try:
         server.serve_forever()
@@ -566,3 +724,47 @@ def _get_user_id_from_request(cookie_header: str | None) -> int | None:
     """从 Cookie header 中提取已验证的 user_id。"""
     from mybuddy.auth.manager import get_user_id_from_cookie
     return get_user_id_from_cookie(cookie_header)
+
+
+def _require_admin_for_web(handler: DemoHandler) -> int | None:
+    """验证管理员身份。成功返回 user_id；失败则发送错误响应并返回 None。"""
+    user_id = _get_user_id_from_request(handler.headers.get("Cookie"))
+    if user_id is None:
+        handler._send_error(HTTPStatus.UNAUTHORIZED, "请先登录")
+        return None
+    engine = handler.server.state.engine
+    from mybuddy.storage.db import session_scope
+    from mybuddy.storage.models import User
+    with session_scope(engine) as s:
+        user = s.get(User, user_id)
+        if user is None or user.status != "active" or user.role != "admin":
+            handler._send_error(HTTPStatus.FORBIDDEN, "需要管理员权限")
+            return None
+    return user_id
+
+
+def _match_admin_user_route(path: str) -> int | None:
+    parts = path.strip("/").split("/")
+    if len(parts) == 4 and parts[:3] == ["api", "admin", "users"]:
+        try:
+            return int(parts[3])
+        except ValueError:
+            return None
+    return None
+
+
+def _match_admin_user_reset_password(path: str) -> int | None:
+    parts = path.strip("/").split("/")
+    if len(parts) == 5 and parts[:3] == ["api", "admin", "users"] and parts[4] == "reset-password":
+        try:
+            return int(parts[3])
+        except ValueError:
+            return None
+    return None
+
+
+def _clean_user_status(status: str) -> str:
+    clean = status.strip().lower()
+    if clean not in {"active", "disabled"}:
+        raise RuntimeError("状态只支持 active 或 disabled")
+    return clean

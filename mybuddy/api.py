@@ -159,6 +159,8 @@ class AppState:
         ensure_dirs(cfg)
         engine = init_db(cfg.paths.db_file)
         self.auth = AuthManager(engine)
+        from mybuddy.auth.admin_seed import seed_admin
+        seed_admin(engine)
         ltm = LongTermMemory(
             persist_dir=cfg.paths.chroma_dir,
             embedding_model=cfg.memory.embedding_model,
@@ -456,6 +458,11 @@ class AppState:
             result = await self.agent.run(
                 message.strip(), assessment_hint=assessment_hint, user_id=user_id
             )
+
+            # 记录用量(仅登录用户)
+            if user_id is not None:
+                from mybuddy.storage.users import increment_usage
+                increment_usage(engine, user_id=user_id)
 
             # 自动记录情绪(仅登录用户)
             if result.emotion is not None and user_id is not None:
@@ -1011,7 +1018,7 @@ def create_app(config_path: str = "config.yaml", max_steps: int = 6):
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e)) from e
         from fastapi.responses import JSONResponse
-        resp = JSONResponse({"user_id": result["user_id"], "username": result["username"]})
+        resp = JSONResponse({"user_id": result["user_id"], "username": result["username"], "role": result["role"]})
         resp.set_cookie(
             key="mybuddy_session",
             value=result["cookie"],
@@ -1028,7 +1035,7 @@ def create_app(config_path: str = "config.yaml", max_steps: int = 6):
         except ValueError as e:
             raise HTTPException(status_code=401, detail=str(e)) from e
         from fastapi.responses import JSONResponse
-        resp = JSONResponse({"user_id": result["user_id"], "username": result["username"]})
+        resp = JSONResponse({"user_id": result["user_id"], "username": result["username"], "role": result["role"]})
         resp.set_cookie(
             key="mybuddy_session",
             value=result["cookie"],
@@ -1159,6 +1166,195 @@ def create_app(config_path: str = "config.yaml", max_steps: int = 6):
         resp = JSONResponse({"ok": True})
         resp.delete_cookie("mybuddy_session")
         return resp
+
+    # ----- 管理员端点 -----
+
+    def _require_admin(request: Request) -> int:
+        """验证管理员身份，返回 admin user_id；否则抛出 401/403。"""
+        from mybuddy.auth.manager import get_user_id_from_cookie
+
+        user_id = get_user_id_from_cookie(request.headers.get("Cookie"))
+        if user_id is None:
+            raise HTTPException(status_code=401, detail="请先登录")
+        engine = _require(state.engine)
+        from mybuddy.storage.models import User
+
+        with session_scope(engine) as s:
+            user = s.get(User, user_id)
+            if user is None or user.status != "active" or user.role != "admin":
+                raise HTTPException(status_code=403, detail="需要管理员权限")
+            return user_id
+
+    @app.get("/api/admin/stats")
+    async def admin_stats(request: Request) -> dict[str, Any]:
+        _require_admin(request)
+        from mybuddy.storage.users import get_admin_stats
+
+        return get_admin_stats(_require(state.engine))
+
+    @app.get("/api/admin/users")
+    async def admin_list_users(request: Request) -> dict[str, Any]:
+        _require_admin(request)
+        from mybuddy.storage.users import get_user_detail
+
+        engine = _require(state.engine)
+        summaries = list_user_summaries(engine)
+        users = []
+        for item in summaries:
+            detail = get_user_detail(engine, item.user.id)
+            if detail:
+                users.append(detail)
+        return {"users": users}
+
+    @app.get("/api/admin/users/{user_id}")
+    async def admin_get_user(user_id: int, request: Request) -> dict[str, Any]:
+        _require_admin(request)
+        from mybuddy.storage.users import get_user_detail
+
+        detail = get_user_detail(_require(state.engine), user_id)
+        if detail is None:
+            raise HTTPException(status_code=404, detail="用户不存在")
+        return {"user": detail}
+
+    class AdminUserUpdateRequest(BaseModel):
+        status: str | None = None
+        daily_message_limit: int | None = Field(default=None, ge=0)
+        role: str | None = None
+        display_name: str | None = None
+
+    @app.patch("/api/admin/users/{user_id}")
+    async def admin_update_user(user_id: int, req: AdminUserUpdateRequest, request: Request) -> dict[str, Any]:
+        admin_id = _require_admin(request)
+        engine = _require(state.engine)
+
+        if user_id == admin_id and req.role is not None:
+            raise HTTPException(status_code=400, detail="不能修改自己的角色")
+
+        if req.status is not None:
+            set_user_status(engine, user_id, _clean_user_status(req.status))
+        if req.daily_message_limit is not None:
+            set_user_daily_limit(engine, user_id, req.daily_message_limit)
+        if req.role is not None:
+            from mybuddy.storage.users import set_user_role
+
+            set_user_role(engine, user_id, req.role)
+        if req.display_name is not None:
+            name = req.display_name.strip()
+            if name:
+                with session_scope(engine) as s:
+                    from mybuddy.storage.models import User as UserModel
+
+                    row = s.get(UserModel, user_id)
+                    if row:
+                        row.display_name = name
+                        s.flush()
+
+        from mybuddy.storage.users import get_user_detail
+
+        detail = get_user_detail(engine, user_id)
+        if detail is None:
+            raise HTTPException(status_code=404, detail="用户不存在")
+        return {"user": detail}
+
+    @app.delete("/api/admin/users/{user_id}")
+    async def admin_delete_user(user_id: int, request: Request) -> dict[str, Any]:
+        admin_id = _require_admin(request)
+        if user_id == admin_id:
+            raise HTTPException(status_code=400, detail="不能删除自己的账户")
+        from mybuddy.storage.users import count_admin_users, delete_user, get_user_detail
+
+        engine = _require(state.engine)
+        detail = get_user_detail(engine, user_id)
+        if detail is None:
+            raise HTTPException(status_code=404, detail="用户不存在")
+        if detail["role"] == "admin" and count_admin_users(engine) <= 1:
+            raise HTTPException(status_code=400, detail="至少需要保留一个管理员账户")
+        delete_user(engine, user_id)
+        return {"ok": True}
+
+    class AdminBatchQuotaRequest(BaseModel):
+        user_ids: list[int]
+        daily_message_limit: int = Field(ge=0)
+
+    @app.post("/api/admin/users/batch-quota")
+    async def admin_batch_quota(req: AdminBatchQuotaRequest, request: Request) -> dict[str, Any]:
+        _require_admin(request)
+        from mybuddy.storage.users import batch_set_quota
+
+        count = batch_set_quota(_require(state.engine), req.user_ids, req.daily_message_limit)
+        return {"ok": True, "updated": count}
+
+    @app.post("/api/admin/users/{user_id}/reset-password")
+    async def admin_reset_password(user_id: int, request: Request) -> dict[str, Any]:
+        _require_admin(request)
+        from mybuddy.storage.users import reset_user_password
+
+        ok = reset_user_password(_require(state.engine), user_id)
+        if not ok:
+            raise HTTPException(status_code=404, detail="用户不存在")
+        return {"ok": True}
+
+    @app.get("/api/admin/config")
+    async def admin_get_config(request: Request) -> dict[str, Any]:
+        _require_admin(request)
+        cfg = _require(state.cfg)
+        llm = cfg.llm
+        api_key = llm.api_key
+        masked = ""
+        if api_key and len(api_key) > 4:
+            masked = "***" + api_key[-4:]
+        elif api_key:
+            masked = "***"
+        return {
+            "provider": llm.provider,
+            "model": llm.model,
+            "small_model": llm.small_model,
+            "api_key": masked,
+            "base_url": llm.base_url,
+            "max_tokens": llm.max_tokens,
+            "temperature": llm.temperature,
+        }
+
+    class AdminConfigUpdateRequest(BaseModel):
+        provider: str | None = None
+        model: str | None = None
+        small_model: str | None = None
+        api_key: str | None = None
+        base_url: str | None = None
+        max_tokens: int | None = None
+        temperature: float | None = None
+
+    @app.patch("/api/admin/config")
+    async def admin_update_config(req: AdminConfigUpdateRequest, request: Request) -> dict[str, Any]:
+        _require_admin(request)
+        config_path = state.config_path
+        p = Path(config_path)
+        raw: dict[str, Any] = {}
+        if p.exists():
+            raw = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
+
+        llm_section = raw.get("llm", {})
+        if not isinstance(llm_section, dict):
+            llm_section = {}
+
+        if req.provider is not None:
+            llm_section["provider"] = req.provider
+        if req.model is not None:
+            llm_section["model"] = req.model
+        if req.small_model is not None:
+            llm_section["small_model"] = req.small_model
+        if req.api_key is not None and req.api_key != "***" and not req.api_key.startswith("***"):
+            llm_section["api_key"] = req.api_key
+        if req.base_url is not None:
+            llm_section["base_url"] = req.base_url
+        if req.max_tokens is not None:
+            llm_section["max_tokens"] = req.max_tokens
+        if req.temperature is not None:
+            llm_section["temperature"] = req.temperature
+
+        raw["llm"] = llm_section
+        p.write_text(yaml.dump(raw, allow_unicode=True, default_flow_style=False), encoding="utf-8")
+        return {"ok": True}
 
     return app
 

@@ -5,6 +5,7 @@ import { ChatView } from "./views/ChatView";
 import { LoginView } from "./views/LoginView";
 import { MoodDiary } from "./views/MoodDiary";
 import { AssessmentStatus } from "./views/AssessmentStatus";
+import { AdminView } from "./views/AdminView";
 import { SafetyDisclaimer } from "./components/SafetyDisclaimer";
 import { useAuth } from "./lib/auth";
 import { useRouter } from "./lib/router";
@@ -13,7 +14,7 @@ import type { ChatResponse } from "./types/api";
 
 export function App() {
   const queryClient = useQueryClient();
-  const { loading } = useAuth();
+  const { loading, isAdmin } = useAuth();
   const { page } = useRouter();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [crisisOpen, setCrisisOpen] = useState(false);
@@ -37,13 +38,27 @@ export function App() {
     return <div className="h-dvh overflow-hidden"><LoginView /></div>;
   }
 
-  // 加载中：简单占位
+  // 加载中：等 auth 解析完毕再判断管理员身份
   if (loading) {
     return (
       <div className="h-dvh flex items-center justify-center bg-bg overflow-hidden">
         <div className="text-muted text-[14px] animate-fade-in">正在连接…</div>
       </div>
     );
+  }
+
+  // 加载完成后，管理员只看管理面板（无论 URL hash 是什么）
+  if (isAdmin) {
+    return <AdminView />;
+  }
+
+  // 管理员页：独立布局，需管理员身份
+  if (page === "admin") {
+    if (!isAdmin) {
+      window.location.hash = "#/login";
+      return null;
+    }
+    return <AdminView />;
   }
 
   return (

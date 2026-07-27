@@ -52,6 +52,9 @@ def _migrate_columns(engine: Engine) -> None:
             conn.execute(text("ALTER TABLE users ADD COLUMN password_hash VARCHAR(256)"))
         if "is_guest" not in user_cols:
             conn.execute(text("ALTER TABLE users ADD COLUMN is_guest BOOLEAN DEFAULT 0"))
+        if "role" not in user_cols:
+            conn.execute(text("ALTER TABLE users ADD COLUMN role VARCHAR(16) DEFAULT 'user'"))
+            conn.execute(text("UPDATE users SET role = 'user' WHERE role IS NULL"))
 
         msg_cols = {row[1] for row in conn.execute(text("PRAGMA table_info(messages)")).fetchall()}
         if "user_id" not in msg_cols:

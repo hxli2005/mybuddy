@@ -28,7 +28,7 @@ export function LoginView() {
       return fn(username.trim(), password);
     },
     onSuccess: async (data) => {
-      login(data.user_id, data.username || username.trim());
+      login(data.user_id, data.username || username.trim(), data.role === "admin");
       // 访客转登录:询问是否导入进行中的对话
       const guestMessages = loadGuestMessages();
       if (guestMessages.length > 0) {
@@ -45,7 +45,7 @@ export function LoginView() {
         clearGuestMessages();
         queryClient.invalidateQueries({ queryKey: queryKeys.messages });
       }
-      navigate(consumeReturnPage());
+      navigate(data.role === "admin" ? "admin" : consumeReturnPage());
     },
     onError: (err) => {
       setError(err instanceof Error ? err.message : String(err));

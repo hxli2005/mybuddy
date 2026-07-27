@@ -4,6 +4,7 @@ import { Avatar, IconButton } from "./ui";
 import { SettingsSheet } from "./SettingsSheet";
 import { UserMenu } from "./UserMenu";
 import { CrisisPanel } from "./CrisisPanel";
+import { useAuth } from "../lib/auth";
 import { useRouter, type Page } from "../lib/router";
 import type { Presence } from "../lib/queryKeys";
 import { cn } from "../lib/cn";
@@ -60,6 +61,7 @@ type ShellProps = {
 export function Shell({ presence, children, settingsOpen, onOpenSettings, onCloseSettings, crisisOpen, onOpenCrisis, onCloseCrisis }: ShellProps) {
   const { theme, toggle } = useTheme();
   const { page, navigate } = useRouter();
+  const { isAdmin } = useAuth();
 
   return (
     <div className="flex-1 min-h-0 flex flex-col bg-bg">
@@ -91,6 +93,19 @@ export function Shell({ presence, children, settingsOpen, onOpenSettings, onClos
                 {t.label}
               </button>
             ))}
+            {isAdmin && (
+              <button
+                type="button"
+                onClick={() => navigate("admin")}
+                className={cn(
+                  "inline-flex items-center gap-1.5 h-9 px-3 rounded-full text-[13px] font-medium transition-colors",
+                  page === "admin" ? "bg-accent-soft text-accent" : "text-muted hover:text-ink",
+                )}
+              >
+                <Settings2 size={15} strokeWidth={1.9} />
+                管理
+              </button>
+            )}
           </div>
           <IconButton icon={Shield} label="危机资源" onClick={onOpenCrisis} tone="accent" />
           <UserMenu />
@@ -114,6 +129,16 @@ export function Shell({ presence, children, settingsOpen, onOpenSettings, onClos
             <span>{t.label}</span>
           </button>
         ))}
+        {isAdmin && (
+          <button
+            type="button"
+            onClick={() => navigate("admin")}
+            className={cn("bottom-tab-item touch-target", page === "admin" && "active")}
+          >
+            <Settings2 size={22} strokeWidth={1.9} />
+            <span>管理</span>
+          </button>
+        )}
       </nav>
 
       <SettingsSheet open={settingsOpen} onClose={onCloseSettings} theme={theme} onToggleTheme={toggle} />

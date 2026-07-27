@@ -1,6 +1,6 @@
 import { useState, useEffect, createContext, useContext, useCallback, type ReactNode } from "react";
 
-export type Page = "chat" | "login" | "mood" | "assessment";
+export type Page = "chat" | "login" | "mood" | "assessment" | "admin";
 
 type RouterCtx = {
   page: Page;
@@ -11,7 +11,7 @@ const RouterContext = createContext<RouterCtx>({ page: "chat", navigate: () => {
 
 function readHash(): Page {
   const hash = (typeof window !== "undefined" ? window.location.hash : "").replace(/^#\/?/, "");
-  const valid: Page[] = ["chat", "login", "mood", "assessment"];
+  const valid: Page[] = ["chat", "login", "mood", "assessment", "admin"];
   return valid.includes(hash as Page) ? (hash as Page) : "chat";
 }
 

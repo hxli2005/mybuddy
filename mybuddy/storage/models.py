@@ -36,6 +36,7 @@ class User(Base):
     daily_message_limit: Mapped[int] = mapped_column(Integer, default=30)
     password_hash: Mapped[str | None] = mapped_column(String(256), nullable=True)
     is_guest: Mapped[bool] = mapped_column(Boolean, default=False)
+    role: Mapped[str] = mapped_column(String(16), default="user", index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now, index=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
 

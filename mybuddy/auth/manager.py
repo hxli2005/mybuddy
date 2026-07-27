@@ -130,7 +130,7 @@ class AuthManager:
             s.add(user)
             s.flush()
             cookie = _make_cookie_value(user.id)
-            return {"user_id": user.id, "username": clean_name, "cookie": cookie}
+            return {"user_id": user.id, "username": clean_name, "role": "user", "cookie": cookie}
 
     def login(self, username: str, password: str) -> dict:
         """登录。验证密码后返回 cookie。"""
@@ -148,8 +148,10 @@ class AuthManager:
             if not bcrypt.checkpw(password.encode(), user.password_hash.encode()):
                 raise ValueError("用户名或密码错误")
 
+            user.updated_at = utcnow()
+            s.flush()
             cookie = _make_cookie_value(user.id)
-            return {"user_id": user.id, "username": user.display_name, "cookie": cookie}
+            return {"user_id": user.id, "username": user.display_name, "role": user.role or "user", "cookie": cookie}
 
     @staticmethod
     def make_cookie(user_id: int) -> str:
@@ -167,4 +169,4 @@ class AuthManager:
             user = s.get(User, user_id)
             if user is None or user.status == "disabled":
                 return None
-            return {"user_id": user.id, "username": user.display_name}
+            return {"user_id": user.id, "username": user.display_name, "role": user.role or "user"}
