@@ -110,9 +110,13 @@ class UserProfileItem(BaseModel):
 
     memory_id: str
     quote: str
+    profile_dimension: str
     source_id: str
     source_occurred_at: str
     created_at: str
+    last_activated_at: str | None = None
+    last_activation_text: str | None = None
+    last_activation_expression_id: str | None = None
 
 
 class BodyStepRequest(BaseModel):
@@ -507,6 +511,7 @@ def create_body_app(
     """创建只暴露身体 step 的应用；provider 参数只用于测试和本地验收。"""
     try:
         from fastapi import FastAPI
+        from fastapi.responses import FileResponse
     except ModuleNotFoundError as error:  # pragma: no cover
         raise RuntimeError("缺少 API 依赖，请运行: uv sync --extra api") from error
 
@@ -523,5 +528,9 @@ def create_body_app(
     @app.post("/api/body/step", response_model=BodyStepResponse)
     async def body_step(request: BodyStepRequest) -> BodyStepResponse:
         return await bridge.step(request)
+
+    @app.get("/mentor-demo", include_in_schema=False)
+    async def mentor_demo() -> object:
+        return FileResponse(Path(__file__).with_name("mentor_demo.html"))
 
     return app

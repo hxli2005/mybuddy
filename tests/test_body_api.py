@@ -198,6 +198,14 @@ def test_user_profile_is_a_read_only_projection_of_current_sourced_facts(api) ->
                 "content": "这句不能替另一条记忆作证。",
                 "occurred_at": "2026-07-27T20:15:00+08:00",
             },
+            {
+                "id": "profile-activation-map",
+                "type": "shared_expression",
+                "content": "你看地图时会留意细节取舍。",
+                "expression_id": "profile-expression-map",
+                "expression_evidence_ids": ["profile-source-map"],
+                "occurred_at": "2026-07-29T08:15:00+08:00",
+            },
         ]
     )
     memories["items"].extend(
@@ -250,9 +258,13 @@ def test_user_profile_is_a_read_only_projection_of_current_sourced_facts(api) ->
         {
             "memory_id": "profile-memory-map",
             "quote": "我喜欢手绘地图里的细节取舍。",
+            "profile_dimension": "decision_preference",
             "source_id": "profile-source-map",
             "source_occurred_at": "2026-07-28T20:15:00+08:00",
             "created_at": "2026-07-28T20:16:00+08:00",
+            "last_activated_at": "2026-07-29T08:15:00+08:00",
+            "last_activation_text": "你看地图时会留意细节取舍。",
+            "last_activation_expression_id": "profile-expression-map",
         }
     ]
     assert provider.calls == 0
@@ -266,6 +278,11 @@ def test_user_profile_is_a_read_only_projection_of_current_sourced_facts(api) ->
         )
     }
     assert after == before
+
+    demo = client.get("/mentor-demo")
+    assert demo.status_code == 200
+    assert "实时个性化建模" in demo.text
+    assert "尚未形成——没有证据就不填" in demo.text
 
     mixed = client.post(
         "/api/body/step",

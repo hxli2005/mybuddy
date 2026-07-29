@@ -24,12 +24,6 @@ public partial class ChatPanel : UserControl
 
     public void AddUser(string text) => Add($"你:{text}");
     public void AddAssistant(string text) => Add($"小布:{text}");
-    public void ShowDraft(string text)
-    {
-        Input.Text = text;
-        Input.CaretIndex = text.Length;
-        Input.Focus();
-    }
 
     public void AcceptSent(string text)
     {

@@ -32,7 +32,6 @@ public partial class MainWindow : Window {
     private string? _activeActivityId;
     private string? _pendingChatEventId;
     private string? _pendingChatText;
-    private readonly bool _mentorDemo;
     private bool _chatSending;
     private bool _touchReporting;
     private bool _raiseDragging;
@@ -41,8 +40,7 @@ public partial class MainWindow : Window {
     private EdgeSide? _edgeSide;
     private bool _edgePeeked;
     private bool _edgeHiddenForFullscreen;
-    public MainWindow(bool mentorDemo = false) {
-        _mentorDemo = mentorDemo;
+    public MainWindow() {
         InitializeComponent();
         Loaded += OnLoaded;
         _walkTimer.Interval = TimeSpan.FromMilliseconds(16);
@@ -138,7 +136,6 @@ public partial class MainWindow : Window {
             _tray.ExitRequested += (_, _) => Close();
             RestoreEdgeMode();
             _stateLoop.Start();
-            if (_mentorDemo) _ = RunMentorDemoAsync();
         }
         catch (Exception exception) {
             App.LogException(exception);
@@ -622,14 +619,14 @@ public partial class MainWindow : Window {
         var window = new SettingsWindow(_settings) { Owner = this };
         if (window.ShowDialog() == true) _client?.UpdateSettings(_settings);
     }
-    private async Task ShowProfileAsync(TimeSpan? autoCloseAfter = null) {
+    private async Task ShowProfileAsync() {
         if (_client is null) return;
         if (_edgeSide is not null) ExitEdge();
         try {
             var response = await _client.StepBodyAsync(new BodyStepRequest {
                 IncludeUserProfile = true,
             });
-            var window = new ProfileWindow(response.UserProfile ?? [], autoCloseAfter) {
+            var window = new ProfileWindow(response.UserProfile ?? []) {
                 Owner = this,
             };
             App.LogMessage($"event=user_profile_opened items={response.UserProfile?.Count ?? 0}");
@@ -640,20 +637,6 @@ public partial class MainWindow : Window {
             App.LogMessage($"event=user_profile_unavailable reason={exception.Message}");
             MessageBox.Show(this, "暂时读不到她记得的你，请确认心智桥已经连接。", "小布");
         }
-    }
-    private async Task RunMentorDemoAsync() {
-        App.LogMessage("event=mentor_demo_started");
-        await Task.Delay(1500);
-        await ShowProfileAsync(TimeSpan.FromSeconds(8));
-        ChatDrawer.Visibility = Visibility.Visible;
-        Chat.ShowDraft("你好");
-        App.LogMessage("event=mentor_demo_greeting_ready text=你好");
-        await Task.Delay(1800);
-        await SendBodyChatAsync("你好");
-        App.LogMessage("event=mentor_demo_greeting_finished");
-        await Task.Delay(12_000);
-        App.LogMessage("event=mentor_demo_finished");
-        Close();
     }
     private async void Profile_Click(object sender, RoutedEventArgs e) => await ShowProfileAsync();
     private void Settings_Click(object sender, RoutedEventArgs e) => ShowSettings();

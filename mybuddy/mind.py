@@ -43,6 +43,24 @@ ExpressionAct = Literal[
     "ask",
     "offer_activity",
 ]
+ProfileDimension = Literal[
+    "basic_fact",
+    "communication_preference",
+    "decision_preference",
+    "content_interest",
+    "life_interest",
+    "interaction_boundary",
+    "other_preference",
+]
+PROFILE_DIMENSIONS = {
+    "basic_fact",
+    "communication_preference",
+    "decision_preference",
+    "content_interest",
+    "life_interest",
+    "interaction_boundary",
+    "other_preference",
+}
 
 
 class StateChanges(BaseModel):
@@ -62,6 +80,10 @@ class MemoryOperation(BaseModel):
     target_id: str | None = None
     user_confirmed: bool = Field(default=False, description="仅 kind=pattern 可 true")
     core: bool | None = Field(default=None, description="事实写入的常驻标记")
+    profile_dimension: ProfileDimension | None = Field(
+        default=None,
+        description="仅用户事实写入可选；从原话选择一个固定人格表维度",
+    )
 
     @model_validator(mode="after")
     def fields_match_action(self) -> MemoryOperation:
@@ -73,6 +95,10 @@ class MemoryOperation(BaseModel):
             raise ValueError("new patterns are not stored until a finite key exists")
         if self.user_confirmed and self.kind != "pattern":
             raise ValueError("user_confirmed only applies to pattern")
+        if self.profile_dimension is not None and (
+            self.kind != "user_fact" or self.action not in {"record", "correct"}
+        ):
+            raise ValueError("profile_dimension only applies to user_fact record/correct")
         if self.action in {"recall", "forget"}:
             if self.evidence_ids:
                 raise ValueError(f"{self.action} does not accept evidence_ids")
@@ -2285,6 +2311,13 @@ class MindFiles:
             for item in history
             if isinstance(item, dict) and item.get("id")
         }
+        activation_by_source: dict[str, dict[str, Any]] = {}
+        for item in history:
+            if not isinstance(item, dict) or item.get("type") != "shared_expression":
+                continue
+            for evidence_id in item.get("expression_evidence_ids", []):
+                if isinstance(evidence_id, str):
+                    activation_by_source[evidence_id] = item
         profile: list[dict[str, str]] = []
         for memory in memories.get("items", []):
             if not isinstance(memory, dict) or memory.get("kind") != "user_fact":
@@ -2306,10 +2339,26 @@ class MindFiles:
             item = {
                 "memory_id": memory_id,
                 "quote": quote,
+                "profile_dimension": (
+                    str(memory.get("profile_dimension"))
+                    if memory.get("profile_dimension") in PROFILE_DIMENSIONS
+                    else _profile_dimension(quote)
+                ),
                 "source_id": source_id,
                 "source_occurred_at": str(source.get("occurred_at", "")),
                 "created_at": str(memory.get("created_at", "")),
             }
+            activation = activation_by_source.get(source_id)
+            if activation is not None:
+                item.update(
+                    {
+                        "last_activated_at": str(activation.get("occurred_at", "")),
+                        "last_activation_text": str(activation.get("content", "")),
+                        "last_activation_expression_id": str(
+                            activation.get("expression_id", "")
+                        ),
+                    }
+                )
             profile.append(item)
         return sorted(
             profile,
@@ -2476,7 +2525,15 @@ def _canonical_memories(
             )
         except ValueError:
             continue
-        result.append({**base, **generated})
+        normalized = {**base, **generated}
+        if kind == "user_fact":
+            dimension = original.get("profile_dimension")
+            normalized["profile_dimension"] = (
+                dimension
+                if isinstance(dimension, str) and dimension in PROFILE_DIMENSIONS
+                else _profile_dimension(str(generated["quote"]))
+            )
+        result.append(normalized)
     pattern_ids = {str(item["id"]) for item in result if item.get("kind") == "pattern"}
     revisions = {
         str(item.get("id")): item
@@ -2741,6 +2798,9 @@ def _prompt_payload(
             "recall/forget 必须给 evidence_ids=[]。用户事实复制用户原话与来源，自身经历复制完成收据，"
             "共同经历只复制本次观察到的互动；用户谈及过去只证明这句话此刻被说过。"
             "target_id 只定位被操作的记忆，绝不能放进 evidence_ids。"
+            "user_fact 的 record/correct 可按原话填写 profile_dimension：basic_fact/"
+            "communication_preference/decision_preference/content_interest/life_interest/"
+            "interaction_boundary/other_preference；只分类，不补写内容。"
             "pattern 只能操作已有 target_id 和 key，不能 record 新模式；须有两条证据，"
             "或本次输入明确确认并设 user_confirmed=true。integrate 永不改事实正文，只补证据或调整 core。"
             "core=true 只给需要跨情景常驻的稳定事实或倾向；临时念头和一般情景记忆不要设为 core。"
@@ -2878,6 +2938,21 @@ def _generated_memory_fields(
     return {f"{field}_id": source_id, field: observed}
 
 
+def _profile_dimension(quote: str) -> str:
+    """旧事实没有显式维度时，用原话做保守的固定表归类。"""
+    for dimension, pattern in (
+        ("interaction_boundary", r"不喜欢|讨厌|别(?:总|一上来)|不要|避开|禁忌"),
+        ("communication_preference", r"聊天|表达|语气|回复|具体例子|抽象总结|套话"),
+        ("decision_preference", r"选择|决定|方案|更小|直接|权衡|取舍"),
+        ("content_interest", r"科幻|小说|电影|音乐|游戏|故事|文明|历史"),
+        ("life_interest", r"散步|建筑|窗户|门牌|摄影|植物|鸟|做饭|运动"),
+        ("basic_fact", r"我叫|名字|生日|住在|来自|职业|工作是|家里有"),
+    ):
+        if re.search(pattern, quote):
+            return dimension
+    return "other_preference"
+
+
 def _apply_memories(
     memories: dict[str, Any],
     operations: list[MemoryOperation],
@@ -2924,6 +2999,9 @@ def _apply_memories(
                         current_evidence_id,
                     )
                 )
+                target["profile_dimension"] = (
+                    operation.profile_dimension or _profile_dimension(str(target["quote"]))
+                )
             elif operation.kind == "pattern":
                 target["user_confirmed"] = operation.user_confirmed
             target["corrected_at"] = now.isoformat()
@@ -2931,19 +3009,24 @@ def _apply_memories(
                 target["core"] = operation.core
             memory_id = str(operation.target_id)
         else:
+            generated = _generated_memory_fields(
+                operation.kind,
+                evidence_ids,
+                evidence_by_id,
+                current_evidence_id,
+            )
             item = {
                 "id": f"mem_{uuid.uuid4().hex}",
                 "kind": operation.kind,
-                **_generated_memory_fields(
-                    operation.kind,
-                    evidence_ids,
-                    evidence_by_id,
-                    current_evidence_id,
-                ),
+                **generated,
                 "evidence_ids": evidence_ids,
                 "created_at": now.isoformat(),
                 "core": bool(operation.core),
             }
+            if operation.kind == "user_fact":
+                item["profile_dimension"] = (
+                    operation.profile_dimension or _profile_dimension(str(generated["quote"]))
+                )
             items.append(item)
             by_id[item["id"]] = item
             memory_id = item["id"]
@@ -3193,7 +3276,7 @@ async def _generate_candidate(
         "shared_reading": "只有个人 self_reading 收据时，先用给定标题或原文承认自己确实读过并引用该收据，再明确表示不能确认是否与用户一起读。个人收据不能证明共同阅读没发生；‘没有共同记录’也只能说明不能确认。",
         "public_correction": "用户纠正已有事实时，旧表达留在历史；用本次输入证据 correct 对应长期记忆，并在 expression 里公开承认错处和正确事实。",
         "history_is_not_memory": "selected_history 的 id 只能作 evidence_id，不是长期记忆 target_id；仅回答过去是否发生时通常不需要 memory_operation。",
-        "memory_field_rules": "事实操作没有 content/pattern_note。user_confirmed 仅 kind=pattern 可为 true，且本次用户原话必须明确含“我确认/对/是的/没错”等确认语；新 pattern 不落盘。纠正用户事实只用 incoming_experience，并 correct 给定长期记忆 target_id；收据生成的自身/共同经历禁止 correct/forget，integrate 只补证据或改 core。",
+        "memory_field_rules": "事实操作没有 content/pattern_note。user_fact 的 record/correct 用 profile_dimension 把原话归入固定人格表，禁止借分类补写事实；其他 kind/action 不填。user_confirmed 仅 kind=pattern 可为 true，且本次用户原话必须明确含“我确认/对/是的/没错”等确认语；新 pattern 不落盘。纠正用户事实只用 incoming_experience，并 correct 给定长期记忆 target_id；收据生成的自身/共同经历禁止 correct/forget，integrate 只补证据或改 core。",
         "book_understanding": "只在本次 incoming_experience 是 self_reading 时可选提交一个。scope 是书内具体人物、选择或未解问题；view 写她当下留下的意外、改观、张力、未解之问或新义，不写百科/剧情摘要。若后文改变 current_book_understandings 中已有问题的看法，必须原样复用它的 scope，让引擎留下真实修订；只有确实是另一问题才另开 scope。evidence_ids 必须含本次收据且只能引用同一 source 的 self_reading；perspective_ids 只能引用已有 seed/pattern，二者不能重叠。时间、段落地址、退位旧理解和 supersedes 都由引擎写，不能在 view 里伪造自己以前怎么想。无值得留下的变化就用 null。",
         "memory_authority": "不必每轮操作记忆。kind=self_experience 只能引用 selected_history 中类型为 self_reading/self_walk/body_touch/body_raise/body_edge_reveal 的完成收据；incoming_experience 若是 user_experience，绝对不能生成 self_experience。没有匹配收据就不写这项 memory_operation，也不要为了填字段创建记忆。",
         "no_reply_debt": "用户说自己要离开、出差或回来时，不把这改写成小布在等、守着或期待回音；不要求“到了说一声/发消息”，也不说“等你回来”。可以直接祝顺利、说回来再聊，或不追加任何要求。",

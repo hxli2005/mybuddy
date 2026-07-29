@@ -105,24 +105,31 @@ def test_mentor_demo_uses_a_complete_clean_synthetic_memory() -> None:
     }
 
     assert "不是真实用户历史" in marker
-    assert len(facts) == 4
+    assert len(facts) == 3
     assert {item["id"] for item in facts} <= recorded
     assert all(sources[item["source_id"]] == item["quote"] for item in facts)
     assert all(item["source_id"] in acknowledged for item in facts)
     assert any("具体例子" in item["quote"] for item in facts)
     assert any("更小、更直接" in item["quote"] for item in facts)
     assert any("陌生文明" in item["quote"] for item in facts)
-    assert facts[-1]["source_id"] == "demo-source-old-buildings"
+    assert {item["profile_dimension"] for item in facts} == {
+        "communication_preference",
+        "decision_preference",
+        "content_interest",
+    }
+    assert all("老建筑" not in item["quote"] for item in facts)
 
     script = (ROOT / "scripts" / "mentor_demo.ps1").read_text(encoding="utf-8")
-    app = (ROOT / "buddyshell" / "App.xaml.cs").read_text(encoding="utf-8")
+    web = (ROOT / "mybuddy" / "mentor_demo.html").read_text(encoding="utf-8")
     assert "mentor_demo_fixture" in script
     assert "mentor-demo-runs" in script
-    assert "mentor-demo.lnk" in script
+    assert "/mentor-demo" in script
+    assert "?auto=1" in script
     assert "ValidateOnly" in script
-    assert "--mentor-demo" in app
-    assert "--shell-data-dir" in app
     assert "data\\mini" not in script
+    assert "profile_dimension" in web
+    assert "散步时我喜欢看老建筑" in web
+    assert "尚未形成" in web
 
 
 def test_edge_life_is_read_only_and_uses_a_non_speech_cue() -> None:

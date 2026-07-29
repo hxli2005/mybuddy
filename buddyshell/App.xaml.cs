@@ -27,22 +27,6 @@ public partial class App : Application
         };
         base.OnStartup(e);
 
-        var mentorDemo = e.Args.Any(
-            value => string.Equals(value, "--mentor-demo", StringComparison.OrdinalIgnoreCase));
-        if (mentorDemo)
-        {
-            var dataDirectoryIndex = Array.FindIndex(
-                e.Args,
-                value => string.Equals(
-                    value,
-                    "--shell-data-dir",
-                    StringComparison.OrdinalIgnoreCase));
-            if (dataDirectoryIndex >= 0 && dataDirectoryIndex + 1 < e.Args.Length)
-            {
-                var dataDirectory = Path.GetFullPath(e.Args[dataDirectoryIndex + 1]);
-                Environment.SetEnvironmentVariable("BUDDYSHELL_DATA_DIR", dataDirectory);
-            }
-        }
         var settings = SettingsStore.Load();
         if (!SettingsStore.HasApiKey(settings))
         {
@@ -53,7 +37,7 @@ public partial class App : Application
                 return;
             }
         }
-        var main = new MainWindow(mentorDemo);
+        var main = new MainWindow();
         MainWindow = main;
         ShutdownMode = ShutdownMode.OnMainWindowClose;
         main.Show();

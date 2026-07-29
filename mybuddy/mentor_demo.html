@@ -1,0 +1,423 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>MyBuddy · 实时个性化建模</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #16201d;
+      --muted: #68736f;
+      --line: #dce4df;
+      --paper: #fbfcf9;
+      --green: #176b4d;
+      --green-soft: #e7f4ed;
+      --amber: #a65d12;
+      --amber-soft: #fff1dd;
+      --blue: #315f85;
+      --shadow: 0 18px 50px rgba(27, 48, 40, .10);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      color: var(--ink);
+      font-family: "Microsoft YaHei UI", "PingFang SC", sans-serif;
+      background:
+        radial-gradient(circle at 8% 0%, #deeee5 0, transparent 34%),
+        radial-gradient(circle at 98% 4%, #f6e8d2 0, transparent 28%),
+        #edf2ee;
+    }
+    button, textarea { font: inherit; }
+    .page { width: min(1480px, 100%); margin: 0 auto; padding: 26px; }
+    header {
+      display: flex;
+      align-items: flex-end;
+      justify-content: space-between;
+      gap: 24px;
+      margin-bottom: 18px;
+    }
+    .eyebrow {
+      margin-bottom: 8px;
+      color: var(--green);
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: .16em;
+      text-transform: uppercase;
+    }
+    h1 { margin: 0; font-size: clamp(27px, 3vw, 43px); letter-spacing: -.045em; }
+    header p { max-width: 690px; margin: 8px 0 0; color: var(--muted); line-height: 1.65; }
+    .local {
+      flex: none;
+      padding: 9px 13px;
+      border: 1px solid #b8cdc1;
+      border-radius: 999px;
+      color: var(--green);
+      background: rgba(255,255,255,.66);
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .grid { display: grid; grid-template-columns: minmax(360px, .82fr) minmax(560px, 1.35fr); gap: 18px; }
+    .panel {
+      overflow: hidden;
+      border: 1px solid rgba(187, 201, 193, .9);
+      border-radius: 22px;
+      background: rgba(251, 252, 249, .94);
+      box-shadow: var(--shadow);
+    }
+    .panel-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      min-height: 76px;
+      padding: 18px 20px;
+      border-bottom: 1px solid var(--line);
+    }
+    .panel-head h2 { margin: 0; font-size: 18px; }
+    .panel-head p { margin: 5px 0 0; color: var(--muted); font-size: 12px; }
+    .status {
+      max-width: 290px;
+      padding: 8px 11px;
+      border-radius: 11px;
+      color: var(--blue);
+      background: #eaf1f7;
+      font-size: 12px;
+      line-height: 1.4;
+    }
+    .status.changed { color: var(--green); background: var(--green-soft); }
+    .status.busy { color: var(--amber); background: var(--amber-soft); }
+    .chat { display: grid; grid-template-rows: 1fr auto; min-height: 670px; }
+    .messages { overflow: auto; height: 520px; padding: 20px; }
+    .empty-chat { margin: 110px auto 0; max-width: 280px; color: var(--muted); text-align: center; line-height: 1.8; }
+    .message { max-width: 88%; margin-bottom: 14px; }
+    .message.user { margin-left: auto; }
+    .who { margin: 0 5px 5px; color: var(--muted); font-size: 10px; }
+    .message.user .who { text-align: right; }
+    .bubble {
+      padding: 12px 14px;
+      border-radius: 15px 15px 15px 4px;
+      background: #edf1ee;
+      line-height: 1.65;
+      white-space: pre-wrap;
+    }
+    .message.user .bubble {
+      border-radius: 15px 15px 4px 15px;
+      color: white;
+      background: var(--green);
+    }
+    .evidence-line {
+      margin-top: 6px;
+      color: var(--green);
+      font: 10px Consolas, monospace;
+    }
+    .composer { padding: 16px; border-top: 1px solid var(--line); background: #f4f7f4; }
+    textarea {
+      width: 100%;
+      min-height: 72px;
+      resize: vertical;
+      border: 1px solid #cbd6d0;
+      border-radius: 13px;
+      padding: 12px;
+      color: var(--ink);
+      background: white;
+      outline: none;
+    }
+    textarea:focus { border-color: #75a58f; box-shadow: 0 0 0 3px rgba(72, 132, 104, .12); }
+    .actions { display: flex; justify-content: space-between; gap: 10px; margin-top: 10px; }
+    .hint { align-self: center; color: var(--muted); font-size: 11px; }
+    button {
+      border: 0;
+      border-radius: 11px;
+      padding: 10px 16px;
+      color: white;
+      background: var(--green);
+      cursor: pointer;
+      font-weight: 700;
+    }
+    button:disabled { cursor: wait; opacity: .55; }
+    .profile-body { max-height: 670px; overflow: auto; padding: 16px; }
+    .legend { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 13px; }
+    .legend span { padding: 6px 9px; border-radius: 999px; color: var(--muted); background: #eef2ef; font-size: 10px; }
+    .slot {
+      display: grid;
+      grid-template-columns: 150px 1fr;
+      gap: 14px;
+      padding: 15px 13px;
+      border-top: 1px solid var(--line);
+      transition: background .35s, box-shadow .35s;
+    }
+    .slot:first-of-type { border-top: 0; }
+    .slot.changed {
+      border-radius: 14px;
+      background: var(--green-soft);
+      box-shadow: inset 3px 0 var(--green);
+    }
+    .slot.activated {
+      border-radius: 14px;
+      background: #eef5fa;
+      box-shadow: inset 3px 0 var(--blue);
+    }
+    .slot-name { font-size: 13px; font-weight: 800; }
+    .slot-desc { margin-top: 5px; color: var(--muted); font-size: 10px; line-height: 1.45; }
+    .slot-state { display: inline-block; margin-top: 8px; padding: 4px 7px; border-radius: 7px; color: var(--muted); background: #edf0ee; font-size: 9px; }
+    .slot-state.filled { color: var(--green); background: #dcefe5; }
+    .memory-card { margin-bottom: 9px; padding: 12px; border: 1px solid var(--line); border-radius: 12px; background: white; }
+    .memory-card:last-child { margin-bottom: 0; }
+    .quote { font-size: 13px; line-height: 1.62; }
+    .meta { margin-top: 8px; color: var(--muted); font-size: 9px; line-height: 1.6; }
+    details { margin-top: 8px; }
+    summary { color: var(--blue); cursor: pointer; font-size: 10px; }
+    code { word-break: break-all; font: 9px Consolas, monospace; }
+    .empty-slot { padding: 12px; border: 1px dashed #cbd4cf; border-radius: 12px; color: #8a938f; font-size: 12px; }
+    .error { color: #a23427; background: #faeae7; }
+    @media (max-width: 980px) {
+      .grid { grid-template-columns: 1fr; }
+      .chat { min-height: 570px; }
+      .messages { height: 410px; }
+    }
+    @media (max-width: 600px) {
+      .page { padding: 14px; }
+      header { align-items: flex-start; flex-direction: column; }
+      .slot { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <header>
+      <div>
+        <div class="eyebrow">Personalize · observable learning</div>
+        <h1>实时个性化建模</h1>
+        <p>人格表先有固定结构，再随真实聊天逐格形成。每一格都能回到用户原话；没有证据，就保持空白。</p>
+      </div>
+      <div class="local">本机运行 · 四文件权威 · 无人格总分</div>
+    </header>
+
+    <section class="grid">
+      <article class="panel chat">
+        <div>
+          <div class="panel-head">
+            <div><h2>聊天</h2><p>回答完成后，右侧立即刷新</p></div>
+            <div id="chatStatus" class="status">等待一条真实对话</div>
+          </div>
+          <div id="messages" class="messages" data-testid="messages">
+            <div class="empty-chat">可以明确告诉她一项长期偏好。<br>如果本轮没有形成可靠信息，右侧不会为了填表而猜。</div>
+          </div>
+        </div>
+        <form id="composer" class="composer">
+          <textarea id="messageInput" data-testid="message-input" maxlength="4000"
+            placeholder="例如：散步时我喜欢看老建筑被换过、补过的窗户和门牌。"></textarea>
+          <div class="actions">
+            <span class="hint">Enter 发送 · Shift+Enter 换行</span>
+            <button id="sendButton" data-testid="send-button" type="submit">发送并观察变化</button>
+          </div>
+        </form>
+      </article>
+
+      <article class="panel">
+        <div class="panel-head">
+          <div><h2>用户人格表</h2><p>固定维度 · 渐进填充 · 原话可追溯</p></div>
+          <div id="profileStatus" class="status" data-testid="profile-status">正在读取当前人格表…</div>
+        </div>
+        <div class="profile-body">
+          <div class="legend">
+            <span>已形成：存在有效用户原话</span>
+            <span>尚未形成：没有可靠证据</span>
+            <span>蓝色：本轮回答刚刚激活</span>
+          </div>
+          <div id="profileTable" data-testid="profile-table"></div>
+        </div>
+      </article>
+    </section>
+  </main>
+
+  <script>
+    const dimensions = [
+      ["basic_fact", "基本事实", "姓名、地点等用户明确陈述的稳定事实"],
+      ["communication_preference", "表达偏好", "希望怎样被回应、怎样组织信息"],
+      ["decision_preference", "决策偏好", "用户明确表达的选择与权衡习惯"],
+      ["content_interest", "内容兴趣", "作品、话题与长期关注方向"],
+      ["life_interest", "生活兴趣", "日常观察、活动与稳定爱好"],
+      ["interaction_boundary", "互动边界", "用户明确说出的避雷与边界"],
+      ["other_preference", "其他明确偏好", "有原话依据但暂不属于以上维度"],
+    ];
+    const livePreference = "有个长期偏好想告诉你：散步时我喜欢看老建筑的窗户和门牌，尤其会留意后来被换过、补过的细节。";
+    const ui = {
+      form: document.querySelector("#composer"),
+      input: document.querySelector("#messageInput"),
+      send: document.querySelector("#sendButton"),
+      messages: document.querySelector("#messages"),
+      chatStatus: document.querySelector("#chatStatus"),
+      profileStatus: document.querySelector("#profileStatus"),
+      table: document.querySelector("#profileTable"),
+    };
+    let profile = [];
+    let busy = false;
+    let activeEvidence = [];
+
+    function esc(value) {
+      return String(value ?? "").replace(/[&<>"']/g, char => ({
+        "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+      })[char]);
+    }
+
+    function setStatus(node, text, kind = "") {
+      node.textContent = text;
+      node.className = `status ${kind}`.trim();
+    }
+
+    function addMessage(role, text, expression = null) {
+      const placeholder = ui.messages.querySelector(".empty-chat");
+      if (placeholder) placeholder.remove();
+      const evidence = expression?.evidence_ids?.length
+        ? `<div class="evidence-line">采用证据：${esc(expression.evidence_ids.join(", "))}</div>`
+        : "";
+      ui.messages.insertAdjacentHTML("beforeend", `
+        <div class="message ${role}">
+          <div class="who">${role === "user" ? "你" : "小布"}</div>
+          <div class="bubble">${esc(text)}${evidence}</div>
+        </div>`);
+      ui.messages.scrollTop = ui.messages.scrollHeight;
+    }
+
+    async function bodyStep(payload) {
+      const response = await fetch("/api/body/step", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const text = await response.text();
+      if (!response.ok) throw new Error(`身体桥 ${response.status}：${text}`);
+      return JSON.parse(text);
+    }
+
+    function renderProfile(previous = [], changeLabel = "") {
+      const previousById = new Map(previous.map(item => [item.memory_id, item]));
+      const changedIds = new Set((changeLabel ? profile : []).filter(item => {
+        const old = previousById.get(item.memory_id);
+        return !old || old.quote !== item.quote || old.profile_dimension !== item.profile_dimension;
+      }).map(item => item.memory_id));
+      const currentIds = new Set(profile.map(item => item.memory_id));
+      const removed = changeLabel ? previous.filter(item => !currentIds.has(item.memory_id)) : [];
+      const removedDimensions = new Set(removed.map(item => item.profile_dimension));
+      let activatedLabel = "";
+
+      ui.table.innerHTML = dimensions.map(([key, label, description]) => {
+        const items = profile.filter(item => item.profile_dimension === key);
+        const changed = items.some(item => changedIds.has(item.memory_id)) || removedDimensions.has(key);
+        const activated = items.some(item => activeEvidence.includes(item.source_id));
+        if (activated) activatedLabel = label;
+        const cards = items.length ? items.map(item => `
+          <div class="memory-card">
+            <div class="quote">${esc(item.quote)}</div>
+            <div class="meta">
+              形成于 ${esc(formatTime(item.source_occurred_at || item.created_at))}
+              ${activeEvidence.includes(item.source_id) ? " · 本轮回答刚刚采用" : ""}
+            </div>
+            <details>
+              <summary>查看原话与形成证据</summary>
+              <div class="meta">用户原话：${esc(item.quote)}</div>
+              <div class="meta">source_id：<code>${esc(item.source_id)}</code></div>
+              ${item.last_activation_text ? `<div class="meta">最近激活：${esc(item.last_activation_text)}</div>` : ""}
+            </details>
+          </div>`).join("") : `<div class="empty-slot">尚未形成——没有证据就不填</div>`;
+        return `
+          <section class="slot ${changed ? "changed" : ""} ${activated ? "activated" : ""}"
+                   data-dimension="${key}">
+            <div>
+              <div class="slot-name">${label}</div>
+              <div class="slot-desc">${description}</div>
+              <span class="slot-state ${items.length ? "filled" : ""}">${items.length ? `已形成 ${items.length} 条` : "尚未形成"}</span>
+            </div>
+            <div>${cards}</div>
+          </section>`;
+      }).join("");
+
+      if (changedIds.size || removed.length) {
+        setStatus(ui.profileStatus, `${changeLabel || "本轮"}：人格表发生 ${changedIds.size + removed.length} 处有据变化`, "changed");
+      } else if (activatedLabel) {
+        setStatus(ui.profileStatus, `人格未被改写；本轮激活了“${activatedLabel}”`, "changed");
+      } else if (changeLabel) {
+        setStatus(ui.profileStatus, `${changeLabel}：没有足够证据形成长期变化`);
+      } else {
+        setStatus(ui.profileStatus, `当前已有 ${profile.length} 条有据画像`);
+      }
+    }
+
+    function formatTime(value) {
+      const date = new Date(value);
+      return Number.isNaN(date.valueOf()) ? (value || "时间未知") :
+        new Intl.DateTimeFormat("zh-CN", { dateStyle: "medium", timeStyle: "short" }).format(date);
+    }
+
+    async function refreshProfile(previous = [], label = "") {
+      const response = await bodyStep({ include_user_profile: true });
+      profile = response.user_profile || [];
+      renderProfile(previous, label);
+    }
+
+    async function sendChat(text, label = "本轮聊天") {
+      if (busy || !text.trim()) return;
+      busy = true;
+      ui.send.disabled = true;
+      ui.input.disabled = true;
+      addMessage("user", text.trim());
+      setStatus(ui.chatStatus, "模型正在回答并提取有据变化…", "busy");
+      const before = profile.map(item => ({ ...item }));
+      try {
+        const response = await bodyStep({
+          presence: { present: true, fullscreen: false, surface: "full" },
+          event: { event_id: `web-${crypto.randomUUID()}`, type: "chat", content: text.trim() },
+        });
+        if (!response.expression) throw new Error("本轮没有产生可显示回答");
+        activeEvidence = response.expression.evidence_ids || [];
+        addMessage("buddy", response.expression.text, response.expression);
+        await bodyStep({
+          shown_id: response.expression.id,
+          presence: { present: true, fullscreen: false, surface: "full" },
+        });
+        await refreshProfile(before, label);
+        setStatus(ui.chatStatus, `回答已显示 · ${response.mind_status === "accepted" ? "人格写入已校验" : "本轮未提交人格变化"}`, "changed");
+      } catch (error) {
+        setStatus(ui.chatStatus, error.message, "error");
+        setStatus(ui.profileStatus, "本轮失败，未把候选变化显示成已形成", "error");
+        throw error;
+      } finally {
+        busy = false;
+        ui.send.disabled = false;
+        ui.input.disabled = false;
+        ui.input.focus();
+      }
+    }
+
+    ui.form.addEventListener("submit", event => {
+      event.preventDefault();
+      const value = ui.input.value;
+      ui.input.value = "";
+      sendChat(value).catch(() => {});
+    });
+    ui.input.addEventListener("keydown", event => {
+      if (event.key === "Enter" && !event.shiftKey) {
+        event.preventDefault();
+        ui.form.requestSubmit();
+      }
+    });
+
+    async function start() {
+      await refreshProfile();
+      if (new URLSearchParams(location.search).get("auto") === "1") {
+        await new Promise(resolve => setTimeout(resolve, 1400));
+        await sendChat(livePreference, "第一步：新偏好当轮形成");
+        await new Promise(resolve => setTimeout(resolve, 1800));
+        await sendChat("你好", "第二步：新偏好被再次激活");
+      }
+    }
+    start().catch(error => {
+      setStatus(ui.chatStatus, error.message, "error");
+      setStatus(ui.profileStatus, "读取失败；四文件没有被页面改写", "error");
+    });
+  </script>
+</body>
+</html>

@@ -1,4 +1,4 @@
-# 一键导师演示：干净合成记忆 → 画像证据 → 个性化问候 → shown → 十点报告。
+# 一键导师演示：三格既有画像 → 聊天当轮填格 → 新偏好激活 → shown → 十点报告。
 # 每次运行复制新的临时目录；不读取或改写日常 mind 数据。
 param(
     [int]$Port = 8876,
@@ -31,13 +31,12 @@ $RunRoot = Join-Path $Root (
     "data\mentor-demo-runs\" + (Get-Date -Format "yyyyMMdd-HHmmss")
 )
 $MindDir = Join-Path $RunRoot "mind"
-$ShellDataDir = Join-Path $RunRoot "shell"
 $ServerOut = Join-Path $RunRoot "server.stdout.log"
 $ServerErr = Join-Path $RunRoot "server.stderr.log"
 $Url = "http://127.0.0.1:$Port/api/body/step"
+$DemoUrl = "http://127.0.0.1:$Port/mentor-demo"
+$LivePreference = "有个长期偏好想告诉你：散步时我喜欢看老建筑的窗户和门牌，尤其会留意后来被换过、补过的细节。"
 $engine = $null
-$demoShell = $null
-$previousShellPaths = @()
 
 function Resolve-FirstFile([string[]]$Candidates, [string]$Label) {
     foreach ($candidate in $Candidates) {
@@ -110,6 +109,28 @@ function Wait-Bridge {
     throw "演示心智未在 30 秒内监听 $Port"
 }
 
+function Invoke-ChatAndShow([string]$Content, [string]$Prefix) {
+    $eventBody = [ordered]@{
+        presence = [ordered]@{ present = $true; fullscreen = $false; surface = "full" }
+        event = [ordered]@{
+            event_id = "$Prefix-" + [Guid]::NewGuid().ToString("N")
+            type = "chat"
+            content = $Content
+        }
+    } | ConvertTo-Json -Depth 10 -Compress
+    $response = Invoke-BodyStep $eventBody
+    if ($response.event_status -ne "processed" -or -not $response.expression) {
+        throw "真实聊天没有生成可显示回答：$($response | ConvertTo-Json -Depth 10)"
+    }
+    $shownBody = [ordered]@{
+        shown_id = [string]$response.expression.id
+        presence = [ordered]@{ present = $true; fullscreen = $false; surface = "full" }
+    } | ConvertTo-Json -Depth 10 -Compress
+    $shown = Invoke-BodyStep $shownBody
+    if (-not $shown.shown_confirmed) { throw "回答未完成 shown 确认" }
+    return $response
+}
+
 function Stop-ProcessIfRunning($Process) {
     if ($Process -and -not $Process.HasExited) {
         Stop-Process -Id $Process.Id -Force -ErrorAction SilentlyContinue
@@ -131,14 +152,6 @@ function Stop-DemoBridge {
     }
 }
 
-function Restore-PreviousShells {
-    foreach ($path in $previousShellPaths | Select-Object -Unique) {
-        if (Test-Path -LiteralPath $path -PathType Leaf) {
-            Start-Process -FilePath $path -WorkingDirectory (Split-Path -Parent $path)
-        }
-    }
-}
-
 if (-not (Test-PortAvailable $Port)) { throw "端口 $Port 已被占用，请用 -Port 指定空闲端口" }
 foreach ($name in @(
     "DEMO_DATA.md", "state.json", "history.jsonl", "memories.json", "failures.jsonl"
@@ -152,22 +165,12 @@ $Python = Resolve-FirstFile @(
     (Join-Path $Root ".venv\Scripts\python.exe"),
     (Join-Path $MainWorktree ".venv\Scripts\python.exe")
 ) "Python"
-$Dotnet = Resolve-FirstFile @(
-    (Join-Path $Root ".dotnet-sdk\dotnet.exe"),
-    (Join-Path $MainWorktree ".dotnet-sdk\dotnet.exe")
-) ".NET SDK"
 $Config = Resolve-FirstFile @(
     (Join-Path $Root "config.yaml"),
     (Join-Path $MainWorktree "config.yaml")
 ) "config.yaml"
-$ShellProject = Join-Path $Root "buddyshell\BuddyShell.csproj"
-$ShellExe = Join-Path $Root "buddyshell\bin\Debug\net8.0-windows\BuddyShell.exe"
-$SourceSettings = Join-Path $env:APPDATA "MyBuddy\settings.json"
-if (-not (Test-Path -LiteralPath $SourceSettings -PathType Leaf)) {
-    throw "缺少 $SourceSettings；请先正常启动一次桌面壳并保存 API key"
-}
 
-New-Item -ItemType Directory -Path $MindDir, $ShellDataDir | Out-Null
+New-Item -ItemType Directory -Path $MindDir | Out-Null
 foreach ($name in @(
     "DEMO_DATA.md", "state.json", "history.jsonl", "memories.json", "failures.jsonl"
 )) {
@@ -180,20 +183,6 @@ $state.last_step_at = [DateTimeOffset]::Now.ToString("yyyy-MM-ddTHH:mm:ss.ffffff
 [IO.File]::WriteAllText(
     $statePath,
     ($state | ConvertTo-Json -Depth 20),
-    [Text.UTF8Encoding]::new($false)
-)
-
-$settings = Get-Content -LiteralPath $SourceSettings -Raw -Encoding UTF8 | ConvertFrom-Json
-if ([string]::IsNullOrWhiteSpace([string]$settings.ProtectedApiKey)) {
-    throw "现有桌面设置没有可用的受保护 API key"
-}
-$settings.BridgeUrl = "http://127.0.0.1:$Port"
-$settings.LastShownId = $null
-$settings.EdgeSide = $null
-$settings.EdgeTopRatio = $null
-[IO.File]::WriteAllText(
-    (Join-Path $ShellDataDir "settings.json"),
-    ($settings | ConvertTo-Json -Depth 20),
     [Text.UTF8Encoding]::new($false)
 )
 
@@ -223,7 +212,7 @@ try {
     foreach ($item in $history | Where-Object { $_.type -eq "user_experience" }) {
         $sources[[string]$item.id] = [string]$item.content
     }
-    $profileEvidenceMatches = @($profile.user_profile).Count -eq 4
+    $profileEvidenceMatches = @($profile.user_profile).Count -eq 3
     foreach ($item in @($profile.user_profile)) {
         if (-not $sources.ContainsKey([string]$item.source_id) -or
             $sources[[string]$item.source_id] -ne [string]$item.quote) {
@@ -232,6 +221,13 @@ try {
     }
     $profileJson = $profile | ConvertTo-Json -Depth 10
     $noScores = $profileJson -notmatch '"(score|relationship|warmth|personality)"'
+    $initialDimensions = @($profile.user_profile | ForEach-Object { $_.profile_dimension })
+    $fixedInitialTable = (
+        $initialDimensions -contains "communication_preference" -and
+        $initialDimensions -contains "decision_preference" -and
+        $initialDimensions -contains "content_interest" -and
+        $initialDimensions -notcontains "life_interest"
+    )
 
     if ($ValidateOnly) {
         $validationChecks = [ordered]@{
@@ -240,7 +236,8 @@ try {
                 "state.json", "history.jsonl", "memories.json", "failures.jsonl" |
                     Where-Object { Test-Path -LiteralPath (Join-Path $MindDir $_) }
             ).Count -eq 4
-            "画像 4 条" = @($profile.user_profile).Count -eq 4
+            "三格历史画像" = @($profile.user_profile).Count -eq 3
+            "生活兴趣初始为空" = $fixedInitialTable
             "每条画像匹配原话" = $profileEvidenceMatches
             "画像查看不修改四文件" = (Test-HashesEqual $before $after)
             "无性格标签或关系总分" = $noScores
@@ -258,21 +255,17 @@ try {
     }
 
     if ($HeadlessDemo) {
-        $eventId = "mentor-headless-" + [Guid]::NewGuid().ToString("N")
-        $eventBody = [ordered]@{
-            presence = [ordered]@{ present = $true; fullscreen = $false; surface = "full" }
-            event = [ordered]@{ event_id = $eventId; type = "chat"; content = "你好" }
-        } | ConvertTo-Json -Depth 10 -Compress
-        $response = Invoke-BodyStep $eventBody
-        if ($response.event_status -ne "processed" -or -not $response.expression) {
-            throw "无界面演示没有生成可显示回答：$($response | ConvertTo-Json -Depth 10)"
-        }
-        $shownBody = [ordered]@{
-            shown_id = [string]$response.expression.id
-            presence = [ordered]@{ present = $true; fullscreen = $false; surface = "full" }
-        } | ConvertTo-Json -Depth 10 -Compress
-        $shown = Invoke-BodyStep $shownBody
-        if (-not $shown.shown_confirmed) { throw "无界面演示未完成 shown 确认" }
+        $learnedResponse = Invoke-ChatAndShow $LivePreference "mentor-learn"
+        $learnedProfile = Invoke-BodyStep '{"include_user_profile":true}'
+        $learned = @(
+            $learnedProfile.user_profile |
+                Where-Object {
+                    $_.profile_dimension -eq "life_interest" -and
+                    $_.quote -eq $LivePreference
+                }
+        ) | Select-Object -Last 1
+        if (-not $learned) { throw "真实聊天后生活兴趣没有当轮形成" }
+        $greetingResponse = Invoke-ChatAndShow "你好" "mentor-recall"
         $headlessHistory = Get-Content -LiteralPath (Join-Path $MindDir "history.jsonl") -Encoding UTF8 |
             Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
             ForEach-Object { $_ | ConvertFrom-Json }
@@ -281,78 +274,53 @@ try {
                 Where-Object {
                     $_.type -eq "shared_expression" -and
                     $_.expression_act -eq "grounded_recall" -and
-                    @($_.expression_evidence_ids) -contains "demo-source-old-buildings"
+                    @($_.expression_evidence_ids) -contains [string]$learned.source_id
                 }
         ) | Select-Object -Last 1
         if (-not $grounded) { throw "无界面演示回答没有绑定老建筑偏好的原话证据" }
-        "PASS 真实模型生成 grounded_recall"
-        "PASS 回答绑定 demo-source-old-buildings"
+        "PASS 真实聊天当轮形成生活兴趣"
+        "PASS 人格表从 3 条增长到 $(@($learnedProfile.user_profile).Count) 条"
+        "PASS 下一句问候生成 grounded_recall"
+        "PASS 回答绑定 $($learned.source_id)"
         "PASS shown 后进入共同历史"
+        "形成时她实际显示的话：$($learnedResponse.expression.text)"
         "她实际显示的话：$($grounded.content)"
         "证据目录：$RunRoot"
         exit 0
     }
 
-    $runningShells = @(Get-Process -Name BuddyShell -ErrorAction SilentlyContinue)
-    $previousShellPaths = @(
-        $runningShells |
-            Where-Object { $_.Path -and (Test-Path -LiteralPath $_.Path -PathType Leaf) } |
-            ForEach-Object { $_.Path }
-    )
-    foreach ($running in $runningShells) {
-        Stop-Process -Id $running.Id -Force
+    $page = Invoke-WebRequest -UseBasicParsing -Uri $DemoUrl
+    if ($page.StatusCode -ne 200 -or $page.Content -notmatch "实时个性化建模") {
+        throw "实时人格表页面未正确提供"
     }
-    if ($runningShells.Count -gt 0) { Start-Sleep -Seconds 1 }
+    Start-Process -FilePath "$DemoUrl`?auto=1"
 
-    & $Dotnet build $ShellProject --no-restore
-    if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $ShellExe -PathType Leaf)) {
-        throw "BuddyShell 构建失败"
+    $learned = $null
+    $greeting = $null
+    foreach ($attempt in 1..$MaxSeconds) {
+        Start-Sleep -Seconds 1
+        $currentProfile = Invoke-BodyStep '{"include_user_profile":true}'
+        $learned = @(
+            $currentProfile.user_profile |
+                Where-Object {
+                    $_.profile_dimension -eq "life_interest" -and
+                    $_.quote -eq $LivePreference
+                }
+        ) | Select-Object -Last 1
+        if (-not $learned) { continue }
+        $resultHistory = Get-Content -LiteralPath (Join-Path $MindDir "history.jsonl") -Encoding UTF8 |
+            Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+            ForEach-Object { $_ | ConvertFrom-Json }
+        $greeting = @(
+            $resultHistory |
+                Where-Object {
+                    $_.type -eq "shared_expression" -and
+                    $_.expression_act -eq "grounded_recall" -and
+                    @($_.expression_evidence_ids) -contains [string]$learned.source_id
+                }
+        ) | Select-Object -Last 1
+        if ($greeting) { break }
     }
-
-    $shortcutPath = Join-Path $RunRoot "mentor-demo.lnk"
-    $shortcutHost = New-Object -ComObject WScript.Shell
-    $shortcut = $shortcutHost.CreateShortcut($shortcutPath)
-    $shortcut.TargetPath = $ShellExe
-    $shortcut.Arguments = "--mentor-demo --shell-data-dir `"$ShellDataDir`""
-    $shortcut.WorkingDirectory = Split-Path -Parent $ShellExe
-    $shortcut.Save()
-
-    $knownShellIds = @(
-        Get-Process -Name BuddyShell -ErrorAction SilentlyContinue |
-            ForEach-Object { $_.Id }
-    )
-    Start-Process -FilePath $shortcutPath
-    foreach ($attempt in 1..60) {
-        Start-Sleep -Milliseconds 250
-        $demoShell = Get-Process -Name BuddyShell -ErrorAction SilentlyContinue |
-            Where-Object {
-                $_.Id -notin $knownShellIds -and
-                $_.Path -eq $ShellExe
-            } |
-            Select-Object -First 1
-        if ($demoShell) { break }
-    }
-    if (-not $demoShell) { throw "Explorer 未能启动自动演示壳" }
-
-    if (-not $demoShell.WaitForExit($MaxSeconds * 1000)) {
-        throw "自动演示超过 $MaxSeconds 秒"
-    }
-
-    $shellLog = Join-Path $ShellDataDir ("logs\" + (Get-Date -Format "yyyy-MM-dd") + ".log")
-    $logText = if (Test-Path -LiteralPath $shellLog) {
-        Get-Content -LiteralPath $shellLog -Raw -Encoding UTF8
-    } else { "" }
-    $resultHistory = Get-Content -LiteralPath (Join-Path $MindDir "history.jsonl") -Encoding UTF8 |
-        Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
-        ForEach-Object { $_ | ConvertFrom-Json }
-    $greeting = @(
-        $resultHistory |
-            Where-Object {
-                $_.type -eq "shared_expression" -and
-                $_.expression_act -eq "grounded_recall" -and
-                @($_.expression_evidence_ids) -contains "demo-source-old-buildings"
-            }
-    ) | Select-Object -Last 1
 
     $checks = [ordered]@{
         "1 合成数据已披露" = (Test-Path -LiteralPath (Join-Path $MindDir "DEMO_DATA.md"))
@@ -360,14 +328,14 @@ try {
             "state.json", "history.jsonl", "memories.json", "failures.jsonl" |
                 Where-Object { Test-Path -LiteralPath (Join-Path $MindDir $_) }
         ).Count -eq 4
-        "3 画像恰好四条" = @($profile.user_profile).Count -eq 4
-        "4 画像逐条匹配原话" = $profileEvidenceMatches
-        "5 查看画像不改四文件" = (Test-HashesEqual $before $after)
-        "6 无性格标签和关系总分" = $noScores
-        "7 真实 WPF 自动演示启动" = $logText -match "event=mentor_demo_started"
-        "8 画像窗口实际打开" = $logText -match "event=user_profile_opened items=4"
-        "9 问候回答实际显示" = $logText -match "event=bubble_shown"
-        "10 主动话题绑定原话证据" = $null -ne $greeting
+        "3 固定人格表页面已打开" = $page.Content -match "尚未形成"
+        "4 初始三格画像逐条匹配原话" = $profileEvidenceMatches
+        "5 生活兴趣初始为空" = $fixedInitialTable
+        "6 查看人格表不改四文件" = (Test-HashesEqual $before $after)
+        "7 真实聊天当轮形成生活兴趣" = $null -ne $learned
+        "8 新人格内容逐字来自本轮原话" = ($learned -and $learned.quote -eq $LivePreference)
+        "9 下一句问候激活刚形成的偏好" = $null -ne $greeting
+        "10 激活回答 shown 后进入共同历史" = ($greeting -and $greeting.expression_id)
     }
 
     ""
@@ -391,7 +359,5 @@ try {
     if ($failed -gt 0) { throw "自动演示有 $failed 项未通过" }
 }
 finally {
-    Stop-ProcessIfRunning $demoShell
     Stop-DemoBridge
-    if (-not $ValidateOnly) { Restore-PreviousShells }
 }

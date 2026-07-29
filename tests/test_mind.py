@@ -553,6 +553,37 @@ async def test_valid_bundle_commits_whole_bundle_but_not_unshown_expression(tmp_
 
 
 @pytest.mark.asyncio
+async def test_user_fact_fills_one_fixed_profile_dimension_from_the_same_turn(tmp_path) -> None:
+    files = MindFiles(tmp_path)
+    bundle = _valid_bundle("记下了，我以后先落到具体例子。")
+    bundle["memory_operations"][0]["profile_dimension"] = "communication_preference"
+
+    result = await mind_step(
+        "聊天时我喜欢先听一个具体例子，再听抽象总结。",
+        provider=StubProvider([bundle]),
+        files=files,
+    )
+
+    _, history, memories, failures = _read(files)
+    learned = _learned_items(memories)[0]
+    assert result.committed is True
+    assert learned["profile_dimension"] == "communication_preference"
+    assert learned["quote"] == history[0]["content"]
+    assert learned["source_id"] == history[0]["id"]
+    assert failures == []
+
+
+def test_profile_dimension_cannot_be_written_by_non_user_memory() -> None:
+    bundle = _valid_bundle()
+    bundle["memory_operations"][0].update(
+        {"kind": "self_experience", "profile_dimension": "life_interest"}
+    )
+
+    with pytest.raises(ValueError, match="profile_dimension only applies"):
+        CandidateBundle.model_validate(bundle)
+
+
+@pytest.mark.asyncio
 async def test_user_statement_about_past_is_only_a_sourced_quote(tmp_path) -> None:
     files = MindFiles(tmp_path)
     bundle = _valid_bundle("我不能确认这件事发生过。")
