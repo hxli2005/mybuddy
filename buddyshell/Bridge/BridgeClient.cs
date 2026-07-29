@@ -5,7 +5,10 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 namespace BuddyShell.Bridge;
 public sealed class BridgeClient(ShellSettings settings) : IDisposable {
-    private readonly HttpClient _http = new(new HttpClientHandler { UseProxy = false });
+    private static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(120);
+    private readonly HttpClient _http = new(new HttpClientHandler { UseProxy = false }) {
+        Timeout = Timeout.InfiniteTimeSpan,
+    };
     private readonly JsonSerializerOptions _json = new() {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
         PropertyNameCaseInsensitive = true,
@@ -17,28 +20,25 @@ public sealed class BridgeClient(ShellSettings settings) : IDisposable {
         BodyStepRequest body,
         CancellationToken cancellationToken = default) {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeout.CancelAfter(TimeSpan.FromSeconds(15));
+        timeout.CancelAfter(RequestTimeout);
         using var request = new HttpRequestMessage(HttpMethod.Post, BuildUri());
         request.Content = new StringContent(
             JsonSerializer.Serialize(body, _json),
             Encoding.UTF8,
             "application/json");
-        HttpResponseMessage response;
         try {
-            response = await _http.SendAsync(request, timeout.Token).ConfigureAwait(false);
+            using var response = await _http.SendAsync(request, timeout.Token).ConfigureAwait(false);
+            var text = await response.Content.ReadAsStringAsync(timeout.Token).ConfigureAwait(false);
+            if (!response.IsSuccessStatusCode)
+                throw new BridgeRequestException($"MyBuddy bridge returned {(int)response.StatusCode}: {text}", (int)response.StatusCode);
+            return JsonSerializer.Deserialize<BodyStepResponse>(text, _json)
+                ?? throw new BridgeRequestException("MyBuddy bridge returned an empty response.");
         }
         catch (OperationCanceledException exception) when (!cancellationToken.IsCancellationRequested) {
             throw new BridgeRequestException("MyBuddy bridge request timed out.", null, exception);
         }
         catch (HttpRequestException exception) {
             throw new BridgeRequestException("MyBuddy bridge is unreachable.", null, exception);
-        }
-        using (response) {
-            var text = await response.Content.ReadAsStringAsync(timeout.Token).ConfigureAwait(false);
-            if (!response.IsSuccessStatusCode)
-                throw new BridgeRequestException($"MyBuddy bridge returned {(int)response.StatusCode}: {text}", (int)response.StatusCode);
-            return JsonSerializer.Deserialize<BodyStepResponse>(text, _json)
-                ?? throw new BridgeRequestException("MyBuddy bridge returned an empty response.");
         }
     }
     private Uri BuildUri() {

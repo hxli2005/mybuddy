@@ -75,6 +75,17 @@ def test_shell_immediately_discards_ambient_blocked_at_presentation_time() -> No
     assert "Presence = presence" in window
 
 
+def test_shell_body_step_has_one_model_length_timeout() -> None:
+    bridge = (ROOT / "buddyshell" / "Bridge" / "BridgeClient.cs").read_text(encoding="utf-8")
+
+    timeout = re.search(r"RequestTimeout = TimeSpan\.FromSeconds\((\d+)\)", bridge)
+    assert timeout is not None
+    assert int(timeout.group(1)) >= 120
+    assert "Timeout = Timeout.InfiniteTimeSpan" in bridge
+    assert bridge.count("CancelAfter(") == 1
+    assert "CancelAfter(RequestTimeout)" in bridge
+
+
 def test_machine_side_stays_under_owner_limit() -> None:
     files = [
         path
