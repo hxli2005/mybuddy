@@ -50,6 +50,7 @@ buddyshell/obj/
 buddyshell.Tests/bin/
 buddyshell.Tests/obj/
 .tmp/
+.owner-evidence/
 
 config.yaml
 
