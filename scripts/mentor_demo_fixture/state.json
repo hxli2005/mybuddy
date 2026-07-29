@@ -1,0 +1,23 @@
+{
+  "identity": {
+    "name": "小布"
+  },
+  "last_step_at": "2026-07-29T09:00:00+08:00",
+  "condition": {
+    "mood": "好奇",
+    "energy": "平稳",
+    "attention": "空闲"
+  },
+  "reading": {
+    "source": "reading.txt",
+    "title": "公开演示读本",
+    "next_passage": 0,
+    "total_passages": 3,
+    "finished": false
+  },
+  "next_activity": "read",
+  "pending_activity": null,
+  "pending_expression": null,
+  "recent_event_ids": [],
+  "recent_activity_ids": []
+}

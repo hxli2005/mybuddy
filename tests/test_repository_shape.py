@@ -1,3 +1,4 @@
+import json
 import re
 from pathlib import Path
 
@@ -74,6 +75,54 @@ def test_user_profile_is_an_on_demand_view_not_a_fifth_authority() -> None:
     assert "她记得的你" in shell
     assert "查看原话来源" in shell
     assert "user_profile.json" not in "\n".join((bridge, files, shell))
+
+
+def test_mentor_demo_uses_a_complete_clean_synthetic_memory() -> None:
+    fixture = ROOT / "scripts" / "mentor_demo_fixture"
+    marker = (fixture / "DEMO_DATA.md").read_text(encoding="utf-8")
+    memories = json.loads((fixture / "memories.json").read_text(encoding="utf-8"))
+    history = [
+        json.loads(line)
+        for line in (fixture / "history.jsonl").read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    sources = {
+        item["id"]: item["content"]
+        for item in history
+        if item.get("type") == "user_experience"
+    }
+    facts = [item for item in memories["items"] if item.get("kind") == "user_fact"]
+    recorded = {
+        item["memory_id"]
+        for item in history
+        if item.get("type") == "memory_operation" and item.get("action") == "record"
+    }
+    acknowledged = {
+        evidence_id
+        for item in history
+        if item.get("type") == "shared_expression"
+        for evidence_id in item.get("expression_evidence_ids", [])
+    }
+
+    assert "不是真实用户历史" in marker
+    assert len(facts) == 4
+    assert {item["id"] for item in facts} <= recorded
+    assert all(sources[item["source_id"]] == item["quote"] for item in facts)
+    assert all(item["source_id"] in acknowledged for item in facts)
+    assert any("具体例子" in item["quote"] for item in facts)
+    assert any("更小、更直接" in item["quote"] for item in facts)
+    assert any("陌生文明" in item["quote"] for item in facts)
+    assert facts[-1]["source_id"] == "demo-source-old-buildings"
+
+    script = (ROOT / "scripts" / "mentor_demo.ps1").read_text(encoding="utf-8")
+    app = (ROOT / "buddyshell" / "App.xaml.cs").read_text(encoding="utf-8")
+    assert "mentor_demo_fixture" in script
+    assert "mentor-demo-runs" in script
+    assert "mentor-demo.lnk" in script
+    assert "ValidateOnly" in script
+    assert "--mentor-demo" in app
+    assert "--shell-data-dir" in app
+    assert "data\\mini" not in script
 
 
 def test_edge_life_is_read_only_and_uses_a_non_speech_cue() -> None:
