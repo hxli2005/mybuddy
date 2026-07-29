@@ -104,6 +104,41 @@ class RejectingProvider(BaseLLMProvider):
         return LLMResponse(tool_calls=[ToolCall(id="bad", name="submit_mind_bundle", arguments={})])
 
 
+class PersonalizedAmbientProvider(BaseLLMProvider):
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def generate(self, messages, tools=None, **kwargs):  # noqa: ANN001, ANN202
+        self.calls += 1
+        incoming = json.loads(messages[0].content.split("\n上一个", 1)[0])[
+            "incoming_experience"
+        ]
+        assert incoming["id"] == "user-pref-birds"
+        assert "长期" in kwargs["system"] and "user_fact" in kwargs["system"]
+        expression = (
+            "你之前说最近喜欢观察鸟。最近这边总下雨，鸟大概都躲起来了。"
+            if self.calls == 1
+            else "你之前说过最近喜欢观察鸟。你会先留意它落在哪里，还是怎么飞过去？"
+        )
+        return LLMResponse(
+            tool_calls=[
+                ToolCall(
+                    id="personalized-ambient",
+                    name="submit_mind_bundle",
+                    arguments={
+                        "action_choice": None,
+                        "state_changes": {},
+                        "memory_operations": [],
+                        "expression": expression,
+                        "expression_act": "grounded_recall",
+                        "expression_evidence_ids": ["user-pref-birds"],
+                        "expression_target_id": None,
+                    },
+                )
+            ]
+        )
+
+
 @pytest.fixture
 def api(tmp_path):
     pytest.importorskip("fastapi")
@@ -1017,6 +1052,82 @@ def test_presence_recovery_offers_latest_unspoken_life_receipt(api) -> None:
     assert returned["expression"]["kind"] == "ambient"
     assert returned["expression"]["evidence_ids"] == ["walk-before-return"]
     assert provider.calls == 1
+
+
+def test_presence_recovery_can_open_one_evidenced_personalized_topic(tmp_path) -> None:
+    pytest.importorskip("fastapi")
+    from fastapi.testclient import TestClient
+
+    provider = PersonalizedAmbientProvider()
+    client = TestClient(create_body_app(data_dir=tmp_path, provider=provider))
+    files = MindFiles(tmp_path)
+    now = datetime.now(UTC).astimezone()
+    state, history, memories = files.load(now)
+    state["last_step_at"] = now.isoformat()
+    history.append(
+        {
+            "id": "user-pref-birds",
+            "type": "user_experience",
+            "content": "我最近喜欢观察鸟。",
+            "occurred_at": (now - timedelta(days=1)).isoformat(),
+        }
+    )
+    memories["items"].append(
+        {
+            "id": "mem-pref-birds",
+            "kind": "user_fact",
+            "quote": "我最近喜欢观察鸟。",
+            "source_id": "user-pref-birds",
+            "evidence_ids": ["user-pref-birds"],
+            "created_at": (now - timedelta(days=1)).isoformat(),
+            "core": True,
+        }
+    )
+    files.commit(state, history, memories)
+    present = {"present": True, "fullscreen": False}
+
+    assert client.post("/api/body/step", json={"presence": present}).json()["expression"] is None
+    client.post(
+        "/api/body/step",
+        json={"presence": {"present": False, "fullscreen": False}},
+    )
+    returned = client.post("/api/body/step", json={"presence": present}).json()
+    expression = returned["expression"]
+
+    assert expression["kind"] == "ambient"
+    assert expression["evidence_ids"] == ["user-pref-birds"]
+    assert [item["type"] for item in _history(tmp_path)] == ["user_experience"]
+
+    shown = client.post(
+        "/api/body/step",
+        json={"shown_id": expression["id"], "presence": present},
+    ).json()
+    assert shown["shown_confirmed"] is True
+    recorded = _history(tmp_path)
+    assert [item["type"] for item in recorded] == ["user_experience", "shared_expression"]
+    assert recorded[-1]["expression_act"] == "grounded_recall"
+    assert recorded[-1]["expression_evidence_ids"] == ["user-pref-birds"]
+
+    client.post(
+        "/api/body/step",
+        json={"presence": {"present": False, "fullscreen": False}},
+    )
+    repeated = client.post("/api/body/step", json={"presence": present}).json()
+    assert repeated["expression"] is None
+    assert provider.calls == 2
+    failures = [
+        json.loads(line)
+        for line in (tmp_path / "failures.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert "不编造：个性化主动话题没有当前天气或外部环境证据" in failures[0]["reasons"]
+    final_state, _, final_memories = files.load(now)
+    assert final_state["condition"] == state["condition"]
+    assert len(final_memories["items"]) == len(memories["items"])
+    final_preference = next(
+        item for item in final_memories["items"] if item["id"] == "mem-pref-birds"
+    )
+    assert final_preference["quote"] == "我最近喜欢观察鸟。"
+    assert final_preference["evidence_ids"] == ["user-pref-birds"]
 
 
 def test_presence_rejects_extra_body_authored_meaning(api) -> None:

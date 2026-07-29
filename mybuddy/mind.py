@@ -1014,6 +1014,10 @@ def validate_no_fabrication(
         if _asserts_joint_reading_absence(bundle.expression or "", current_words):
             reasons.append("不编造：无证据不能断言共同阅读没有发生")
     grounded_third_party = _third_party_details(current_words, user_speaks=True)
+    grounded_user_recall = bundle.expression_act == "grounded_recall" and any(
+        (evidence_by_id or {}).get(str(item), {}).get("type") == "user_experience"
+        for item in bundle.expression_evidence_ids
+    )
     for text in _all_text(bundle):
         for source, detail in _third_party_details(text, user_speaks=False):
             if not any(
@@ -1028,6 +1032,8 @@ def validate_no_fabrication(
             ):
                 reasons.append(f"不编造：第三方细节 `{source}{detail}` 没有本次用户原话证据")
         for phrase in unsupported_claims:
+            if phrase == "你之前说过" and grounded_user_recall:
+                continue
             reported = phrase in current_words and re.search(
                 rf"(?:你(?:刚才)?(?:说|问)(?:的是)?|原话(?:是|里))"
                 rf"[^，,。！？；;\n]{{0,24}}{re.escape(phrase)}",
@@ -1270,6 +1276,10 @@ def _asserted_self_receipt_claims(text: str) -> list[tuple[str, set[str], str]]:
             if (
                 re.search(_SELF_FACT_INTENT, match.group())
                 or re.search(r"散步去(?:了)?", clause)
+                or (
+                    receipt_type == "self_walk"
+                    and re.search(r"散步(?:的)?时(?:候)?[^，,。！？]{0,4}你", clause)
+                )
                 or (
                     receipt_type == "self_reading"
                     and (
@@ -1810,8 +1820,15 @@ def validate_expression_grounding(
         elif _asserts_raise_to_self(bundle.expression):
             expected_type = "body_raise"
         named_titles = set(re.findall(r"《([^》]+)》", bundle.expression))
-        if not any(kind == expected_type for kind, _, _ in receipt_claims):
+        recalls_user_fact = any(
+            evidence_types.get(item) == "user_experience" for item in supplied
+        )
+        if not recalls_user_fact and (expected_type is not None or named_titles) and not any(
+            kind == expected_type for kind, _, _ in receipt_claims
+        ):
             receipt_claims.append((expected_type, named_titles, bundle.expression))
+        elif not recalls_user_fact and expected_type is None and not named_titles:
+            receipt_claims.append((None, set(), bundle.expression))
     for expected_type, named_titles, clause in receipt_claims:
         if (
             expected_type == "self_reading"
@@ -2574,6 +2591,32 @@ def _selected_memories(
     }
 
 
+def _personalized_user_memory(
+    selected_memories: list[dict[str, Any]],
+    *,
+    used_evidence_ids: set[str] | None = None,
+) -> tuple[dict[str, Any], str] | None:
+    """只选用户亲口留下的兴趣/偏好；不把任意旧事实变成主动追问。"""
+    used = used_evidence_ids or set()
+    for memory in reversed(selected_memories):
+        if memory.get("kind") != "user_fact":
+            continue
+        quote = str(memory.get("quote", "")).strip()
+        source_id = str(memory.get("source_id", "")).strip()
+        if not quote or not source_id or source_id in used:
+            continue
+        if re.search(r"不喜欢|讨厌|不想|别催|不要催", quote):
+            continue
+        if not re.search(
+            r"喜欢|偏爱|爱看|爱听|感兴趣|最近在(?:看|读|学|做|研究)|"
+            r"正在(?:看|读|学|做|研究)|项目|论文",
+            quote,
+        ):
+            continue
+        return memory, source_id
+    return None
+
+
 def _selected_book_understandings(memories: dict[str, Any]) -> list[dict[str, Any]]:
     """只把每个 scope 的当前值放进热上下文；退位值按 revision 地址冷读。"""
     selected: list[dict[str, Any]] = []
@@ -2692,6 +2735,34 @@ action_choice 必须为 null，state_changes 与 memory_operations 必须为空�
 本收据自然、活泼地说一段有自己节拍的 ambient，使用 reflect 并且只引用本收据。允许顺手关心地问一句，
 但不得要求回应，未回应不能留下任何状态、记忆或频率痕迹。不要欢迎回来，不暗示知道用户此前是否
 在场，不编造收据之外的活动、共同过去或用户反应，不制造关系计分，不撤回已发生内容。"""
+
+
+PERSONALIZED_AMBIENT_SYSTEM_PROMPT = """incoming_experience 是用户过去亲口说过、并已形成长期
+user_fact 的兴趣或偏好，不是用户本轮刚说的话。用户此刻重新在场，这条记忆只提供一次可安静放弃的
+主动话题机会。请调用 submit_mind_bundle；action_choice 必须为 null，state_changes 与
+memory_operations 必须为空。可以保持安静；若开口，使用 grounded_recall，只引用这条用户原话证据，
+自然提起一个相关新话题。不要问项目进度、截止日期或为什么没回复，不要求汇报、承诺或稍后回应；
+未回应不能留下状态、记忆或频率债务。不编造偏好细节、共同过去或用户当前状态，不制造关系计分，
+不撤回已发生内容。没有天气、地点或窗外现状证据，不得声称今天、现在或最近的外部环境如何。"""
+
+
+def validate_personalized_topic(bundle: CandidateBundle, evidence_id: str) -> list[str]:
+    """个性化主动句只消费一条旧偏好，不借它补写眼前世界。"""
+    if bundle.expression is None:
+        return []
+    reasons: list[str] = []
+    if (
+        bundle.expression_act != "grounded_recall"
+        or set(bundle.expression_evidence_ids) != {evidence_id}
+    ):
+        reasons.append("个性化主动话题必须用 grounded_recall 且只绑定选中的用户记忆证据")
+    if re.search(
+        r"(?:今天|现在|这会儿|最近(?:这边)?|窗外(?:正|正在))"
+        r"[^。！？]{0,16}(?:下雨|没下雨|晴|刮风|起风|冷|热|安静|吵)",
+        bundle.expression,
+    ):
+        reasons.append("不编造：个性化主动话题没有当前天气或外部环境证据")
+    return reasons
 
 
 def _copy_json(value: object) -> Any:
@@ -3006,9 +3077,28 @@ async def _generate_candidate(
     quiet_time: bool = False,
     ambient_time: bool = False,
     ambient_receipt_id: str | None = None,
+    personalized_memory_evidence_id: str | None = None,
     expression_only: bool = False,
 ) -> tuple[CandidateBundle | None, int, list[str]]:
     payload = json.loads(prompt)
+    if personalized_memory_evidence_id is not None:
+        selected = next(
+            (
+                item
+                for item in payload.get("selected_memories", [])
+                if isinstance(item, dict)
+                and str(item.get("source_id")) == personalized_memory_evidence_id
+            ),
+            None,
+        )
+        if selected is not None:
+            payload["selected_history"] = []
+            payload["selected_memories"] = [selected]
+            payload["current_book_understandings"] = []
+            payload["memory_context"] = {
+                "guidance": "本轮只提供选中的一条用户偏好，不得借用其他旧话题。",
+                "selected_chars": _memory_chars(selected),
+            }
     pending = payload.get("state", {}).get("pending_activity")
     active_activity = pending.get("type") if isinstance(pending, dict) else None
     if active_activity is None and current_experience_type != "self_reading":
@@ -3066,6 +3156,35 @@ async def _generate_candidate(
     }
     current = evidence_by_id.get(str(current_experience_id), {})
     current_words = str(current.get("content", ""))
+    greeting_memory = (
+        _personalized_user_memory(
+            [
+                item
+                for item in payload.get("selected_memories", [])
+                if isinstance(item, dict)
+            ]
+        )
+        if current.get("type") == "user_experience"
+        and re.fullmatch(r"\s*(?:你?好|嗨|hi|hello|在吗)[！!。.？?~～]*\s*", current_words, re.I)
+        else None
+    )
+    greeting_evidence_id = greeting_memory[1] if greeting_memory is not None else None
+    if greeting_memory is not None:
+        payload["selected_history"] = []
+        payload["selected_memories"] = [greeting_memory[0]]
+        payload["current_book_understandings"] = []
+        payload["memory_context"] = {
+            "guidance": "本轮只提供选中的一条用户偏好，不得借用其他旧话题。",
+            "selected_chars": _memory_chars(greeting_memory[0]),
+        }
+        payload["runtime_constraints"]["this_turn"] = {
+            "case": "personalized_greeting",
+            "required_expression_act": "grounded_recall",
+            "required_expression_evidence_ids": [greeting_evidence_id],
+            "required_memory_operations": [],
+            "fact_boundary": "只依据 selected_memories 中这条用户亲口留下的兴趣或偏好，自然开启相关新话题；不补偏好细节或用户当前状态。",
+            "reply_boundary": "不要问项目进度、截止日期或为何没回复，不要求汇报、承诺或稍后回应。",
+        }
     asks_past_understanding = bool(
         re.search(
             r"(?:以前|前面|当时|最初|一直)[^。！？]{0,18}(?:怎么看|怎么理解|觉得|看法|印象)",
@@ -3198,6 +3317,19 @@ memory_operations=[]、expression_evidence_ids=[]。表达只说无法确认这�
                     ambient_receipt_id
                 }:
                     reasons.append("ambient 内容必须用 reflect 且只绑定本次真实生活收据")
+            if personalized_memory_evidence_id is not None and bundle.expression is not None:
+                reasons.extend(
+                    validate_personalized_topic(bundle, personalized_memory_evidence_id)
+                )
+            if greeting_evidence_id is not None:
+                if (
+                    bundle.expression_act != "grounded_recall"
+                    or set(bundle.expression_evidence_ids) != {greeting_evidence_id}
+                    or bundle.memory_operations
+                ):
+                    reasons.append(
+                        "个性化问候必须引用选中的用户记忆证据，且不能顺手改写长期记忆"
+                    )
             if expression_only and (
                 bundle.action_choice is not None
                 or bundle.state_changes.model_dump(exclude_none=True)
@@ -3494,7 +3626,7 @@ async def complete_reading(
 async def offer_latest_life_ambient(
     *, provider: BaseLLMProvider, files: MindFiles, now: datetime
 ) -> ReceiptResult:
-    """真实生活收据只提供一次可丢的开口机会；没有收据或选择安静都不造痕迹。"""
+    """真实生活优先；否则一条未主动说过的用户兴趣可提供同样可丢的机会。"""
     state, history, memories = files.load(now)
     if state.get("pending_expression") is not None or state.get("pending_activity") is not None:
         return ReceiptResult(committed=False, attempts=0)
@@ -3505,17 +3637,46 @@ async def offer_latest_life_ambient(
         if item.get("type") in {"self_reading", "self_walk"}:
             receipt = item
             break
-    if receipt is None or not receipt.get("id"):
-        return ReceiptResult(committed=False, attempts=0)
 
     context_history = _selected_history(history, include_shared_expressions=False)
     context_memories, _ = _selected_memories(memories)
     context_understandings = _selected_book_understandings(memories)
+    used_ambient_evidence = {
+        str(evidence_id)
+        for item in history
+        if item.get("type") == "shared_expression"
+        and item.get("expression_kind") == "ambient"
+        for evidence_id in item.get("expression_evidence_ids", [])
+    }
+    personalized = (
+        _personalized_user_memory(
+            context_memories,
+            used_evidence_ids=used_ambient_evidence,
+        )
+        if receipt is None
+        else None
+    )
+    if (receipt is None or not receipt.get("id")) and personalized is None:
+        return ReceiptResult(committed=False, attempts=0)
+
+    incoming = receipt
+    system = LIFE_AMBIENT_SYSTEM_PROMPT
+    evidence_id = str(receipt["id"]) if receipt is not None else personalized[1]
+    if receipt is None:
+        source_by_id = {
+            str(item.get("id")): item
+            for item in history
+            if isinstance(item, dict) and item.get("id")
+        }
+        incoming = source_by_id.get(evidence_id)
+        if incoming is None:
+            return ReceiptResult(committed=False, attempts=0)
+        system = PERSONALIZED_AMBIENT_SYSTEM_PROMPT
+
     evidence_types = _evidence_types_for_context(
         history, context_history, context_memories, context_understandings
     )
-    receipt_id = str(receipt["id"])
-    evidence_types[receipt_id] = str(receipt["type"])
+    evidence_types[evidence_id] = str(incoming["type"])
     evidence_by_id = {
         str(item["id"]): item
         for item in [*history, *context_understandings]
@@ -3530,19 +3691,20 @@ async def offer_latest_life_ambient(
         provider=provider,
         files=files,
         prompt=_prompt_payload(
-            state, history, memories, receipt, now, include_shared_expressions=False
+            state, history, memories, incoming, now, include_shared_expressions=False
         ),
-        system=LIFE_AMBIENT_SYSTEM_PROMPT,
+        system=system,
         now=now,
         evidence_types=evidence_types,
         evidence_by_id=evidence_by_id,
         memories_by_id=memories_by_id,
         user_confirmation_ids=set(),
         allowed_actions=set(),
-        current_experience_id=receipt_id,
-        current_experience_type=str(receipt["type"]),
+        current_experience_id=evidence_id if receipt is not None else None,
+        current_experience_type=str(incoming["type"]) if receipt is not None else None,
         ambient_time=True,
-        ambient_receipt_id=receipt_id,
+        ambient_receipt_id=evidence_id if receipt is not None else None,
+        personalized_memory_evidence_id=evidence_id if receipt is None else None,
         expression_only=True,
     )
     if bundle is None:

@@ -1393,6 +1393,89 @@ async def test_record_can_make_a_memory_core_for_later_context(tmp_path) -> None
 
 
 @pytest.mark.asyncio
+async def test_plain_greeting_can_open_a_topic_from_persisted_user_memory(tmp_path) -> None:
+    files = MindFiles(tmp_path)
+    now = datetime(2026, 7, 29, 9, 0, tzinfo=UTC)
+    state, history, memories = files.load(now)
+    history.append(
+        {
+            "id": "user-pref-scifi",
+            "type": "user_experience",
+            "content": "我最近在看科幻小说，尤其喜欢讨论陌生文明。",
+            "occurred_at": (now - timedelta(days=2)).isoformat(),
+        }
+    )
+    memories["items"].append(
+        {
+            "id": "mem-pref-scifi",
+            "kind": "user_fact",
+            "quote": "我最近在看科幻小说，尤其喜欢讨论陌生文明。",
+            "source_id": "user-pref-scifi",
+            "evidence_ids": ["user-pref-scifi"],
+            "created_at": (now - timedelta(days=2)).isoformat(),
+            "core": True,
+        }
+    )
+    files.commit(state, history, memories)
+    bad = _valid_bundle("你好，我在。")
+    bad.update(memory_operations=[], expression_act="respond", expression_evidence_ids=[])
+    good = _valid_bundle("你前两天提到喜欢讨论陌生文明——今天我忽然想问，真正陌生的文明会先让你觉得好奇，还是警惕？")
+    good.update(
+        memory_operations=[],
+        expression_act="grounded_recall",
+        expression_evidence_ids=["user-pref-scifi"],
+    )
+    provider = StubProvider([bad, good])
+
+    result = await mind_step("你好", provider=provider, files=files, now=now)
+
+    saved_state, saved_history, saved_memories, failures = _read(files)
+    prompt = json.loads(provider.calls[0][0].content)
+    assert result.committed is True
+    assert result.attempts == 2
+    assert result.pending_expression.act == "grounded_recall"
+    assert result.pending_expression.evidence_ids == ["user-pref-scifi"]
+    assert prompt["runtime_constraints"]["this_turn"]["case"] == "personalized_greeting"
+    assert [item["type"] for item in saved_history] == ["user_experience", "user_experience"]
+    assert len(saved_memories["items"]) == len(memories["items"])
+    saved_preference = next(
+        item for item in saved_memories["items"] if item["id"] == "mem-pref-scifi"
+    )
+    assert saved_preference["quote"] == "我最近在看科幻小说，尤其喜欢讨论陌生文明。"
+    assert saved_preference["evidence_ids"] == ["user-pref-scifi"]
+    assert saved_state["pending_expression"]["text"].startswith("你前两天提到")
+    assert any("个性化问候必须引用" in reason for reason in failures[0]["reasons"])
+
+
+@pytest.mark.asyncio
+async def test_user_walking_preference_is_not_mistaken_for_her_completed_walk(tmp_path) -> None:
+    files = MindFiles(tmp_path)
+    candidate = _valid_bundle(
+        "记下了，散步的时候你喜欢看老建筑的窗户和门牌。你会先看哪一种？"
+    )
+    candidate.update(
+        expression_act="ask",
+        expression_evidence_ids=["INCOMING"],
+    )
+
+    result = await mind_step(
+        "散步时我喜欢看老建筑的窗户和门牌。",
+        provider=StubProvider([candidate]),
+        files=files,
+    )
+
+    _, history, memories, failures = _read(files)
+    assert result.committed is True
+    assert failures == []
+    assert [item["type"] for item in history] == ["user_experience", "memory_operation"]
+    assert any(
+        item.get("kind") == "user_fact"
+        and item.get("quote") == "散步时我喜欢看老建筑的窗户和门牌。"
+        for item in memories["items"]
+    )
+
+
+@pytest.mark.asyncio
 async def test_new_pattern_is_not_stored_even_with_user_confirmation(tmp_path) -> None:
     files = MindFiles(tmp_path)
     candidate = _valid_bundle()
