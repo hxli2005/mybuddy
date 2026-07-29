@@ -15,6 +15,7 @@ internal static class Program
         var tests = new (string Name, Action Run)[]
         {
             ("body step is the only wire contract", BodyStepIsOnlyContract),
+            ("user profile stays an on-demand evidence view", UserProfileStaysEvidenceBound),
             ("ambient presentation rechecks current presence", AmbientPresentationRechecksPresence),
             ("edge read cue stays a closed physical fact", EdgeReadCueStaysClosed),
             ("edge reveal stays a closed physical fact", EdgeRevealStaysClosed),
@@ -112,6 +113,30 @@ internal static class Program
         Contains(response, "mind_status");
         Contains(response, "unavailable");
         Contains(response, "activity_confirmed");
+    }
+
+    private static void UserProfileStaysEvidenceBound()
+    {
+        var request = JsonSerializer.Serialize(new BodyStepRequest { IncludeUserProfile = true });
+        Contains(request, "\"include_user_profile\":true");
+        Equal(false, request.Contains("user_profile.json", StringComparison.Ordinal));
+
+        var item = new UserProfileItem
+        {
+            MemoryId = "memory-map",
+            Quote = "我喜欢手绘地图里的细节取舍。",
+            SourceId = "source-map",
+            SourceOccurredAt = "2026-07-28T20:15:00+08:00",
+            CreatedAt = "2026-07-28T20:16:00+08:00",
+        };
+        var response = JsonSerializer.Serialize(new BodyStepResponse
+        {
+            UserProfile = [item],
+        });
+        Contains(response, "\"user_profile\"");
+        Contains(response, "\"source_id\":\"source-map\"");
+        Equal("我喜欢手绘地图里的细节取舍。", item.Quote);
+        Equal("2026-07-28 20:15", item.RecordedAtText);
     }
 
     private static void AmbientPresentationRechecksPresence()

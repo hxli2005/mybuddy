@@ -105,6 +105,16 @@ class BodyActivity(BaseModel):
     presentation: Literal["full", "edge"] | None = None
 
 
+class UserProfileItem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    memory_id: str
+    quote: str
+    source_id: str
+    source_occurred_at: str
+    created_at: str
+
+
 class BodyStepRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -112,6 +122,16 @@ class BodyStepRequest(BaseModel):
     activity_receipt: BodyActivityReceipt | None = None
     event: BodyEvent | None = None
     presence: BodyPresence | None = None
+    include_user_profile: bool = False
+
+    @model_validator(mode="after")
+    def user_profile_read_is_exclusive(self) -> BodyStepRequest:
+        if self.include_user_profile and any(
+            value is not None
+            for value in (self.shown_id, self.activity_receipt, self.event, self.presence)
+        ):
+            raise ValueError("include_user_profile must be a read-only request")
+        return self
 
 
 class BodyStepResponse(BaseModel):
@@ -122,6 +142,7 @@ class BodyStepResponse(BaseModel):
     event_status: Literal["none", "processed", "duplicate", "cooldown", "waiting_for_shown"]
     time_status: Literal["not_due", "scheduled", "waiting_for_activity", "waiting_for_shown"]
     mind_status: Literal["not_run", "accepted", "rejected", "unavailable"]
+    user_profile: list[UserProfileItem] | None = None
 
 
 class BodyBridge:
@@ -135,6 +156,20 @@ class BodyBridge:
 
     async def step(self, request: BodyStepRequest) -> BodyStepResponse:
         async with self._write_lock:
+            if request.include_user_profile:
+                return BodyStepResponse(
+                    activity=None,
+                    expression=None,
+                    shown_confirmed=False,
+                    activity_confirmed=False,
+                    event_status="none",
+                    time_status="not_due",
+                    mind_status="not_run",
+                    user_profile=[
+                        UserProfileItem.model_validate(item)
+                        for item in self.files.read_user_profile()
+                    ],
+                )
             now = datetime.now(UTC).astimezone()
             presence_returned = self._presence_returned(request.presence)
             shown_confirmed = self._confirm_shown(request.shown_id, now)

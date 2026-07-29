@@ -1,0 +1,81 @@
+<Window x:Class="BuddyShell.ProfileWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="她记得的你" Width="500" Height="590"
+        WindowStartupLocation="CenterOwner" ResizeMode="CanMinimize"
+        ShowInTaskbar="False" Background="#F3F5F8"
+        FontFamily="Microsoft YaHei UI">
+    <Grid Margin="22,18">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+        <StackPanel Margin="2,0,2,15">
+            <TextBlock Text="她记得的你" FontSize="23" FontWeight="SemiBold"
+                       Foreground="#252B35" />
+            <TextBlock Text="只展示你亲口留下、能够回到原话的长期事实"
+                       Margin="0,4,0,0" FontSize="11" Foreground="#747C89" />
+            <TextBlock x:Name="CountText" Margin="0,9,0,0" FontSize="12"
+                       Foreground="#46566F" />
+        </StackPanel>
+        <Grid Grid.Row="1">
+            <Border x:Name="EmptyState" Visibility="Collapsed" Background="White"
+                    BorderBrush="#E1E5EA" BorderThickness="1" CornerRadius="16"
+                    Padding="24">
+                <StackPanel VerticalAlignment="Center">
+                    <TextBlock Text="她还没有留下关于你的长期事实"
+                               TextAlignment="Center" FontSize="15"
+                               Foreground="#39414D" />
+                    <TextBlock Text="以后你明确告诉她想长期记住的偏好，这里才会出现。"
+                               TextAlignment="Center" TextWrapping="Wrap"
+                               Margin="0,8,0,0" FontSize="11" Foreground="#7A828E" />
+                </StackPanel>
+            </Border>
+            <ScrollViewer x:Name="ProfileScroll"
+                          VerticalScrollBarVisibility="Auto"
+                          HorizontalScrollBarVisibility="Disabled">
+                <ItemsControl x:Name="ProfileItems">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <Border Background="White" BorderBrush="#E1E5EA"
+                                    BorderThickness="1" CornerRadius="14"
+                                    Padding="15,13" Margin="0,0,0,10">
+                                <StackPanel>
+                                    <TextBlock Text="{Binding Quote}" TextWrapping="Wrap"
+                                               FontSize="14" LineHeight="22"
+                                               Foreground="#2D3440" />
+                                    <TextBlock Text="{Binding RecordedAtText}"
+                                               Margin="0,8,0,0" FontSize="10"
+                                               Foreground="#89909A" />
+                                    <Expander Header="查看原话来源" Margin="0,8,0,0"
+                                              FontSize="11" Foreground="#53647D">
+                                        <Border Background="#F5F7FA" CornerRadius="8"
+                                                Padding="10" Margin="0,6,0,0">
+                                            <StackPanel>
+                                                <TextBlock Text="你的原话" FontWeight="SemiBold"
+                                                           Foreground="#59616D" />
+                                                <TextBlock Text="{Binding Quote}" TextWrapping="Wrap"
+                                                           Margin="0,4,0,0" Foreground="#343B46" />
+                                                <TextBlock Text="{Binding SourceId}"
+                                                           Margin="0,6,0,0" FontSize="9"
+                                                           Foreground="#9097A1" />
+                                            </StackPanel>
+                                        </Border>
+                                    </Expander>
+                                </StackPanel>
+                            </Border>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </ScrollViewer>
+        </Grid>
+        <DockPanel Grid.Row="2" Margin="2,14,2,0">
+            <Button Content="关闭" DockPanel.Dock="Right" Width="76" Height="32"
+                    IsCancel="True" Margin="12,0,0,0" />
+            <TextBlock Text="要纠正或忘记一件事，请直接在聊天里告诉她。"
+                       VerticalAlignment="Center" FontSize="10"
+                       Foreground="#777F8B" />
+        </DockPanel>
+    </Grid>
+</Window>

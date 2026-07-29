@@ -179,6 +179,114 @@ def _schedule_walk(client, data_dir):  # noqa: ANN001, ANN202
     return client.post("/api/body/step", json={}).json()
 
 
+def test_user_profile_is_a_read_only_projection_of_current_sourced_facts(api) -> None:
+    client, provider, data_dir = api
+    files = MindFiles(data_dir)
+    now = datetime(2026, 7, 29, 9, 30, tzinfo=UTC)
+    state, history, memories = files.load(now)
+    history.extend(
+        [
+            {
+                "id": "profile-source-map",
+                "type": "user_experience",
+                "content": "我喜欢手绘地图里的细节取舍。",
+                "occurred_at": "2026-07-28T20:15:00+08:00",
+            },
+            {
+                "id": "profile-source-mismatch",
+                "type": "user_experience",
+                "content": "这句不能替另一条记忆作证。",
+                "occurred_at": "2026-07-27T20:15:00+08:00",
+            },
+        ]
+    )
+    memories["items"].extend(
+        [
+            {
+                "id": "profile-memory-map",
+                "kind": "user_fact",
+                "quote": "我喜欢手绘地图里的细节取舍。",
+                "source_id": "profile-source-map",
+                "source_type": "user_experience",
+                "source_occurred_at": "2026-07-28T20:15:00+08:00",
+                "evidence_ids": ["profile-source-map"],
+                "created_at": "2026-07-28T20:16:00+08:00",
+                "core": True,
+            },
+            {
+                "id": "profile-memory-mismatch",
+                "kind": "user_fact",
+                "quote": "我住在上海。",
+                "source_id": "profile-source-mismatch",
+                "evidence_ids": ["profile-source-mismatch"],
+                "created_at": "2026-07-27T20:16:00+08:00",
+                "core": True,
+            },
+            {
+                "id": "profile-memory-self",
+                "kind": "self_experience",
+                "receipt_id": "profile-source-map",
+                "evidence_ids": ["profile-source-map"],
+                "created_at": "2026-07-28T20:17:00+08:00",
+                "core": True,
+            },
+        ]
+    )
+    files.commit(state, history, memories)
+    before = {
+        path.name: (path.read_bytes(), path.stat().st_mtime_ns)
+        for path in (
+            files.state_path,
+            files.history_path,
+            files.memories_path,
+            files.failures_path,
+        )
+    }
+
+    response = client.post("/api/body/step", json={"include_user_profile": True})
+
+    assert response.status_code == 200
+    assert response.json()["user_profile"] == [
+        {
+            "memory_id": "profile-memory-map",
+            "quote": "我喜欢手绘地图里的细节取舍。",
+            "source_id": "profile-source-map",
+            "source_occurred_at": "2026-07-28T20:15:00+08:00",
+            "created_at": "2026-07-28T20:16:00+08:00",
+        }
+    ]
+    assert provider.calls == 0
+    after = {
+        path.name: (path.read_bytes(), path.stat().st_mtime_ns)
+        for path in (
+            files.state_path,
+            files.history_path,
+            files.memories_path,
+            files.failures_path,
+        )
+    }
+    assert after == before
+
+    mixed = client.post(
+        "/api/body/step",
+        json={
+            "include_user_profile": True,
+            "presence": {"present": True, "fullscreen": False},
+        },
+    )
+    assert mixed.status_code == 422
+    assert provider.calls == 0
+    assert {
+        path.name: (path.read_bytes(), path.stat().st_mtime_ns)
+        for path in (
+            files.state_path,
+            files.history_path,
+            files.memories_path,
+            files.failures_path,
+        )
+    } == before
+
+
 def test_expression_is_non_destructive_and_event_id_is_idempotent(api) -> None:
     client, provider, data_dir = api
     event = {"event_id": "chat-001", "type": "chat", "content": "今天终于忙完了。"}
@@ -210,6 +318,7 @@ def test_expression_is_non_destructive_and_event_id_is_idempotent(api) -> None:
         "event_status": "duplicate",
         "time_status": "not_due",
         "mind_status": "not_run",
+        "user_profile": None,
     }
     after_shown = _history(data_dir)
     assert after_shown[:-1] == before_shown

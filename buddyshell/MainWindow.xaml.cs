@@ -121,6 +121,7 @@ public partial class MainWindow : Window {
                 SetConnectionState(exception.Message, ConnectionState.Warning);
             });
             _tray = new Tray();
+            _tray.ProfileRequested += async (_, _) => await ShowProfileAsync();
             _tray.SettingsRequested += (_, _) => {
                 if (_edgeSide is not null) ExitEdge();
                 ShowSettings();
@@ -618,6 +619,24 @@ public partial class MainWindow : Window {
         var window = new SettingsWindow(_settings) { Owner = this };
         if (window.ShowDialog() == true) _client?.UpdateSettings(_settings);
     }
+    private async Task ShowProfileAsync() {
+        if (_client is null) return;
+        if (_edgeSide is not null) ExitEdge();
+        try {
+            var response = await _client.StepBodyAsync(new BodyStepRequest {
+                IncludeUserProfile = true,
+            });
+            var window = new ProfileWindow(response.UserProfile ?? []) { Owner = this };
+            App.LogMessage($"event=user_profile_opened items={response.UserProfile?.Count ?? 0}");
+            window.ShowDialog();
+        }
+        catch (BridgeRequestException exception) {
+            SetConnectionState("暂时读不到她记得的你", ConnectionState.Warning);
+            App.LogMessage($"event=user_profile_unavailable reason={exception.Message}");
+            MessageBox.Show(this, "暂时读不到她记得的你，请确认心智桥已经连接。", "小布");
+        }
+    }
+    private async void Profile_Click(object sender, RoutedEventArgs e) => await ShowProfileAsync();
     private void Settings_Click(object sender, RoutedEventArgs e) => ShowSettings();
     private void Exit_Click(object sender, RoutedEventArgs e) => Close();
     private void RestoreWindowPosition() {

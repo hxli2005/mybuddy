@@ -57,6 +57,25 @@ def test_body_has_one_wire_path_and_no_legacy_policy_fields() -> None:
         assert legacy not in sources
 
 
+def test_user_profile_is_an_on_demand_view_not_a_fifth_authority() -> None:
+    bridge = (ROOT / "mybuddy" / "body_api.py").read_text(encoding="utf-8")
+    files = (ROOT / "mybuddy" / "mind.py").read_text(encoding="utf-8")
+    shell = "\n".join(
+        (ROOT / path).read_text(encoding="utf-8")
+        for path in (
+            "buddyshell/Bridge/BridgeModels.cs",
+            "buddyshell/MainWindow.xaml",
+            "buddyshell/ProfileWindow.xaml",
+        )
+    )
+
+    assert "include_user_profile" in bridge
+    assert "read_user_profile" in files
+    assert "她记得的你" in shell
+    assert "查看原话来源" in shell
+    assert "user_profile.json" not in "\n".join((bridge, files, shell))
+
+
 def test_edge_life_is_read_only_and_uses_a_non_speech_cue() -> None:
     window = (ROOT / "buddyshell" / "MainWindow.xaml.cs").read_text(encoding="utf-8")
     xaml = (ROOT / "buddyshell" / "MainWindow.xaml").read_text(encoding="utf-8")

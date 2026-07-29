@@ -2272,6 +2272,54 @@ class MindFiles:
             {self.failures_path: existing + json.dumps(record, ensure_ascii=False) + "\n"}
         )
 
+    def read_user_profile(self) -> list[dict[str, str]]:
+        """只读派生当前用户事实；没有原话来源的条目不展示。"""
+        if not self.history_path.is_file() or not self.memories_path.is_file():
+            return []
+        history = _read_jsonl(self.history_path)
+        memories = json.loads(self.memories_path.read_text(encoding="utf-8"))
+        if not isinstance(memories, dict):
+            raise ValueError("memories.json must contain a JSON object")
+        evidence_by_id = {
+            str(item.get("id")): item
+            for item in history
+            if isinstance(item, dict) and item.get("id")
+        }
+        profile: list[dict[str, str]] = []
+        for memory in memories.get("items", []):
+            if not isinstance(memory, dict) or memory.get("kind") != "user_fact":
+                continue
+            memory_id = str(memory.get("id", "")).strip()
+            source_id = str(memory.get("source_id", "")).strip()
+            source = evidence_by_id.get(source_id)
+            quote = source.get("content") if isinstance(source, dict) else None
+            if (
+                not memory_id
+                or not source_id
+                or not isinstance(source, dict)
+                or source.get("type") != "user_experience"
+                or not isinstance(quote, str)
+                or not quote.strip()
+                or memory.get("quote") != quote
+            ):
+                continue
+            item = {
+                "memory_id": memory_id,
+                "quote": quote,
+                "source_id": source_id,
+                "source_occurred_at": str(source.get("occurred_at", "")),
+                "created_at": str(memory.get("created_at", "")),
+            }
+            profile.append(item)
+        return sorted(
+            profile,
+            key=lambda item: (
+                item["source_occurred_at"] or item["created_at"],
+                item["memory_id"],
+            ),
+            reverse=True,
+        )
+
 
 def _write_temp(path: Path, content: str) -> Path:
     handle = tempfile.NamedTemporaryFile(

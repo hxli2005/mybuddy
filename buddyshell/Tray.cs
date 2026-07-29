@@ -8,12 +8,15 @@ public sealed class Tray : IDisposable
     {
         var show = new System.Windows.Forms.ToolStripMenuItem("展开小布");
         show.Click += (_, _) => ShowRequested?.Invoke(this, EventArgs.Empty);
+        var profile = new System.Windows.Forms.ToolStripMenuItem("她记得的你");
+        profile.Click += (_, _) => ProfileRequested?.Invoke(this, EventArgs.Empty);
         var settings = new System.Windows.Forms.ToolStripMenuItem("设置");
         settings.Click += (_, _) => SettingsRequested?.Invoke(this, EventArgs.Empty);
         var exit = new System.Windows.Forms.ToolStripMenuItem("退出");
         exit.Click += (_, _) => ExitRequested?.Invoke(this, EventArgs.Empty);
         var menu = new System.Windows.Forms.ContextMenuStrip();
-        menu.Items.AddRange([show, settings, new System.Windows.Forms.ToolStripSeparator(), exit]);
+        menu.Items.AddRange(
+            [show, profile, settings, new System.Windows.Forms.ToolStripSeparator(), exit]);
         _icon = new System.Windows.Forms.NotifyIcon
         {
             Icon = System.Drawing.SystemIcons.Information,
@@ -25,6 +28,7 @@ public sealed class Tray : IDisposable
     }
 
     public event EventHandler? SettingsRequested;
+    public event EventHandler? ProfileRequested;
     public event EventHandler? ExitRequested;
     public event EventHandler? ShowRequested;
 

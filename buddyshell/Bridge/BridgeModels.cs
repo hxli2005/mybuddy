@@ -10,6 +10,7 @@ public sealed class ShellSettings {
 public sealed class BodyStepRequest {
     [JsonPropertyName("shown_id")] public string? ShownId { get; set; } [JsonPropertyName("activity_receipt")] public BodyActivityReceipt? ActivityReceipt { get; set; }
     [JsonPropertyName("event")] public BodyEvent? Event { get; set; } [JsonPropertyName("presence")] public BodyPresence? Presence { get; set; }
+    [JsonPropertyName("include_user_profile")] public bool IncludeUserProfile { get; set; }
 }
 public sealed class BodyPresence {
     [JsonPropertyName("present")] public bool Present { get; set; } [JsonPropertyName("fullscreen")] public bool Fullscreen { get; set; }
@@ -40,6 +41,20 @@ public sealed class BodyStepResponse {
     [JsonPropertyName("shown_confirmed")] public bool ShownConfirmed { get; set; } [JsonPropertyName("activity_confirmed")] public bool ActivityConfirmed { get; set; }
     [JsonPropertyName("event_status")] public string EventStatus { get; set; } = "none"; [JsonPropertyName("time_status")] public string TimeStatus { get; set; } = "not_due";
     [JsonPropertyName("mind_status")] public string MindStatus { get; set; } = "not_run";
+    [JsonPropertyName("user_profile")] public List<UserProfileItem>? UserProfile { get; set; }
+}
+public sealed class UserProfileItem {
+    [JsonPropertyName("memory_id")] public string MemoryId { get; set; } = "";
+    [JsonPropertyName("quote")] public string Quote { get; set; } = "";
+    [JsonPropertyName("source_id")] public string SourceId { get; set; } = "";
+    [JsonPropertyName("source_occurred_at")] public string SourceOccurredAt { get; set; } = "";
+    [JsonPropertyName("created_at")] public string CreatedAt { get; set; } = "";
+    [JsonIgnore] public string RecordedAtText =>
+        DateTimeOffset.TryParse(SourceOccurredAt, out var occurred)
+            ? occurred.ToString("yyyy-MM-dd HH:mm")
+            : DateTimeOffset.TryParse(CreatedAt, out var created)
+                ? created.ToString("yyyy-MM-dd HH:mm")
+                : "时间未知";
 }
 public sealed class PendingBodyExpression {
     [JsonPropertyName("id")] public string Id { get; set; } = ""; [JsonPropertyName("text")] public string Text { get; set; } = "";

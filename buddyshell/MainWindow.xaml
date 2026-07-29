@@ -42,6 +42,8 @@
                 <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
                     <Button Style="{StaticResource ToolbarButton}" Content="聊"
                             ToolTip="聊天" Click="ToggleChat_Click" />
+                    <Button Style="{StaticResource ToolbarButton}" Content="忆"
+                            ToolTip="她记得的你" Click="Profile_Click" />
                     <Button Style="{StaticResource ToolbarButton}" Content="设"
                             ToolTip="设置" Click="Settings_Click" />
                     <Button Style="{StaticResource ToolbarButton}" Content="×"
