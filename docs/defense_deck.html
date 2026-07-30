@@ -1,0 +1,730 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>小布 · 心理健康陪伴系统 — 答辩</title>
+<style>
+  /* ============================================================
+     设计系统来源(成熟方案):
+     · 版式/网格/章节编号 —— 瑞士国际主义风格
+     · 色板/直角/细线/表格 —— IBM Carbon Design System
+     · 标题写结论不写栏目 —— 麦肯锡行动标题规范
+     · 大号等宽数字牌 —— Stripe
+     ============================================================ */
+  :root{
+    --ink:#161616; --sec:#525252; --faint:#8d8d8d;
+    --hair:#e0e0e0; --panel:#f4f4f4; --bg:#ffffff;
+    --acc:#0f62fe;
+    --det:#198038; --det-bg:#defbe6;
+    --llm:#8a3ffc; --llm-bg:#f6f2ff;
+    --warn-ink:#684e00; --warn-bg:#fcf4d6; --warn-line:#f1c21b;
+    --mono:"IBM Plex Mono","JetBrains Mono",Consolas,"Courier New",monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{font-family:"Noto Sans SC","Microsoft YaHei","PingFang SC",system-ui,sans-serif;
+    color:var(--ink);background:var(--bg);overflow:hidden;font-weight:400}
+  ::selection{background:var(--acc);color:#fff}
+
+  .slide{display:none;position:absolute;inset:0;padding:4.5vh 6.5vw 8vh;flex-direction:column;
+    opacity:0;transform:translateY(6px)}
+  .slide.active{display:flex;animation:in .22s ease-out forwards}
+  @keyframes in{to{opacity:1;transform:none}}
+
+  .kicker{font-family:var(--mono);font-size:1.6vh;letter-spacing:.08em;color:var(--sec);
+    display:flex;justify-content:space-between;align-items:baseline;
+    border-bottom:1px solid var(--hair);padding-bottom:1.2vh;margin-bottom:3vh}
+  .kicker .no{color:var(--acc);font-weight:700}
+  h1{font-size:7vh;line-height:1.18;font-weight:700;letter-spacing:-.01em}
+  h2{font-size:4.1vh;line-height:1.3;font-weight:700;margin-bottom:.8vh;letter-spacing:-.005em}
+  .sub{font-size:2.05vh;color:var(--sec);margin-bottom:2.6vh}
+  h3{font-size:2.3vh;font-weight:700;margin-bottom:1.4vh}
+  p,li{font-size:2.2vh;line-height:1.66}
+  .muted{color:var(--sec)} .small{font-size:1.85vh}
+  .grow{flex:1;display:flex;flex-direction:column;justify-content:center;min-height:0}
+  .cols{display:flex;gap:3.2vw;align-items:stretch}
+  .col{flex:1;min-width:0}
+  .rule{width:64px;height:3px;background:var(--acc);margin:3vh 0}
+
+  .slot-pending{display:inline-block;background:var(--warn-bg);color:var(--warn-ink);
+    border:1px solid var(--warn-line);padding:0 .5em;font-size:.82em;font-family:var(--mono);white-space:nowrap}
+  .slot-filled{color:var(--acc);font-weight:700;font-variant-numeric:tabular-nums}
+
+  .chip{display:inline-block;padding:.12em .6em;font-size:1.75vh;margin:.3vh .5vh .3vh 0;
+    border:1px solid var(--hair);background:var(--bg);color:var(--sec)}
+  .chip.det{background:var(--det-bg);border-color:var(--det);color:var(--det)}
+  .chip.llm{background:var(--llm-bg);border-color:var(--llm);color:var(--llm)}
+
+  .cards{display:grid;grid-template-columns:1fr 1fr;gap:2vh 2vw;flex:1;align-content:center}
+  .cards.three{grid-template-columns:1fr 1fr 1fr}
+  .card{border:1px solid var(--hair);border-top:3px solid var(--ink);padding:2vh 1.4vw;background:var(--bg)}
+  .card .n{font-family:var(--mono);font-size:1.55vh;color:var(--acc);margin-bottom:1vh}
+  .card .q{font-size:2.25vh;font-weight:700;margin-bottom:1vh;line-height:1.45}
+  .card .a{font-size:1.95vh;color:var(--sec);line-height:1.6}
+  .card .a b{color:var(--ink)}
+
+  /* 用户后果条 */
+  .payoff{border-left:3px solid var(--det);background:var(--det-bg);color:var(--ink);
+    padding:1vh 1.4vw;font-size:2.05vh;margin-bottom:2.4vh}
+  .payoff b{color:var(--det)}
+
+  table{border-collapse:collapse;width:100%;font-size:2.02vh}
+  th{font-size:1.7vh;color:var(--sec);font-weight:600;text-align:left;
+    border-bottom:2px solid var(--ink);padding:.9vh 1vw;white-space:nowrap}
+  td{padding:1vh 1vw;border-bottom:1px solid var(--hair);vertical-align:top}
+  td.num,th.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+
+  .tiles{display:grid;grid-template-columns:repeat(3,1fr);gap:3vh 2.4vw;flex:1;align-content:center}
+  .tile{border-top:2px solid var(--ink);padding-top:1.8vh;position:relative}
+  .tile::before{content:"";position:absolute;top:-2px;left:0;width:28px;height:2px;background:var(--acc)}
+  .tile .v{font-size:5.8vh;font-weight:700;font-variant-numeric:tabular-nums;letter-spacing:-.01em;line-height:1.15}
+  .tile .v .slot-pending{font-size:2.2vh;vertical-align:middle}
+  .tile .k{font-size:2vh;margin-top:.6vh}
+  .tile .s{font-size:1.7vh;color:var(--faint);margin-top:.5vh}
+
+  .pipe{display:flex;align-items:stretch;gap:.55vw;flex-wrap:wrap;margin:1.5vh 0 2.2vh}
+  .node{padding:1.2vh 1vw;font-size:1.85vh;line-height:1.4;text-align:left;
+    border:1px solid var(--hair);border-left:3px solid var(--ink);background:var(--bg);flex:1;min-width:8vw}
+  .node small{display:block;font-size:1.5vh;color:var(--sec);margin-top:.3vh}
+  .node.det{border-left-color:var(--det);background:var(--det-bg)}
+  .node.llm{border-left-color:var(--llm);background:var(--llm-bg)}
+  .arrow{color:var(--faint);font-size:2.2vh;align-self:center}
+
+  ul.tight{list-style:none}
+  ul.tight li{margin-bottom:1.5vh;padding-left:1.15em;position:relative;font-size:2.1vh}
+  ul.tight li::before{content:"—";position:absolute;left:0;color:var(--acc)}
+  ol.demo{list-style:none;counter-reset:d}
+  ol.demo li{counter-increment:d;margin-bottom:1.9vh;padding-left:3.2em;position:relative}
+  ol.demo li::before{content:"0" counter(d);position:absolute;left:0;top:.1em;
+    font-family:var(--mono);font-size:2.1vh;font-weight:700;color:var(--acc)}
+  ol.demo li .fb{display:block;font-size:1.72vh;color:var(--faint);margin-top:.3vh}
+  code{font-family:var(--mono);background:var(--panel);border:1px solid var(--hair);padding:.05em .45em;font-size:.88em}
+
+  .quote{border-left:3px solid var(--acc);padding:.6vh 0 .6vh 1.6vw;font-size:2.6vh;line-height:1.65}
+  .quote b{font-weight:700}
+
+  /* 内嵌演示 */
+  .livewrap{flex:1;display:flex;flex-direction:column;min-height:0}
+  .livebar{display:flex;gap:.8vw;align-items:center;margin-bottom:1.2vh;flex-wrap:wrap}
+  .btn{font-family:var(--mono);font-size:1.9vh;padding:.6vh 1.2vw;border:1px solid var(--ink);
+    background:var(--bg);color:var(--ink);cursor:pointer;text-decoration:none;display:inline-block}
+  .btn:hover{background:var(--ink);color:#fff}
+  .btn:disabled{opacity:.4;cursor:default}
+  .btn.acc{border-color:var(--acc);color:var(--acc)}
+  .btn.acc:hover{background:var(--acc);color:#fff}
+  .status{font-family:var(--mono);font-size:1.65vh;color:var(--faint)}
+  .term{flex:1;min-height:0;background:#161616;color:#d4f7dc;font-family:var(--mono);
+    font-size:1.72vh;line-height:1.5;padding:1.6vh 1.2vw;overflow:auto;white-space:pre-wrap;word-break:break-all}
+  .appframe{flex:1;min-height:0;border:1px solid var(--hair);width:100%}
+
+  /* 图表 */
+  .chart{width:100%;flex:1;min-height:0;display:flex;align-items:center;justify-content:center}
+  .chart svg{width:100%;height:100%;max-height:52vh}
+  .chart .pend{font-size:2vh}
+  .figwrap{display:flex;flex-direction:column;min-height:0}
+  .figcap{font-size:1.68vh;color:var(--sec);line-height:1.5;margin-top:.6vh;border-top:1px solid var(--hair);padding-top:.7vh}
+  .figcap b{font-family:var(--mono);color:var(--acc);font-weight:700}
+  .featgrid{display:grid;grid-template-columns:1fr 1fr;gap:1.6vh 2vw;flex:1;align-content:center}
+  .feat{border-left:3px solid var(--acc);padding:.6vh 0 .6vh 1.2vw}
+  .feat b{font-size:2.05vh;display:block;margin-bottom:.3vh}
+  .feat span{font-size:1.8vh;color:var(--sec);line-height:1.55}
+  .statrow{display:flex;gap:2.4vw;border-top:1px solid var(--hair);padding-top:1.4vh;
+    font-family:var(--mono);font-size:1.85vh;color:var(--sec);flex-wrap:wrap}
+  .statrow b{color:var(--ink);font-size:2.3vh}
+
+  .notes{display:none;position:absolute;left:0;right:0;bottom:0;background:#161616;color:#c6c6c6;
+    padding:1.6vh 6.5vw;font-size:1.85vh;line-height:1.6;max-height:26vh;overflow:auto;z-index:9}
+  body.show-notes .slide.active .notes{display:block}
+  .notes b{color:#fff}
+
+  .hud{position:fixed;left:0;right:0;bottom:0;height:4vh;display:flex;align-items:center;
+    padding:0 6.5vw;font-family:var(--mono);font-size:1.55vh;color:var(--faint);z-index:8;
+    background:var(--bg);border-top:1px solid var(--hair)}
+  .hud .ct{margin-left:auto;font-variant-numeric:tabular-nums}
+  .hudbtn{font-family:var(--mono);border:1px solid var(--hair);background:var(--bg);color:var(--sec);
+    padding:0 .8em;margin-left:.6em;cursor:pointer;font-size:1.7vh;line-height:2.6vh}
+  .hudbtn:hover{border-color:var(--ink);color:var(--ink)}
+  .bar{position:fixed;left:0;top:0;height:2px;background:var(--acc);transition:width .25s;z-index:10}
+
+  @media print{
+    body{overflow:visible}
+    .slide{display:flex !important;position:relative;inset:auto;height:100vh;page-break-after:always;opacity:1;transform:none}
+    .hud,.notes,.bar{display:none !important}
+  }
+</style>
+</head>
+<body>
+
+<!-- ========= 配置与数据:评测落地后只改这里 ========= -->
+<script>
+const APP_URL = "http://127.0.0.1:8000";
+// 用 python scripts/demo_runner.py 启动演示助手后,推荐以 http://127.0.0.1:8765/ 打开本页
+const RUNNER_URL = location.protocol === "file:" ? "http://127.0.0.1:8765" : "";
+
+const DATA = {
+  // —— 问题页统计(必须核实来源后再填;建议:WHO 抑郁症概况 / 中国国民心理健康发展报告)——
+  stat_prevalence: null,       // 如 "全球超 2.8 亿人受抑郁症影响(WHO)"
+  stat_gap: null,              // 如 "每 10 万人精神科医师数远低于高收入国家(来源:…)"
+  // —— 测试套件(2026-07-30 夜终值)——
+  tests_passed: "328", tests_total: "328", tests_seconds: "12",
+  // —— 危机检测(eval/RESULTS_SAFETY.md, 2026-07-30 实测;v2 双跑取保守值)——
+  crisis_n: "305", crisis_n_high: "95",
+  crisis_v1_fnr: "87.4%", crisis_v2_fnr: "2.1–3.2%",
+  crisis_v1_fp: "45.0%",  crisis_v2_fp: "1.4%",
+  crisis_v1_block_help: "5.0%", crisis_v2_block_help: "5.0%(未改善)",
+  // —— 评估效度(eval/RESULTS_ASSESSMENT.md, 2026-07-30 实测)——
+  assess_n: "12", assess_kappa: "0.984", assess_mae: "0.33 / 0.17",
+  assess_sev: "23/24", assess_false: "0/20", assess_rounds: "57",
+  // —— 情绪(eval/RESULTS_EMOTION.md)——
+  emo_valence: null, emo_category: null,
+  // —— 记忆 ——
+  mem_mrr_lex: "0.742",        // 2026-07-30 复跑(--mode both,RESULTS.md 复跑节)
+  mem_delta: "+0.199(换词类)", // hybrid 0.824 vs 词法 0.742,paraphrase 桶 ΔMRR
+  locomo_h5: null, locomo_h10: null, locomo_h20: null,
+};
+
+// —— 图表数值(百分数,null=待填;危机数字等 v1/v2 对比评测落地)——
+const CHART = {
+  // 数值为百分数;*_ci 为 95% Wilson 区间 [lo, hi](有值时渲染误差线)
+  crisis: {  // 2026-07-30 实测,n=305;v2 取双跑保守值(3/95)
+    fnr:   { v1: 87.4, v2: 3.2, v1_ci: [79.2,92.6], v2_ci: [1.1,8.9] },    // 高危漏报率 %
+    fp:    { v1: 45.0, v2: 1.4, v1_ci: [37.0,53.3], v2_ci: [0.4,5.1] },    // 危机直返误伤 %
+    block: { v1: 5.0,  v2: 5.0, v1_ci: [0.9,23.6],  v2_ci: [0.9,23.6] },   // 求助误拦率 %
+  },
+  // 效度散点(2026-07-30 生产模型终跑,12 人物 × 2 量表,x=真值 y=预测)
+  scatter_phq: [[3,5],[2,2],[11,11],[7,8],[6,6],[17,17],[21,22],[12,12],[1,1],[9,9],[21,21],[13,13]],
+  scatter_gad: [[6,6],[2,2],[6,6],[8,8],[11,11],[13,13],[17,18],[11,11],[1,1],[15,16],[12,12],[7,7]],
+  drop: { self_mrr: 0.761, locomo_h5: 0.57 },  // 自建集 vs 公开基准(H@5 为 c3 历史,复跑后更新)
+};
+</script>
+
+<!-- ========= S1 封面 ========= -->
+<section class="slide">
+  <div class="kicker"><span><span class="no">MyBuddy</span>&nbsp; 暑期课程大作业 · 答辩</span><span>2026-07-31</span></div>
+  <div class="grow">
+    <h1>小布<br>心理健康陪伴系统</h1>
+    <div class="rule"></div>
+    <p style="font-size:2.7vh;max-width:60ch" class="muted">
+      在"独自硬扛"和"专业求助"之间,始终缺一个<b style="color:var(--ink)">低门槛且安全</b>的中间层。<br>
+      我们做的就是这一层:<b style="color:var(--ink)">日常陪伴 · 无感筛查 · 循证自助 · 危机兜底。</b>
+    </p>
+  </div>
+  <p class="small" style="font-family:var(--mono);color:var(--faint);border-top:1px solid var(--hair);padding-top:1.4vh">
+    86 files&ensp;·&ensp;+8,500 lines&ensp;·&ensp;16 tables&ensp;·&ensp;~40 API endpoints</p>
+  <aside class="notes"><b>开场 30 秒:</b>先讲人和问题,再讲技术。"接下来 10 分钟:这个空白层为什么存在、为什么难补 → 我们的三组设计 → 每组设计的实测数据 → 现场演示。"</aside>
+</section>
+
+<!-- ========= S2 问题 ========= -->
+<section class="slide">
+  <div class="kicker"><span><span class="no">01</span>&nbsp; 问题</span><span>MyBuddy</span></div>
+  <h2>大多数心理困扰,发生在"不会去求助"的人身上</h2>
+  <p class="sub">现有三种选择,各缺一角——中间层是空的</p>
+  <div class="cards three">
+    <div class="card"><div class="n">现状 A</div><div class="q">独自硬扛</div>
+      <div class="a">病耻感与求助门槛,情绪困扰长期<b>无人察觉、无人记录</b>——直到危机才被看见</div></div>
+    <div class="card"><div class="n">现状 B</div><div class="q">通用聊天 AI</div>
+      <div class="a">能聊,但<b>不可靠</b>:危机时刻可能说错话、无持续观测、无安全兜底、聊完即忘</div></div>
+    <div class="card"><div class="n">现状 C</div><div class="q">专业渠道</div>
+      <div class="a">有效,但<b>覆盖不足</b>:预约、费用、心理门槛——不适合"还没准备好求助"的大多数</div></div>
+  </div>
+  <div style="margin:2vh 0">
+    <p class="small muted" style="font-family:var(--mono)">
+      <span data-slot="stat_prevalence"></span>&ensp;·&ensp;<span data-slot="stat_gap"></span>&ensp;(数字须核实来源后填入,宁缺毋滥)</p>
+  </div>
+  <p class="payoff"><b>我们的定位:</b>不诊断 · 不开药 · 不替代治疗。做中间层——倾诉出口 + 无感持续筛查(早发现) + 循证自助练习 + 危机时刻可靠转介。</p>
+  <aside class="notes">60 秒。此页回答"解决什么问题":让"还没准备好求助的人"有一个安全的落脚点,并在需要时把他推向专业资源。统计槽建议来源:WHO Depression fact sheet;《中国国民心理健康发展报告》——今晚核实后填,核实不了就删掉该行。</aside>
+</section>
+
+<!-- ========= S3 为什么难 ========= -->
+<section class="slide">
+  <div class="kicker"><span><span class="no">02</span>&nbsp; 为什么难</span><span>MyBuddy</span></div>
+  <h2>这个中间层难做,难在四个结构性矛盾</h2>
+  <p class="sub">"聊天机器人 + 温柔人设"补不了这一层——每个矛盾都要求专门的系统设计</p>
+  <div class="cards">
+    <div class="card"><div class="n">矛盾 01 · 安全</div><div class="q">用户最需要帮助的时刻,恰是系统最不能出错的时刻</div>
+      <div class="a">生成式模型本质是概率的 → <b>风险越高模型话语权越小;最高危时模型被摘出回路</b></div></div>
+    <div class="card"><div class="n">矛盾 02 · 观测</div><div class="q">筛查需要数据,但"被评估感"杀死倾诉</div>
+      <div class="a">没人对着朋友填量表 → <b>把 PHQ-9 / GAD-7 拆成 16 维状态机,溶进闲聊</b></div></div>
+    <div class="card"><div class="n">矛盾 03 · 干预</div><div class="q">自助练习有效的前提,是不被察觉是干预</div>
+      <div class="a">说教感是陪伴的死因 → <b>CBT 技术伪装成游戏,节奏受冷却与情绪门控约束</b></div></div>
+    <div class="card"><div class="n">矛盾 04 · 关系</div><div class="q">陪伴是一段关系,不是一串问答</div>
+      <div class="a">请求-响应架构"你不说话我就不存在" → <b>延迟关怀、沉默跟进、夜间记忆整理</b></div></div>
+  </div>
+  <aside class="notes">每条 20 秒:先念矛盾让评委点头"确实难",再一句答案。技术细节留给后面三页。</aside>
+</section>
+
+<!-- ========= S4 架构 ========= -->
+<section class="slide">
+  <div class="kicker"><span><span class="no">03</span>&nbsp; 总体架构</span><span>MyBuddy</span></div>
+  <h2>骨架是确定性系统,语言模型是可替换的填充</h2>
+  <p class="sub">单轮请求管线&ensp;·&ensp;<span style="color:var(--det)">绿 = 确定性组件(0ms / 离线可用 / 可审计)</span>&ensp;·&ensp;<span style="color:var(--llm)">紫 = 语言模型</span></p>
+  <div class="grow">
+    <div class="pipe">
+      <div class="node det">输入审核门<small>正则,拦方法索取</small></div><span class="arrow">→</span>
+      <div class="node det">危机硬底线<small>无歧义表达直返热线</small></div><span class="arrow">→</span>
+      <div class="node llm">情绪 + 风险判定<small>合并为 1 次小模型调用</small></div><span class="arrow">→</span>
+      <div class="node det">融合定级 · CBT 窗口 · 评估投放<small>状态机 + 冷却 + 节流</small></div><span class="arrow">→</span>
+      <div class="node det">记忆检索<small>词法 + 语义 RRF</small></div><span class="arrow">→</span>
+      <div class="node llm">主对话 ReAct 循环<small>≤6 步 · 工具调用</small></div><span class="arrow">→</span>
+      <div class="node det">输出审核门<small>拦诊断/荐药 · 句级重写</small></div>
+    </div>
+    <div>
+      <span class="chip det">确定性:模型宕机 / 提示注入仍生效</span>
+      <span class="chip llm">LLM:Claude / 任意 OpenAI 兼容端点可整体替换</span>
+      <span class="chip">每轮旁路 LLM 调用 3 → 1</span>
+    </div>
+    <div style="margin-top:3vh" class="cols">
+      <div class="col"><h3>对话之外的生命周期</h3>
+        <p class="small muted">连续负面 → 30 分钟延迟关怀 · 沉默跟进调度 · 夜间 Dream Job(记忆去重 / 置信度衰减 / 冲突消解) · 技能自动抽象</p></div>
+      <div class="col"><h3>隐私底座</h3>
+        <p class="small muted">语音转写本地 Whisper 完全离线 · 每用户独立 SQLite / 向量库 / 调度器 · 日志密钥脱敏</p></div>
+    </div>
+  </div>
+  <aside class="notes">60 秒。两点:(1) 确定性组件是骨架,LLM 是可替换填充;(2) 换掉底层模型系统照常成立——"设计不在 API 里,在 API 外面"。</aside>
+</section>
+
+<!-- ========= S4b 完成度全景 ========= -->
+<section class="slide">
+  <div class="kicker"><span><span class="no">03</span>&nbsp; 完成度全景</span><span>MyBuddy</span></div>
+  <h2>这门课的完整工作量,一页放下</h2>
+  <p class="sub">深讲其中三组最有设计含量的;其余的,演示和仓库里都能看到</p>
+  <div class="featgrid">
+    <div class="feat"><b>对话智能</b><span>ReAct 循环(≤6 步) · 8 个工具:天气 / 联网搜索 / 中文自然语言提醒 / 翻译 / 笔记 / 记忆检索 / 技能 / 检索预取</span></div>
+    <div class="feat"><b>记忆系统</b><span>三层长期记忆 · 词法+语义混合检索(RRF 融合) · 每 3 轮事实抽取 · 夜间 Dream Job 记忆整理</span></div>
+    <div class="feat"><b>心理健康核心</b><span>三道安全门 × 五级危机分级 · 16 维评估状态机 · 5 种 CBT 技术 · 15 类情绪判定 · 零输入心情日记</span></div>
+    <div class="feat"><b>主动性调度</b><span>每日问候 · 30 分钟延迟关怀 · 沉默回访 · 静默时段与频控 · 全部持久化跨重启</span></div>
+    <div class="feat"><b>自学习</b><span>轨迹复盘自动抽象技能 · Laplace 平滑置信度 · 👍👎 反馈闭环驱动技能升降</span></div>
+    <div class="feat"><b>语音与隐私</b><span>本地 Whisper 离线转写 · 每用户独立 SQLite / 向量库 / 调度器 · 日志密钥脱敏</span></div>
+    <div class="feat"><b>多用户与账户</b><span>注册登录(bcrypt + HMAC Cookie) · 访客模式与数据迁移 · 数据全量导出 / 清除 / 注销</span></div>
+    <div class="feat"><b>管理后台</b><span>用户管理 · 配额(锁内复检防并发穿透) · 运行时配置 · 使用统计</span></div>
+  </div>
+  <div class="statrow">
+    <span><b>16</b> 张数据表</span><span><b>~40</b> 个 API 端点</span><span><b>238</b> 个测试用例</span>
+    <span><b>4</b> 个评测数据集</span><span><b>2</b> 端(Web + 管理台)</span>
+  </div>
+  <aside class="notes">35 秒,只念左列四个组名+一句"其余的演示里都能看到",不逐条读。这页的作用是让完成度可见,深度留给后面三组设计。</aside>
+</section>
+
+<!-- ========= S5 设计一:安全 ========= -->
+<section class="slide">
+  <div class="kicker"><span><span class="no">04</span>&nbsp; 设计一 · 安全</span><span>MyBuddy</span></div>
+  <h2>风险越高,越不信任大模型——高危路径零生成</h2>
+  <p class="payoff"><b>对用户意味着:</b>说出危险信号的人一定被接住;求助与科普的提问不再被误拦在门外。</p>
+  <div class="cols grow">
+    <div class="col">
+      <ul class="tight">
+        <li><b>硬底线(正则)</b>:只收录"子串即语义"的无歧义表达,命中即确定性直返热线,跳过一切 LLM——<b>模型宕机、提示注入都拦得住</b></li>
+        <li><b>语言层</b>:风险判定并入每轮已有的情绪调用(带 8 条上下文),处理否定 / 反讽 / 第三人称 / 委婉语 / 康复叙述</li>
+        <li><b>融合不对称</b>:LLM 可否决提示级正则(治误伤),<b>不能否决硬底线</b>(保漏判);LLM 不可用 → 保守退化为纯正则</li>
+        <li><b>警戒窗口</b>:任一轮 ≥HIGH 后 5 轮内自动提高敏感度</li>
+      </ul>
+    </div>
+    <div class="col">
+      <h3>同一标注集上的架构消融(n=<span data-slot="crisis_n"></span>,14 个对抗桶)</h3>
+      <div class="chart" id="crisisChart" style="max-height:36vh"></div>
+      <p class="small muted" style="margin-top:1.2vh">每轮旁路 LLM 调用:v1 ≤3 次 → v2 1 次 · 对抗桶来自对自身正则层的代码审计(错误驱动构造,不是随机采样)。</p>
+    </div>
+  </div>
+  <aside class="notes"><b>金句:</b>"我们对模型的信任是随风险递减的函数。"追问"为什么不训练分类器":安全场景要求可审计的确定性兜底;百级标注下零样本小模型强于自训;蒸馏本地分类器列为下一步——落在您的领域。</aside>
+</section>
+
+<!-- ========= S6 设计二:评估 ========= -->
+<section class="slide">
+  <div class="kicker"><span><span class="no">05</span>&nbsp; 设计二 · 筛查</span><span>MyBuddy</span></div>
+  <h2>把一次性问卷,改造成分布式异步采样协议</h2>
+  <p class="payoff"><b>对用户意味着:</b>两周日常聊天 ≈ 一次标准量表筛查——零填表负担,变化被更早发现。</p>
+  <div class="cols grow">
+    <div class="col">
+      <ul class="tight">
+        <li>PHQ-9 + GAD-7 = <b>16 维独立状态机</b>:unasked → asked → scored;14 天过期回退;周期归档</li>
+        <li>投放节流:两次自然提问 ≥3 轮间隔;<b>自伤维度永不主动投放</b>——伦理红线内置于状态机</li>
+        <li>自由文本 → Likert 0-3 由小模型翻译;<b>只接受待评分维度</b>(白名单防幻觉记分)</li>
+        <li>集齐 16 维自动出总分 / 严重度 / 历史曲线,计分与标准量表完全兼容</li>
+      </ul>
+    </div>
+    <div class="col">
+      <h3>效标效度:预测总分 vs 真值(n=<span data-slot="assess_n"></span> 人物 × 2 量表,实测 2026-07-30)</h3>
+      <div class="chart" id="assessScatter" style="max-height:42vh"></div>
+      <p class="small muted" style="margin-top:.8vh">加权 kappa <span data-slot="assess_kappa"></span> · 总分 MAE <span data-slot="assess_mae"></span> · 严重度一致 <span data-slot="assess_sev"></span> · 闲聊误记 <span data-slot="assess_false"></span> · 覆盖中位 <span data-slot="assess_rounds"></span> 轮 —— 真值由构造给定,回答刻意口语化。</p>
+    </div>
+  </div>
+  <aside class="notes">追问"LLM 打分凭什么可信"→ 指右表。PHQ-9/GAD-7 信效度由临床文献确立,我们只验证自己的翻译层——正确的验证边界。</aside>
+</section>
+
+<!-- ========= S7 设计三 ========= -->
+<section class="slide">
+  <div class="kicker"><span><span class="no">06</span>&nbsp; 设计三 · 陪伴</span><span>MyBuddy</span></div>
+  <h2>一次情绪检测,驱动四条链路</h2>
+  <p class="payoff"><b>对用户意味着:</b>被记住、被惦记的陪伴和循证练习——却没有"被治疗"的感觉。</p>
+  <div class="cols grow">
+    <div class="col">
+      <ul class="tight">
+        <li><b>回应策略</b>:15 类情绪 → 各自的镜映 / 需求 / 引导 / 小行动;明令禁止"我理解你"固定三段式</li>
+        <li><b>主动关怀</b>:连续 2 轮负面 → <b>30 分钟后</b>的延迟问候(刻意不即时)</li>
+        <li><b>心情日记零输入</b>:每轮自动推导 0-10 分落库 → 趋势 / 分布 / 连续天数被动生成</li>
+        <li><b>CBT 触发门</b>:五种技术伪装成游戏("拆弹""感官旅行"),24h 冷却持久化;危机中风险以上通道关闭</li>
+      </ul>
+    </div>
+    <div class="col">
+      <h3>情绪分类实测(n=300,15 类均衡含难例)</h3>
+      <table>
+        <tr><td>效价三分类准确率</td><td class="num" data-slot="emo_valence"></td></tr>
+        <tr><td>15 类 top-1 准确率</td><td class="num" data-slot="emo_category"></td></tr>
+      </table>
+      <h3 style="margin-top:2.6vh">长期记忆(既有评测线)</h3>
+      <table>
+        <tr><td>自建集词法 MRR(离线 · 当日复跑)</td><td class="num" data-slot="mem_mrr_lex"></td></tr>
+        <tr><td>语义混合检索:换词类 ΔMRR</td><td class="num" data-slot="mem_delta"></td></tr>
+        <tr><td>LoCoMo 公开基准 H@5 / 10 / 20</td><td class="num"><span data-slot="locomo_h5"></span> / <span data-slot="locomo_h10"></span> / <span data-slot="locomo_h20"></span></td></tr>
+      </table>
+    </div>
+  </div>
+  <aside class="notes">15 类准确率对照人类标注一致性(kappa)解读,不对照 100%。</aside>
+</section>
+
+<!-- ========= S8 评测方法论 ========= -->
+<section class="slide">
+  <div class="kicker"><span><span class="no">07</span>&nbsp; 评测方法论</span><span>MyBuddy</span></div>
+  <h2>每条"错了会出事"的声明,对应一个可复跑的数据集</h2>
+  <p class="sub">没有训练模型,所以把严谨性花在验证端</p>
+  <div class="grow">
+    <table>
+      <tr><th>数据集</th><th>守护的声明</th><th>构造方法</th></tr>
+      <tr><td style="font-family:var(--mono)">crisis_zh</td><td>五级危机分级,高危不漏、日常不扰</td><td>分层 + <b>错误驱动</b>(14 个对抗桶来自代码审计)+ 无害对照</td></tr>
+      <tr><td style="font-family:var(--mono)">assessment_personas</td><td>对话式评分忠实于标准量表</td><td><b>效标效度</b>:真值由构造给定,回答口语化</td></tr>
+      <tr><td style="font-family:var(--mono)">emotion_zh</td><td>15 类情绪可靠到能驱动下游</td><td>均衡分层 + 难例;人类 kappa 作天花板</td></tr>
+      <tr><td style="font-family:var(--mono)">LoCoMo(公开)</td><td>记忆能力的外部可比性</td><td>公开基准直接复跑——<b>自己的声明不自证</b></td></tr>
+    </table>
+    <div class="cols" style="margin-top:2.2vh;align-items:center">
+      <div class="col" style="flex:2">
+        <p class="quote"><b>凭什么可信?我们被公开基准教育过:</b>自建记忆集 MRR 0.76,接上 LoCoMo 掉到 H@5 0.57。这个难看的差距我们主动展示——它证明我们知道自建集会系统性乐观,所以用构造纪律对冲。</p>
+      </div>
+      <div class="col" style="flex:1"><div class="chart" id="dropFig" style="max-height:26vh"></div></div>
+    </div>
+    <div style="margin-top:1.8vh">
+      <span class="chip">分层平衡</span><span class="chip">错误驱动采样</span><span class="chip">阴性对照</span>
+      <span class="chip">三人标注 + kappa</span><span class="chip">Wilson 95% CI</span><span class="chip">零事件三分法则</span><span class="chip">数据集版本化 = 回归资产</span>
+    </div>
+  </div>
+  <aside class="notes">全场智识高点,90 秒。追问"几百条够吗"→ 样本量与声明强度匹配:高危漏报 0/n 只声明置信上界(三分法则 3/n);收紧到 1% 需 n≈300 高危样本——明确的扩集路线。</aside>
+</section>
+
+<!-- ========= S9 数据总墙 ========= -->
+<section class="slide">
+  <div class="kicker"><span><span class="no">08</span>&nbsp; 结果</span><span>MyBuddy</span></div>
+  <h2>全部关键数字<span class="muted" style="font-size:2.2vh;font-weight:400">&ensp;实测 · 2026-07-31</span></h2>
+  <div class="tiles">
+    <div class="tile"><div class="v"><span data-slot="tests_passed"></span>/<span data-slot="tests_total"></span></div>
+      <div class="k">测试用例全部通过</div><div class="s">现场实跑 <span data-slot="tests_seconds"></span>s · 含安全属性 / 蜕变测试</div></div>
+    <div class="tile"><div class="v" data-slot="crisis_v2_fnr"></div>
+      <div class="k">高危漏报率(v2)</div><div class="s">n=<span data-slot="crisis_n"></span> 分层集 · 高危样本 <span data-slot="crisis_n_high"></span> 条</div></div>
+    <div class="tile"><div class="v" data-slot="assess_kappa"></div>
+      <div class="k">评估条目加权 kappa</div><div class="s">总分 MAE <span data-slot="assess_mae"></span></div></div>
+    <div class="tile"><div class="v" data-slot="emo_valence"></div>
+      <div class="k">情绪效价准确率</div><div class="s">15 类 top-1:<span data-slot="emo_category"></span></div></div>
+    <div class="tile"><div class="v"><span data-slot="locomo_h5"></span></div>
+      <div class="k">LoCoMo 公开基准 H@5</div><div class="s">检索层召回口径 · 复跑于当前代码</div></div>
+    <div class="tile"><div class="v">3 → 1</div>
+      <div class="k">每轮旁路 LLM 调用</div><div class="s">v2 合并判定:更安全,同时更便宜</div></div>
+  </div>
+  <aside class="notes">停 40 秒,不逐一念——"每个数字背后是一个数据集和一个可复跑脚本,欢迎追问细节"。</aside>
+</section>
+
+<!-- ========= S10 演示动线 ========= -->
+<section class="slide">
+  <div class="kicker"><span><span class="no">09</span>&nbsp; 现场演示</span><span>MyBuddy</span></div>
+  <h2>确定性开场,确定性收尾<span class="muted" style="font-size:2.2vh;font-weight:400">&ensp;全部内嵌在后两页,无需切出</span></h2>
+  <div class="grow">
+    <ol class="demo">
+      <li><b>测试全绿实跑</b>:<code>pytest</code> 全量 —— 十几秒当众出结果
+        <span class="fb">→ 下一页内嵌终端,点按钮执行;兜底:预录输出</span></li>
+      <li><b>真实对话 + 系统决策透视</b>:发真实消息,展开面板看安全门 → 情绪 → CBT → 技能 → 工具 → 检索
+        <span class="fb">→ 内嵌应用页操作;口径:确定性管线的决策日志,不是模型生成的"思考"</span></li>
+      <li><b>高危消息确定性直返</b>:输入危机表达 → 跳过 LLM 直返热线,safety_events 落库
+        <span class="fb">最好的一击:断网重发同一条,照样拦住——安全兜底不依赖网络</span></li>
+      <li><b>心情日记 + 评估页</b>:零输入自动积累的曲线;16 维进度与"依据你说过的…"证据链
+        <span class="fb">口径:此两页为预置演示故事,与实测表格严格区分</span></li>
+      <li><b>离线评测实跑</b>:<code>memory_eval --mode lexical</code> —— 零网络出 MRR
+        <span class="fb">→ 内嵌终端第二个按钮;网络崩溃时的保底节目</span></li>
+    </ol>
+  </div>
+  <aside class="notes">顺序刻意把"确定性"放最前最后。断网演示今晚先排练(关 WiFi 后本页内嵌应用会断,先讲完内嵌部分再断网)。</aside>
+</section>
+
+<!-- ========= S11 LIVE 终端 ========= -->
+<section class="slide" data-live="term">
+  <div class="kicker"><span><span class="no">09</span>&nbsp; LIVE · 终端实跑</span><span>MyBuddy</span></div>
+  <h2>内嵌实跑:测试与离线评测</h2>
+  <div class="livewrap">
+    <div class="livebar">
+      <button class="btn acc" id="btnTests">▶ pytest 全量</button>
+      <button class="btn acc" id="btnMem">▶ 离线记忆评测</button>
+      <span class="status" id="runnerStatus">检测演示助手…</span>
+    </div>
+    <pre class="term" id="term">待执行。
+
+准备(答辩前一次性):
+  1. python scripts/demo_runner.py        ← 启动演示助手
+  2. 用 http://127.0.0.1:8765/ 打开本 deck (同源,最稳)
+
+点上方按钮,命令在本机真实执行,输出实时流入此窗口。</pre>
+  </div>
+  <aside class="notes">跑 pytest 的十几秒空档讲:"这两条命令,评委可在任何装有本仓库的机器上复现——我们的所有数字都是这样产生的。"</aside>
+</section>
+
+<!-- ========= S12 LIVE 应用 ========= -->
+<section class="slide" data-live="app">
+  <div class="kicker"><span><span class="no">09</span>&nbsp; LIVE · 系统实况</span><span>MyBuddy</span></div>
+  <h2>内嵌实况:对话 · 决策透视 · 心情 · 评估</h2>
+  <div class="livewrap">
+    <div class="livebar">
+      <button class="btn" id="appReload">⟳ 重载</button>
+      <a class="btn" id="appOpen" target="_blank" rel="noopener">在新标签打开</a>
+      <span class="status">应用 <span id="appUrlLabel"></span> · 点入框内后按键翻页失效——点框外或用右下角 ‹ › 按钮</span>
+    </div>
+    <iframe class="appframe" id="appFrame" title="MyBuddy live"></iframe>
+  </div>
+  <aside class="notes">框内完成:真实对话+透视面板 → 高危直返 → 心情/评估页。应用需已启动:.venv\Scripts\python.exe -m mybuddy.cli web --port 8000;演示账号 演示用户/demo1234。讲完点框外恢复键盘。</aside>
+</section>
+
+<!-- ========= S13 边界 ========= -->
+<section class="slide">
+  <div class="kicker"><span><span class="no">10</span>&nbsp; 边界</span><span>MyBuddy</span></div>
+  <h2>诚实的边界</h2>
+  <p class="sub">主动讲,不等追问</p>
+  <div class="cols grow">
+    <div class="col">
+      <h3>局限</h3>
+      <ul class="tight">
+        <li>标注集 gold 为团队审校版,未经临床专家背书;高危漏报声明是"置信上界",不是"零漏报"</li>
+        <li>抽取管线在 LoCoMo 上曾得 0.267 的负向结果(中英语种错配)——定性为方法学存档,不作能力声明</li>
+        <li>输出审核存在误伤面(如否定式用药劝阻),已量化,列入修复清单</li>
+        <li>演示故事数据与实测数据全程分开标注</li>
+      </ul>
+    </div>
+    <div class="col">
+      <h3>下一步</h3>
+      <ul class="tight">
+        <li>蒸馏本地小分类器替换级联语言层——零网络依赖的完整安全闭环</li>
+        <li>高危样本扩至 n≈300,漏报置信上界收紧到 1%</li>
+        <li>真实用户数据需伦理审查流程,课程阶段不采集</li>
+      </ul>
+    </div>
+  </div>
+  <aside class="notes">学术评委吃"自曝边界"。蒸馏分类器放最后说——落在老师领域,是把冷淡变兴趣的钩子。</aside>
+</section>
+
+<!-- ========= S14 收尾 ========= -->
+<section class="slide">
+  <div class="kicker"><span><span class="no">11</span>&nbsp; 总结</span><span>MyBuddy</span></div>
+  <div class="grow">
+    <p class="quote" style="font-size:3vh;max-width:60ch">
+      回到最初的问题:大多数人在"独自硬扛"和"专业求助"之间,没有落脚点。<br><br>
+      <b>小布补的就是这一层。而这一层必须安全——所以大模型只负责说话;什么时候说、朝什么方向说、什么时候不许它说,由确定性系统决定,并由数据集背书。</b><br><br>
+      <span class="muted" style="font-size:2.3vh">换掉底层模型,这个系统依然成立。</span>
+    </p>
+    <p style="margin-top:4vh;font-size:2.3vh" class="muted">谢谢,欢迎提问。</p>
+  </div>
+  <aside class="notes"><b>预设追问速查:</b>①"和直接调 API 区别?"→ 消融:关掉门控/状态机剩什么 ②"数据自己造的可信?"→ S8 三层对冲 ③"为什么不训练模型?"→ S5 ④"打分可信?"→ S6 效度表 ⑤"几百条够?"→ 三分法则与扩集路线 ⑥"风险等级给用户看合适吗?"→ 透视面板默认关闭,评委/调试视角。</aside>
+</section>
+
+<!-- ========= 备用页 · 评估状态机(被问再翻,End 键直达) ========= -->
+<section class="slide">
+  <div class="kicker"><span><span class="no">附</span>&nbsp; 备用页 · 评估状态机形式定义</span><span>MyBuddy</span></div>
+  <h2>每个量表条目是一个独立状态机</h2>
+  <p class="sub">状态集合 {unasked, asked, scored} · 时间迁移 · 投放约束 · 一条不变式</p>
+  <div class="chart" style="max-height:52vh">
+    <svg viewBox="0 0 760 320" role="img">
+      <defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#525252"/></marker></defs>
+      <rect x="40"  y="60" width="150" height="56" fill="#fff" stroke="#161616" stroke-width="2"/>
+      <text x="115" y="93" font-size="19" text-anchor="middle" font-family="Consolas">unasked</text>
+      <rect x="300" y="60" width="150" height="56" fill="#fff" stroke="#161616" stroke-width="2"/>
+      <text x="375" y="93" font-size="19" text-anchor="middle" font-family="Consolas">asked</text>
+      <rect x="560" y="60" width="150" height="56" fill="#defbe6" stroke="#198038" stroke-width="2"/>
+      <text x="635" y="93" font-size="19" text-anchor="middle" font-family="Consolas">scored</text>
+      <line x1="190" y1="88" x2="296" y2="88" stroke="#525252" stroke-width="2" marker-end="url(#ah)"/>
+      <text x="243" y="76" font-size="14" fill="#525252" text-anchor="middle">自然投放(≥3 轮间隔)</text>
+      <line x1="450" y1="88" x2="556" y2="88" stroke="#525252" stroke-width="2" marker-end="url(#ah)"/>
+      <text x="503" y="76" font-size="14" fill="#525252" text-anchor="middle">LLM 评分(白名单)</text>
+      <path d="M 340 116 C 300 190 180 190 130 120" fill="none" stroke="#8d8d8d" stroke-width="2" stroke-dasharray="6 4" marker-end="url(#ah)"/>
+      <text x="238" y="185" font-size="14" fill="#8d8d8d" text-anchor="middle">14 天过期回退</text>
+      <path d="M 620 116 C 540 240 220 240 110 122" fill="none" stroke="#8d8d8d" stroke-width="2" stroke-dasharray="6 4" marker-end="url(#ah)"/>
+      <text x="380" y="243" font-size="14" fill="#8d8d8d" text-anchor="middle">量表集齐 → 归档周期 → 全体重置</text>
+      <rect x="40" y="268" width="380" height="42" fill="#fcf4d6" stroke="#f1c21b"/>
+      <text x="56" y="294" font-size="15" fill="#684e00">条目 9(自伤意念):不存在"自然投放"转移 —— 不变式</text>
+      <text x="450" y="294" font-size="14" fill="#525252">该风险由安全层被动检测覆盖;计分执行 PHQ-8 口径</text>
+    </svg>
+  </div>
+  <aside class="notes">被问到评估机制细节/伦理时翻到本页。要点:不变式的表述——"转移函数里没有那条边",不是"提示词里不让问"。</aside>
+</section>
+
+<div class="bar" id="bar"></div>
+<div class="hud"><span>MyBuddy — Mental Health Companion</span><span class="ct" id="ct"></span>
+  <button class="hudbtn" id="prevB" title="上一页">‹</button>
+  <button class="hudbtn" id="nextB" title="下一页">›</button>
+</div>
+
+<script>
+  const $ = id => document.getElementById(id);
+  document.querySelectorAll('[data-slot]').forEach(el => {
+    const v = DATA[el.dataset.slot];
+    if (v === null || v === undefined) el.innerHTML = '<span class="slot-pending">待填</span>';
+    else el.innerHTML = '<span class="slot-filled">' + v + '</span>';
+  });
+
+  // ---- 图表渲染(纯内联 SVG,顶会规范:轴有量名单位、误差线、图注含要点)----
+  const MONO = 'Consolas,monospace';
+  function cap(text){ return '<p class="figcap">' + text + '</p>'; }
+
+  function renderCrisis(){
+    const el = $('crisisChart'); if(!el) return;
+    const c = CHART.crisis;
+    const rows = [['高危漏报率', c.fnr], ['危机直返误伤', c.fp], ['求助误拦率', c.block]];
+    const caption = cap('<b>图 1</b> | 危机分级架构消融,v1 级联 vs v2 融合(n=305,高危 95;v2 取双跑保守值);横轴为错误率(%),误差线为 95% Wilson 区间。'
+      + '<br>要点:高危漏报 87.4%→3.2%、直返误伤 45.0%→1.4%——不是用误伤换召回;求助误拦 5.0% 未改善(同一条正则被硬底线继承),如实标注。');
+    if (rows.some(r => r[1].v1 === null || r[1].v2 === null)) {
+      el.innerHTML = '<div class="figwrap"><span class="pend"><span class="slot-pending">图 1 待填 —— v1/v2 对比评测落地后自动点亮</span></span>' + caption + '</div>';
+      return;
+    }
+    const max = Math.max(...rows.flatMap(r => [r[1].v1, r[1].v2].concat(r[1].v1_ci||[], r[1].v2_ci||[])), 5);
+    const W=560, L=112, AX=44, bw=W-L-84;
+    const xs = v => L + v/max*bw;
+    let y=10, s='';
+    const bar = (yy,val,ci,color,tag)=>{
+      let o = `<rect x="${L}" y="${yy}" width="${Math.max(2,xs(val)-L)}" height="15" fill="${color}"/>`;
+      if (ci) o += `<line x1="${xs(ci[0])}" y1="${yy+7.5}" x2="${xs(ci[1])}" y2="${yy+7.5}" stroke="#161616" stroke-width="1.5"/>`
+             + `<line x1="${xs(ci[0])}" y1="${yy+3}" x2="${xs(ci[0])}" y2="${yy+12}" stroke="#161616" stroke-width="1.5"/>`
+             + `<line x1="${xs(ci[1])}" y1="${yy+3}" x2="${xs(ci[1])}" y2="${yy+12}" stroke="#161616" stroke-width="1.5"/>`;
+      o += `<text x="${xs(ci?ci[1]:val)+6}" y="${yy+12}" font-size="12.5" fill="${color}" font-family="${MONO}">${val}% ${tag}</text>`;
+      return o;
+    };
+    for(const [name,v] of rows){
+      s += `<text x="0" y="${y+24}" font-size="14.5" fill="#525252">${name}</text>`;
+      s += bar(y, v.v1, v.v1_ci, '#8d8d8d', 'v1');
+      s += bar(y+19, v.v2, v.v2_ci, '#0f62fe', 'v2');
+      y += 60;
+    }
+    // 横轴:错误率(%)
+    s += `<line x1="${L}" y1="${y}" x2="${L+bw}" y2="${y}" stroke="#e0e0e0"/>`;
+    for(const t of [0, Math.round(max/2), Math.round(max)]){
+      s += `<line x1="${xs(t)}" y1="${y}" x2="${xs(t)}" y2="${y+5}" stroke="#8d8d8d"/>`
+         + `<text x="${xs(t)}" y="${y+18}" font-size="12" fill="#8d8d8d" text-anchor="middle" font-family="${MONO}">${t}</text>`;
+    }
+    s += `<text x="${L+bw/2}" y="${y+AX-8}" font-size="13.5" fill="#525252" text-anchor="middle">错误率 (%,越低越好)</text>`;
+    el.innerHTML = `<div class="figwrap"><svg viewBox="0 0 ${W} ${y+AX}" role="img">${s}</svg>${caption}</div>`;
+  }
+
+  function renderScatter(){
+    const el = $('assessScatter'); if(!el) return;
+    const W=440,H=350,l=52,b=44,t=18,r=14, pw=W-l-r, ph=H-t-b, D=24;
+    const X=v=>l+v/D*pw, Y=v=>t+ph-v/D*ph;
+    let s = `<line x1="${l}" y1="${t+ph}" x2="${l+pw}" y2="${t+ph}" stroke="#8d8d8d"/>`
+          + `<line x1="${l}" y1="${t}" x2="${l}" y2="${t+ph}" stroke="#8d8d8d"/>`;
+    for(const v of [0,6,12,18,24]){
+      s += `<line x1="${X(v)}" y1="${t+ph}" x2="${X(v)}" y2="${t+ph+5}" stroke="#8d8d8d"/>`
+         + `<text x="${X(v)}" y="${t+ph+18}" font-size="12" fill="#8d8d8d" text-anchor="middle" font-family="${MONO}">${v}</text>`
+         + `<line x1="${l-5}" y1="${Y(v)}" x2="${l}" y2="${Y(v)}" stroke="#8d8d8d"/>`
+         + `<text x="${l-9}" y="${Y(v)+4}" font-size="12" fill="#8d8d8d" text-anchor="end" font-family="${MONO}">${v}</text>`;
+    }
+    s += `<line x1="${X(0)}" y1="${Y(0)}" x2="${X(D)}" y2="${Y(D)}" stroke="#c6c6c6" stroke-dasharray="5 4"/>`;
+    s += `<text x="${X(D)-2}" y="${Y(D)+16}" font-size="12" fill="#8d8d8d" text-anchor="end">y = x(完全一致)</text>`;
+    for(const [x,y] of CHART.scatter_phq) s += `<circle cx="${X(x)}" cy="${Y(y)}" r="6" fill="#0f62fe" fill-opacity=".85"/>`;
+    for(const [x,y] of CHART.scatter_gad) s += `<rect x="${X(x)-5}" y="${Y(y)-5}" width="10" height="10" fill="#fff" stroke="#198038" stroke-width="2.5"/>`;
+    s += `<circle cx="${l+14}" cy="${t+9}" r="6" fill="#0f62fe"/><text x="${l+26}" y="${t+13}" font-size="13" fill="#525252">PHQ-9(0–27)</text>`;
+    s += `<rect x="${l+130}" y="${t+3}" width="10" height="10" fill="#fff" stroke="#198038" stroke-width="2.5"/><text x="${l+146}" y="${t+13}" font-size="13" fill="#525252">GAD-7(0–21)</text>`;
+    s += `<text x="${l+pw/2}" y="${H-6}" font-size="13.5" fill="#525252" text-anchor="middle">量表真值总分 (分)</text>`;
+    s += `<text x="14" y="${t+ph/2}" font-size="13.5" fill="#525252" text-anchor="middle" transform="rotate(-90 14 ${t+ph/2})">系统预测总分 (分)</text>`;
+    const caption = cap('<b>图 2</b> | 口语回答→量表分的效标效度:每点为一个人物的量表总分,横轴为构造给定的真值,纵轴为系统预测(n=24,实测 2026-07-30)。'
+      + '<br>要点:点集贴合对角线 → 翻译层保真;唯一明显偏离点落在"极轻微/轻度"分界(差 3 分)。');
+    el.innerHTML = `<div class="figwrap"><svg viewBox="0 0 ${W} ${H}" role="img">${s}</svg>${caption}</div>`;
+  }
+
+  function renderDrop(){
+    const el = $('dropFig'); if(!el) return;
+    const a = CHART.drop.self_mrr, b2 = CHART.drop.locomo_h5;
+    const W=260,H=270,base=196,bw=58,top=30;
+    const yv = v => base - v*(base-top);
+    let s = `<line x1="42" y1="${base}" x2="${W-8}" y2="${base}" stroke="#8d8d8d"/>`
+          + `<line x1="42" y1="${top-8}" x2="42" y2="${base}" stroke="#8d8d8d"/>`;
+    for(const t of [0,0.5,1.0]){
+      s += `<line x1="37" y1="${yv(t)}" x2="42" y2="${yv(t)}" stroke="#8d8d8d"/>`
+         + `<text x="33" y="${yv(t)+4}" font-size="11.5" fill="#8d8d8d" text-anchor="end" font-family="${MONO}">${t.toFixed(1)}</text>`;
+    }
+    s += `<text x="14" y="${(base+top)/2}" font-size="12.5" fill="#525252" text-anchor="middle" transform="rotate(-90 14 ${(base+top)/2})">得分 (0–1)</text>`;
+    s += `<rect x="66" y="${yv(a)}" width="${bw}" height="${base-yv(a)}" fill="#8d8d8d"/>`;
+    s += `<text x="${66+bw/2}" y="${yv(a)-7}" font-size="15" font-weight="700" fill="#161616" text-anchor="middle" font-family="${MONO}">${a.toFixed(2)}</text>`;
+    s += `<text x="${66+bw/2}" y="${base+16}" font-size="11.5" fill="#525252" text-anchor="middle">自建集</text>`;
+    s += `<text x="${66+bw/2}" y="${base+30}" font-size="11" fill="#8d8d8d" text-anchor="middle" font-family="${MONO}">MRR</text>`;
+    s += `<rect x="160" y="${yv(b2)}" width="${bw}" height="${base-yv(b2)}" fill="#0f62fe"/>`;
+    s += `<text x="${160+bw/2}" y="${yv(b2)-7}" font-size="15" font-weight="700" fill="#0f62fe" text-anchor="middle" font-family="${MONO}">${b2.toFixed(2)}</text>`;
+    s += `<text x="${160+bw/2}" y="${base+16}" font-size="11.5" fill="#525252" text-anchor="middle">LoCoMo</text>`;
+    s += `<text x="${160+bw/2}" y="${base+30}" font-size="11" fill="#8d8d8d" text-anchor="middle" font-family="${MONO}">H@5</text>`;
+    const caption = cap('<b>图 3</b> | 同一检索系统在自建集与公开基准上的成绩;两指标口径不同(MRR vs H@5),不作同轴比较,只展示趋势。'
+      + '<br>要点:自建评测系统性乐观——这就是我们全部改用公开基准方法论的原因。');
+    el.innerHTML = `<div class="figwrap"><svg viewBox="0 0 ${W} ${H}" role="img">${s}</svg>${caption}</div>`;
+  }
+  renderCrisis(); renderScatter(); renderDrop();
+
+  const slides = [...document.querySelectorAll('.slide')];
+  let i = 0;
+  function show(n){
+    i = Math.max(0, Math.min(slides.length-1, n));
+    slides.forEach((s,k)=>s.classList.toggle('active', k===i));
+    $('ct').textContent = String(i+1).padStart(2,'0') + ' / ' + String(slides.length).padStart(2,'0');
+    $('bar').style.width = ((i+1)/slides.length*100) + '%';
+    location.hash = i+1;
+    const live = slides[i].dataset.live;
+    if (live === 'app' && !$('appFrame').getAttribute('src')) $('appFrame').src = APP_URL;
+    if (live === 'term') pingRunner();
+  }
+  addEventListener('keydown', e => {
+    if (e.key==='ArrowRight'||e.key===' '||e.key==='PageDown') show(i+1);
+    else if (e.key==='ArrowLeft'||e.key==='PageUp') show(i-1);
+    else if (e.key==='Home') show(0);
+    else if (e.key==='End') show(slides.length-1);
+    else if (e.key==='n'||e.key==='N') document.body.classList.toggle('show-notes');
+  });
+  $('prevB').onclick = () => show(i-1);
+  $('nextB').onclick = () => show(i+1);
+
+  // ---- 内嵌演示 ----
+  async function pingRunner(){
+    const s = $('runnerStatus');
+    try{
+      const r = await fetch(RUNNER_URL + '/ping', {cache:'no-store'});
+      s.textContent = r.ok ? '演示助手已连接 ✓' : '助手响应异常';
+      return r.ok;
+    }catch(_){
+      s.textContent = '未检测到演示助手 —— 先运行: python scripts/demo_runner.py';
+      return false;
+    }
+  }
+  async function runCmd(id){
+    const term = $('term'), btns = [$('btnTests'), $('btnMem')];
+    btns.forEach(b=>b.disabled=true);
+    term.textContent = '';
+    try{
+      const r = await fetch(RUNNER_URL + '/run?id=' + id, {cache:'no-store'});
+      const rd = r.body.getReader(), dec = new TextDecoder('utf-8');
+      for(;;){
+        const {done, value} = await rd.read();
+        if (done) break;
+        term.textContent += dec.decode(value, {stream:true});
+        term.scrollTop = term.scrollHeight;
+      }
+    }catch(e){
+      term.textContent += '\n[连接失败] ' + e + '\n先启动: python scripts/demo_runner.py';
+    }
+    btns.forEach(b=>b.disabled=false);
+  }
+  $('btnTests').onclick = () => runCmd('tests');
+  $('btnMem').onclick   = () => runCmd('memory');
+  $('appReload').onclick = () => { $('appFrame').src = APP_URL; };
+  $('appOpen').href = APP_URL;
+  $('appUrlLabel').textContent = APP_URL;
+
+  show(parseInt(location.hash.slice(1)||'1',10)-1);
+</script>
+</body>
+</html>

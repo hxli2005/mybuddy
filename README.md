@@ -1,6 +1,6 @@
 # MyBuddy
 
-生活陪伴型 AI 小伙伴「小布」—— 一个具有长期记忆、情绪感知和主动关怀能力的 AI 陪伴智能体。
+心理健康陪伴 AI「小布」—— 一个具有长期记忆、情绪感知、危机安全防护和 CBT 引导能力的心理健康陪伴智能体(提供情绪支持与心理教育,不替代专业诊疗)。
 
 借鉴 [NousResearch Hermes Agent](https://github.com/nousresearch/hermes-agent) 的自学习机制，自研 ReAct 主循环、三层文本长期记忆、角色关系编排与动态角色生活状态，配本地 Web 前端。
 

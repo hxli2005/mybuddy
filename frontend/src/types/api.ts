@@ -13,6 +13,11 @@ export type ToolCall = {
   arguments?: Record<string, unknown>;
   result?: string;
   source?: string;
+  /* 后端检索预取(backend_search_prefetch)附带的决策元数据 */
+  decision_level?: string;
+  decision_reason?: string;
+  decision_topic?: string | null;
+  result_count?: number;
 };
 
 export type SearchSource = {

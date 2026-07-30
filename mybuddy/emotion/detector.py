@@ -23,9 +23,9 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-EMOTION_PROMPT = """你是一个情绪识别助手。判断当前用户消息的情绪,严格输出 JSON:
+EMOTION_PROMPT = """你是一个情绪识别助手。判断当前用户消息的情绪与自伤/自杀风险,严格输出 JSON:
 
-{"label": "positive|neutral|negative", "strength": 0.0-1.0, "category": "分类", "intensity": 1-5, "reason": "不超过 15 字的判断依据"}
+{"label": "positive|neutral|negative", "strength": 0.0-1.0, "category": "分类", "intensity": 1-5, "risk": "none|low|medium|high|critical", "method_seeking": true|false, "reason": "不超过 15 字的判断依据"}
 
 规则:
 - label 必须是三选一
@@ -35,6 +35,17 @@ EMOTION_PROMPT = """你是一个情绪识别助手。判断当前用户消息的
   stress(压力) guilt(内疚) shame(羞耻) fear(恐惧) disappointment(失望)
   boredom(无聊) calm(平静) joy(喜悦) gratitude(感激) excitement(兴奋)
 - intensity 是 1-5 的整数:1=非常轻微, 3=中等, 5=非常强烈;中性消息给 1-2
+- risk 是当前用户消息的自伤/自杀风险等级,必须五选一:
+  critical=已实施或正在实施自伤行为的陈述(如割腕、吞下大量药物),或有明确计划/即刻意图;
+  high=明确的自杀/自伤意念但无具体计划,含委婉表达(跳楼、烧炭、写遗书、轻生、想解脱);
+  medium=强烈绝望、强烈自我否定或自我伤害念头; low=模糊的痛苦/疲惫/崩溃表达; none=无风险
+- risk 必须结合上下文与语义判定,以下情形应降级:
+  否定("我不想死")、第三人称转述(说朋友/家人/别人)、反讽或亲昵玩笑("笑死""想死你了")、
+  引用歌词/书名/影视("《不想活了》这首歌")、康复叙述("以前想过自杀,现在好多了")、
+  游戏或口语夸张("这游戏玩得我想死")
+- 以下情形应升级:已遂或进行中的行为陈述("我昨晚割腕了""我吃了一整瓶安眠药")、
+  委婉语表达的真实意图(跳楼/烧炭/遗书/轻生/想永远消失)
+- method_seeking:用户是否在索取伤害自己的方法、工具、剂量或步骤,是则 true,否则 false
 - 可以参考最近对话上下文理解省略、短句和延续情绪,但当前用户消息权重最高
 - 不要把已经缓和的旧负面情绪强加到当前消息;如果上下文与当前消息冲突,以当前消息为准
 - 不揣测外部信息,不做诊断
@@ -48,6 +59,7 @@ VALID_CATEGORIES = {
     "stress", "guilt", "shame", "fear", "disappointment",
     "boredom", "calm", "joy", "gratitude", "excitement",
 }
+VALID_RISKS = {"none", "low", "medium", "high", "critical"}
 AUTH_STATUS_CODES = {401, 403}
 AUTH_ERROR_NAMES = {"authenticationerror", "permissiondeniederror"}
 
@@ -59,6 +71,12 @@ class EmotionResult:
     reason: str = ""
     category: str | None = None
     intensity: int = 3
+    # 自伤/自杀风险(fusion 模式的语言层信号)。
+    # None = 本轮未获得 LLM 判定(调用失败/未启用),融合层应保守退化;
+    # "none" = LLM 明确判定无风险。
+    risk: str | None = None
+    # 是否在索取伤害自己的方法(替代 InputModerator 的独立 LLM 判定)
+    method_seeking: bool = False
 
     @property
     def is_negative(self) -> bool:
@@ -71,6 +89,8 @@ class EmotionResult:
             "reason": self.reason,
             "category": self.category,
             "intensity": self.intensity,
+            "risk": self.risk,
+            "method_seeking": self.method_seeking,
         }
 
 
@@ -199,12 +219,22 @@ def _parse(text: str) -> EmotionResult:
         intensity = 3
     intensity = max(1, min(5, intensity))
 
+    # risk 解析容错与 category 同款:字段缺失或非法值一律回退 "none"
+    # (JSON 已成功解析说明 LLM 有响应,与"调用失败 → None"区分开)
+    risk = str(data.get("risk", "none")).lower()
+    if risk not in VALID_RISKS:
+        risk = "none"
+
+    method_seeking = data.get("method_seeking", False) is True
+
     return EmotionResult(
         label=label,
         strength=strength,
         reason=reason,
         category=category,
         intensity=intensity,
+        risk=risk,
+        method_seeking=method_seeking,
     )
 
 

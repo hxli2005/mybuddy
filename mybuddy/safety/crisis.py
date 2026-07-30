@@ -12,6 +12,8 @@ from mybuddy.safety.constants import (
     HOTLINES,
     CrisisLevel,
     classify_crisis_level,
+    classify_hard_floor,
+    classify_hint_level,
 )
 
 if TYPE_CHECKING:
@@ -94,6 +96,37 @@ def build_crisis_response(level: CrisisLevel) -> CrisisResponse | None:
     )
 
 
+# --- fusion(v2)融合工具 ------------------------------------------------------
+
+_LEVEL_ORDER = [
+    CrisisLevel.NONE,
+    CrisisLevel.LOW,
+    CrisisLevel.MEDIUM,
+    CrisisLevel.HIGH,
+    CrisisLevel.CRITICAL,
+]
+
+
+def level_rank(level: CrisisLevel) -> int:
+    return _LEVEL_ORDER.index(level)
+
+
+def bump_level(level: CrisisLevel) -> CrisisLevel:
+    """上浮一级(CRITICAL 封顶)。"""
+    idx = level_rank(level)
+    return _LEVEL_ORDER[min(idx + 1, len(_LEVEL_ORDER) - 1)]
+
+
+def risk_to_level(risk: str | None) -> CrisisLevel | None:
+    """语言层 risk 字符串 → CrisisLevel;None(未判定)原样透传给融合层。"""
+    if risk is None:
+        return None
+    try:
+        return CrisisLevel(risk)
+    except ValueError:
+        return CrisisLevel.NONE
+
+
 _LLM_SEVERITY_PROMPT = (
     "你是心理危机识别助手。判断这条消息的自伤/自杀风险等级,严格输出JSON:\n"
     '{"level": "none|low|medium|high|critical"}\n'
@@ -121,6 +154,45 @@ class CrisisDetector:
         level = classify_crisis_level(text)
         response = build_crisis_response(level)
         return level, response
+
+    # --- fusion(v2)---------------------------------------------------------
+
+    def hard_floor(self, text: str) -> tuple[CrisisLevel, CrisisResponse | None]:
+        """硬底线检测:无歧义表达命中即 ≥HIGH,确定性直返(跳过一切 LLM)。"""
+        level = classify_hard_floor(text)
+        return level, build_crisis_response(level)
+
+    def fuse(
+        self,
+        text: str,
+        llm_risk: CrisisLevel | None,
+        *,
+        alert_active: bool = False,
+    ) -> tuple[CrisisLevel, CrisisResponse | None]:
+        """融合定级(安全不对称):
+
+        - 硬底线命中 → 确定性直返,LLM 不可否决(保漏判);
+        - 否则 final = max(提示级信号, llm_risk):HINT 命中提供保底 LOW
+          (警戒窗口内上浮为 MEDIUM),等级判断交给带上下文的语言层(治误伤);
+        - llm_risk 为 None(LLM 不可用/输出不可解析)→ HINT 按 v1 原等级即判级,
+          保守退化恰好等于今天的系统,永不更差。
+        """
+        hard = classify_hard_floor(text)
+        if hard in (CrisisLevel.HIGH, CrisisLevel.CRITICAL):
+            return hard, build_crisis_response(hard)
+
+        hint = classify_hint_level(text)
+        if llm_risk is None:
+            # 保守退化 = v1:提示级即判级(警戒窗口内再上浮一级,只会更保守)
+            level = hint
+            if alert_active and hint != CrisisLevel.NONE:
+                level = bump_level(hint)
+        else:
+            floor = CrisisLevel.NONE
+            if hint != CrisisLevel.NONE:
+                floor = CrisisLevel.MEDIUM if alert_active else CrisisLevel.LOW
+            level = max(floor, llm_risk, key=level_rank)
+        return level, build_crisis_response(level)
 
     async def classify_severity(self, text: str) -> tuple[CrisisLevel, CrisisResponse | None]:
         """二级检测:正则打底,LOW/MEDIUM 命中时用 LLM 复核(可选)。"""

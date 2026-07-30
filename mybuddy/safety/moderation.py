@@ -79,7 +79,12 @@ class InputModerator:
         self._provider = provider
         self._small_model = small_model
 
-    async def check(self, text: str) -> ModerationResult:
+    async def check(self, text: str, *, use_llm: bool = True) -> ModerationResult:
+        """输入审核。
+
+        use_llm=False(fusion/v2 模式):只跑正则第一层——模糊表达的 LLM 判定
+        已并入情绪+风险合并调用(EmotionResult.method_seeking),不再单独调用。
+        """
         clean = (text or "").strip()
         if not clean:
             return ModerationResult()
@@ -96,7 +101,7 @@ class InputModerator:
                 )
 
         # 第二层:模糊表达 → LLM 判断(可选,失败时放行交给危机检测兜底)
-        if self._provider is not None and _AMBIGUOUS_MARKERS.search(clean):
+        if use_llm and self._provider is not None and _AMBIGUOUS_MARKERS.search(clean):
             risk = await self._llm_judge(clean)
             if risk == "method_seeking":
                 return ModerationResult(

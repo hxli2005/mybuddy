@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 from mybuddy.memory.long_term import LongTermMemory
@@ -15,6 +16,15 @@ from .registry import tool
 
 # 模块级注册 LongTermMemory 引用;CLI 启动时由 setup 注入
 _ltm: LongTermMemory | None = None
+
+# 饮食安全是需要覆盖多个约束的场景,不能只按全局相关度取 Top-K。复合请求里常同时
+# 出现提醒、时间和项目词,这些内容可能把"香菜避雷"或"过敏"挤出结果。检测到点餐/
+# 忌口意图后,分别为 anti_preference 与健康 profile 预留一个位置。
+_DIETARY_INTENT_RE = re.compile(
+    r"吃|喝|饭|餐|外卖|点单|点菜|食物|零食|饮食|忌口|过敏|雷区|避雷|不能碰"
+)
+_DIETARY_RISK_RE = re.compile(r"过敏|忌口|禁忌|不能吃|不能碰|避开|避免|不吃")
+_DIETARY_QUERY_HINTS = "饮食 吃饭 点餐 外卖 食物 忌口 过敏 雷区 避雷 不吃 不能吃"
 
 
 def setup_memory_tool(ltm: LongTermMemory) -> None:
@@ -39,6 +49,48 @@ def _get_ltm() -> LongTermMemory:
         return _ltm
 
 
+def _dietary_guardrail_hits(
+    ltm: LongTermMemory,
+    query: str,
+    *,
+    top_k: int,
+) -> list[dict[str, Any]]:
+    """饮食复合意图的约束覆盖召回:优先保留一条忌口和一条健康风险。"""
+    if top_k <= 0 or not _DIETARY_INTENT_RE.search(query):
+        return []
+
+    expanded = f"{query} {_DIETARY_QUERY_HINTS}"
+    reserved: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for mem_type in ("anti_preference", "profile"):
+        for hit in ltm.search(
+            expanded,
+            top_k=max(top_k, 3),
+            mem_type=mem_type,
+            use_semantic=True,
+        ):
+            uid = str(hit.get("id") or "")
+            if not uid or uid in seen:
+                continue
+            if mem_type == "profile":
+                meta = hit.get("metadata") or {}
+                risk_text = " ".join(
+                    (
+                        str(hit.get("content") or ""),
+                        " ".join(str(x) for x in meta.get("tags") or []),
+                        " ".join(str(x) for x in meta.get("keywords") or []),
+                    )
+                )
+                if not _DIETARY_RISK_RE.search(risk_text):
+                    continue
+            seen.add(uid)
+            reserved.append(hit)
+            break
+        if len(reserved) >= top_k:
+            break
+    return reserved
+
+
 @tool(
     name="recall_memory",
     description=(
@@ -54,13 +106,25 @@ def recall_memory(query: str) -> str:
     """
     ltm = _get_ltm()
     cfg = get_config()
-    hits = []
-    seen: set[str] = set()
-    for mem_type in ("open_thread", "shared_moment", "preference", "profile", "memory"):
+    top_k = cfg.memory.long_term_top_k
+    reserved = _dietary_guardrail_hits(ltm, query, top_k=top_k)
+    hits: list[dict[str, Any]] = []
+    seen: set[str] = {
+        str(hit.get("id") or "") for hit in reserved if str(hit.get("id") or "")
+    }
+    for mem_type in (
+        "open_thread",
+        "shared_moment",
+        "preference",
+        "anti_preference",
+        "profile",
+        "memory",
+        "entity",
+    ):
         # use_semantic=True:挂了语义召回时走词法+向量 RRF 融合,补回换词召回。
         # 评测显示换词类 query 的 MRR 由此 +0.28(见 eval/RESULTS.md 第 1 轮)。
         for hit in ltm.search(
-            query, top_k=cfg.memory.long_term_top_k, mem_type=mem_type, use_semantic=True
+            query, top_k=top_k, mem_type=mem_type, use_semantic=True
         ):
             uid = str(hit.get("id") or "")
             if not uid or uid in seen:
@@ -75,7 +139,9 @@ def recall_memory(query: str) -> str:
         ),
         reverse=True,
     )
-    hits = hits[:cfg.memory.long_term_top_k]
+    # 先覆盖饮食安全约束,再用普通相关度结果补满。这样复合请求中的提醒/时间词不会
+    # 把花生过敏或香菜忌口挤出 Top-K。
+    hits = (reserved + hits)[:top_k]
     if not hits:
         return "没有找到相关记忆。"
 

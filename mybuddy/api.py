@@ -280,6 +280,9 @@ class AppState:
                 return
             scorer = AssessmentScorer(self.provider, self.cfg.llm.small_model)
             pending_phq9 = [d["dimension_index"] for d in asked if d["assessment_type"] == "phq9"]
+            # 自伤维(index 8)永不主动投放,仅被动记录——常驻白名单(实验 B 发现的生产缺口)
+            if 8 not in pending_phq9:
+                pending_phq9.append(8)
             pending_gad7 = [d["dimension_index"] for d in asked if d["assessment_type"] == "gad7"]
             result = await scorer.try_score(
                 user_message,
@@ -833,6 +836,11 @@ def create_app(config_path: str = "config.yaml", max_steps: int = 6):
     except ModuleNotFoundError as e:  # pragma: no cover - 只有未安装 api extra 时触发
         raise RuntimeError("缺少 API 依赖,请运行: uv sync --extra api") from e
 
+    # 本模块启用了 postponed annotations,而 Request 为可选依赖内的局部导入。
+    # FastAPI 解析路由签名时从模块 globals 求值字符串注解;不补入会把
+    # ``request: Request`` 误判成名为 request 的必填 query 参数并返回 422。
+    globals()["Request"] = Request
+
     state = AppState(config_path=config_path, max_steps=max_steps)
     app = FastAPI(title="MyBuddy Demo API")
     app.state.mybuddy = state
@@ -1053,7 +1061,7 @@ def create_app(config_path: str = "config.yaml", max_steps: int = 6):
         return resp
 
     @app.get("/api/auth/me")
-    async def auth_me(request):
+    async def auth_me(request: Request):
         """返回当前用户信息。"""
         from mybuddy.auth.manager import get_user_id_from_cookie
         user_id = get_user_id_from_cookie(request.headers.get("Cookie"))

@@ -29,6 +29,8 @@ const categoryLabels: Record<string, string> = {
   fear: "恐惧",
   disappointment: "失望",
   boredom: "无聊",
+  emptiness: "空虚",
+  hope: "希望",
   calm: "平静",
   joy: "喜悦",
   gratitude: "感激",

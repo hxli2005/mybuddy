@@ -406,6 +406,10 @@ async def _try_assessment_scoring(runtime: UserRuntime, user_id: int, user_messa
             return
         scorer = AssessmentScorer(runtime.provider, runtime.cfg.llm.small_model)
         pending_phq9 = [d["dimension_index"] for d in asked if d["assessment_type"] == "phq9"]
+        # 自伤维(index 8)永不主动投放,仅在用户自然提及时被动记录——常驻白名单,
+        # 否则它永远不在 asked 里、也就永远不可能被评分(评测实验 B 发现的生产缺口)。
+        if 8 not in pending_phq9:
+            pending_phq9.append(8)
         pending_gad7 = [d["dimension_index"] for d in asked if d["assessment_type"] == "gad7"]
         result = await scorer.try_score(
             user_message,

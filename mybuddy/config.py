@@ -102,6 +102,22 @@ class ToolsConfig(BaseModel):
     http_timeout: float = 5.0
 
 
+class SafetyConfig(BaseModel):
+    """安全系统开关。
+
+    crisis_mode:
+      - "cascade"(默认,v1 现状):输入审核(正则+LLM)→ 危机正则分级(LOW/MEDIUM 时
+        LLM 复核)→ 情绪检测,三个旁路 LLM 调用彼此独立。
+      - "fusion"(v2):硬底线正则(无歧义表达,命中即确定性直返)→ 情绪+风险合并
+        为单次 LLM 调用 → 融合定级 final = max(提示级信号, LLM 风险);LLM 不可用时
+        提示级即判级(保守退化 = v1)。
+    """
+
+    crisis_mode: Literal["cascade", "fusion"] = "cascade"
+    # 警戒窗口:任一轮危机等级 ≥ HIGH 后,接下来 N 轮内提示级信号自动上浮一级
+    alert_window_turns: int = 5
+
+
 class Config(BaseModel):
     llm: LLMConfig = Field(default_factory=LLMConfig)
     persona: PersonaConfig = Field(default_factory=PersonaConfig)
@@ -111,6 +127,7 @@ class Config(BaseModel):
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
     transcription: TranscriptionConfig = Field(default_factory=TranscriptionConfig)
+    safety: SafetyConfig = Field(default_factory=SafetyConfig)
 
 
 _ENV_VAR_PATTERN = re.compile(r"\$\{([^}]+)\}")

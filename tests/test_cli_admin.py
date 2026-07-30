@@ -32,6 +32,8 @@ def admin_env(tmp_path, monkeypatch):
     chroma_dir.mkdir()
     skills_dir.mkdir()
 
+    # Windows 下 tmp_path 是反斜杠路径,写进 YAML 双引号字符串会把 \U 之类当转义序列
+    # (ScannerError),统一用 POSIX 风格路径。
     cfg_path.write_text(
         f"""
 llm:
@@ -40,11 +42,11 @@ llm:
 memory:
   embedding_model: "BAAI/bge-m3"
 paths:
-  data_dir: "{tmp_path}"
-  db_file: "{db_file}"
-  chroma_dir: "{chroma_dir}"
-  skills_dir: "{skills_dir}"
-  trajectories_dir: "{tmp_path}/traj"
+  data_dir: "{tmp_path.as_posix()}"
+  db_file: "{db_file.as_posix()}"
+  chroma_dir: "{chroma_dir.as_posix()}"
+  skills_dir: "{skills_dir.as_posix()}"
+  trajectories_dir: "{tmp_path.as_posix()}/traj"
 """,
         encoding="utf-8",
     )

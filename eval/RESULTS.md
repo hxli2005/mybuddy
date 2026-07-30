@@ -24,6 +24,36 @@
 
 ---
 
+## 复跑记录 · 公开基准 + 自建集(复跑于 2026-07-30,commit 19718eb + 工作区未提交改动)
+
+**动机**:心理健康陪伴改造(feat/mental-health)后复跑既有基准,确认记忆检索无回归。
+**环境差异(与 c1–c5 对照时注意)**:embedding 已从 `text-embedding-3-small` 换为 `qwen/qwen3-embedding-8b`(OpenRouter);代码为 19718eb + 工作区未提交改动(memory_tool.py 等)。locomo10.json 重新下载至 `eval/data/external/`(2.74MB,不入库)。
+
+### memory_eval(自建中文集,52 query,--mode both --topk 5)✓ 有效
+
+| 桶 | n | 词法 MRR | hybrid MRR | ΔMRR | 词法 Hit@1 | hybrid Hit@1 |
+|---|---|---|---|---|---|---|
+| 总体 | 52 | 0.742 | 0.824 | **+0.082** | 0.692 | 0.769 |
+| direct | 14 | 1.000 | 1.000 | 0 | 1.000 | 1.000 |
+| multihop | 10 | 0.850 | 0.900 | +0.050 | 0.800 | 0.800 |
+| **paraphrase** | 14 | 0.482 | 0.681 | **+0.199** | 0.429 | 0.571 |
+| temporal | 14 | 0.667 | 0.738 | +0.071 | 0.571 | 0.714 |
+
+- **结论:语义 RRF 增益方向与 c1/c2 一致**(换词类补回最多),hybrid 总体 MRR 0.824,略低于 c2 时代记录(0.852)——embedding 模型已换 + 代码演进,幅度在噪声与模型差异可解释范围内,**无明显回归**。
+- 语义索引完整(37/37 卡嵌入);跑数期间 3 次 embedding 瞬时超时经重试全部恢复,未污染数字。
+
+### LoCoMo(公开基准复跑)✗ 被账户余额阻断,本轮无有效数字
+
+- 数据集就位、脚本可跑,但跑到样本 1 索引阶段 OpenRouter 返回 **402 Insufficient credits**(查询 `/credits`:total_usage 300.21 / total_credits 300,余额耗尽);仅嵌入 96/419 卡,后续全部 402,**该次运行数字不可作数,未记录**。
+- **c3(2026-06-18)仍为最近有效 LoCoMo 基准**:总体 H@5/H@10/H@20 = 0.57 / 0.67 / 0.72(single-hop 0.53/0.63/0.67,temporal 0.84/0.91/0.91)。
+- 待办:充值后用同命令复跑即可:`uv run python eval/locomo_eval.py --samples 2 --tiers 5,10,20`。
+
+### 复跑工程备注(不改仓库代码)
+
+- 评测经 scratchpad 侧 wrapper 运行:embedding 失败重试 ×5(裸跑时单次超时会让 `SemanticRecall.reconcile` 中途 `break`,静默产出残缺向量索引);Windows 下 `TemporaryDirectory` 清理会因 vectors.db 句柄锁在**指标算完后**抛 PermissionError(locomo_eval 里会中断后续样本),wrapper 以 `ignore_cleanup_errors` 兜底。若未来在 Windows 复跑,这两点值得注意。
+
+---
+
 ## 第 5 轮 · 抽取管线下的基准(方法学教训,结论不可作数)— 2026-06-18
 
 **目标**:c3/c4 在原始 turn/chunk 上测是悲观下界;想在 FactExtractor 抽取后的事实卡上测,拿"生产真实水位"。

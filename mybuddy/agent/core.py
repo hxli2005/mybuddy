@@ -35,6 +35,8 @@ from mybuddy.learning import Trajectory, TrajectoryLogger, TrajectoryStep
 from mybuddy.llm import BaseLLMProvider, Message, Role
 from mybuddy.memory import MemoryManager
 from mybuddy.safety import CrisisLevel
+from mybuddy.safety.crisis import risk_to_level
+from mybuddy.safety.moderation import BLOCKED_SAFETY_MESSAGE
 from mybuddy.storage import append_message, enqueue
 from mybuddy.tools import ToolRegistry
 
@@ -155,6 +157,8 @@ class Agent:
         # 持有后台 task 强引用:create_task 只被事件循环弱引用,挂起(await 网络)期间
         # 无强引用会被 GC 提前回收,导致抽取/复盘静默中断(CPython 已知坑)。
         self._bg_tasks: set[asyncio.Task] = set()
+        # fusion(v2)警戒窗口:任一轮危机等级 ≥HIGH 后的剩余警戒轮数
+        self._risk_alert_rounds = 0
 
     @property
     def session_id(self) -> str:
@@ -182,9 +186,18 @@ class Agent:
         # 供 _persist_chat_message 关联消息归属(访客为 None)
         self._active_user_id = effective_user_id
 
-        # 0a. 输入审核门:blocked 直接返回预设安全响应,不调用主 LLM
+        fusion_mode = (
+            getattr(self._config, "safety", None) is not None
+            and self._config.safety.crisis_mode == "fusion"
+            and self._crisis_detector is not None
+        )
+
+        # 0a. 输入审核门:blocked 直接返回预设安全响应,不调用主 LLM。
+        #     fusion 模式只跑正则第一层——模糊表达的 LLM 判定并入情绪+风险合并调用。
         if self._input_moderator is not None:
-            moderation = await self._input_moderator.check(user_input)
+            moderation = await self._input_moderator.check(
+                user_input, use_llm=not fusion_mode
+            )
             if moderation.blocked:
                 self._log_safety_event(
                     effective_user_id, "blocked_input", moderation.reason
@@ -195,13 +208,42 @@ class Agent:
                     finish_reason="input_blocked",
                 )
 
-        # 0b. 危机检测门:CRITICAL/HIGH 跳过整个 Agent 循环直接返回安全响应
         crisis_level = CrisisLevel.NONE
         crisis_hint = ""
-        if self._crisis_detector is not None:
-            crisis_level, crisis_response = await self._crisis_detector.classify_severity(
-                user_input
+        emotion: EmotionResult | None = None
+        if fusion_mode:
+            # --- v2 门次序:硬底线正则 → 情绪+风险合并调用 → 融合定级 ---
+            # 0b. 硬底线:无歧义表达命中即确定性直返,跳过一切 LLM(抗注入/抗宕机)
+            hard_level, hard_response = self._crisis_detector.hard_floor(user_input)
+            if hard_response is not None and hard_response.skip_llm:
+                self._update_risk_alert_window(hard_level)
+                self._log_safety_event(effective_user_id, hard_level.value)
+                return self._safety_result(
+                    user_input,
+                    hard_response.message,
+                    finish_reason="crisis_intervention",
+                    crisis_alert=True,
+                )
+
+            # 1. 情绪+风险合并调用(本轮唯一的旁路 LLM 调用)
+            emotion = await self._detect_emotion(user_input)
+            if emotion is not None and emotion.method_seeking:
+                self._log_safety_event(
+                    effective_user_id, "blocked_input", "语言层判定为索取伤害方法"
+                )
+                return self._safety_result(
+                    user_input,
+                    BLOCKED_SAFETY_MESSAGE,
+                    finish_reason="input_blocked",
+                )
+
+            # 融合定级:final = max(提示级信号, LLM 风险);LLM 不可用 → 提示级即判级(=v1)
+            llm_risk = risk_to_level(emotion.risk) if emotion is not None else None
+            alert_active = self._risk_alert_rounds > 0
+            crisis_level, crisis_response = self._crisis_detector.fuse(
+                user_input, llm_risk, alert_active=alert_active
             )
+            self._update_risk_alert_window(crisis_level)
             if crisis_response is not None and crisis_response.skip_llm:
                 self._log_safety_event(effective_user_id, crisis_level.value)
                 return self._safety_result(
@@ -214,9 +256,28 @@ class Agent:
                 self._log_safety_event(effective_user_id, crisis_level.value)
             if crisis_response is not None:
                 crisis_hint = crisis_response.system_hint
+        else:
+            # --- v1 门次序(cascade,默认):危机正则+LLM 复核 → 情绪检测 ---
+            # 0b. 危机检测门:CRITICAL/HIGH 跳过整个 Agent 循环直接返回安全响应
+            if self._crisis_detector is not None:
+                crisis_level, crisis_response = await self._crisis_detector.classify_severity(
+                    user_input
+                )
+                if crisis_response is not None and crisis_response.skip_llm:
+                    self._log_safety_event(effective_user_id, crisis_level.value)
+                    return self._safety_result(
+                        user_input,
+                        crisis_response.message,
+                        finish_reason="crisis_intervention",
+                        crisis_alert=True,
+                    )
+                if crisis_level == CrisisLevel.MEDIUM:
+                    self._log_safety_event(effective_user_id, crisis_level.value)
+                if crisis_response is not None:
+                    crisis_hint = crisis_response.system_hint
 
-        # 1. 情绪检测(可选)
-        emotion = await self._detect_emotion(user_input)
+            # 1. 情绪检测(可选)
+            emotion = await self._detect_emotion(user_input)
         emotional_support = build_emotional_support(
             user_input, emotion, crisis_level=crisis_level.value
         )
@@ -492,6 +553,21 @@ class Agent:
             trajectory=traj,
             crisis_alert=crisis_alert,
         )
+
+    def _update_risk_alert_window(self, level: CrisisLevel) -> None:
+        """fusion(v2)警戒窗口:任一轮 ≥HIGH 后 N 轮内提示级信号自动上浮一级。
+
+        ≥HIGH 重置窗口;其余等级消耗一轮。覆盖"上一句高危、下一句含糊"的
+        连续性场景——单条正则结构上做不到。
+        """
+        if level in (CrisisLevel.HIGH, CrisisLevel.CRITICAL):
+            window = 5
+            safety_cfg = getattr(self._config, "safety", None)
+            if safety_cfg is not None:
+                window = max(0, int(safety_cfg.alert_window_turns))
+            self._risk_alert_rounds = window
+        elif self._risk_alert_rounds > 0:
+            self._risk_alert_rounds -= 1
 
     def _log_safety_event(
         self,

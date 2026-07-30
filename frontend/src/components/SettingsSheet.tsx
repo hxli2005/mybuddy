@@ -5,12 +5,19 @@ import { Chip, SectionLabel } from "./ui";
 import { MentalHealthSection } from "../views/settings/MentalHealthSection";
 import type { MentalHealthSettings } from "../views/settings/MentalHealthSection";
 
-function loadMentalSettings(): MentalHealthSettings {
+const defaultMentalSettings: MentalHealthSettings = {
+  checkinReminder: true,
+  cbtSuggestions: true,
+  statusReminder: true,
+  pipelineInsight: false,
+};
+
+export function loadMentalSettings(): MentalHealthSettings {
   try {
     const raw = localStorage.getItem("mybuddy-mental-settings");
-    if (raw) return JSON.parse(raw);
+    if (raw) return { ...defaultMentalSettings, ...JSON.parse(raw) };
   } catch { /* ignore */ }
-  return { checkinReminder: true, cbtSuggestions: true, statusReminder: true };
+  return defaultMentalSettings;
 }
 
 function saveMentalSettings(s: MentalHealthSettings) {
@@ -32,6 +39,8 @@ export function SettingsSheet({ open, onClose, theme, onToggleTheme }: SettingsS
   function handleMentalChange(s: MentalHealthSettings) {
     setMentalSettings(s);
     saveMentalSettings(s);
+    // 通知已挂载的视图(如 ChatView)即时响应设置变化
+    window.dispatchEvent(new CustomEvent("mybuddy:mental-settings", { detail: s }));
   }
 
   return (

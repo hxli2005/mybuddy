@@ -1,4 +1,4 @@
-import { Heart, Bell, Wand2, Download, Trash2, RefreshCw, UserX } from "lucide-react";
+import { Heart, Bell, Wand2, Download, Trash2, RefreshCw, UserX, ListTree } from "lucide-react";
 import { Surface, SectionLabel, Divider } from "../../components/ui";
 import { useAuth } from "../../lib/auth";
 import { useRouter } from "../../lib/router";
@@ -22,6 +22,8 @@ export type MentalHealthSettings = {
   checkinReminder: boolean;
   cbtSuggestions: boolean;
   statusReminder: boolean;
+  /** 系统决策透视面板(评委/调试视角,默认关闭) */
+  pipelineInsight: boolean;
 };
 
 export function MentalHealthSection({ settings, onChange }: Props) {
@@ -159,6 +161,19 @@ export function MentalHealthSection({ settings, onChange }: Props) {
             </div>
           </>
         ) : null}
+
+        <Divider />
+
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2.5">
+            <ListTree size={17} strokeWidth={1.8} className="text-muted" />
+            <div>
+              <p className="text-[13.5px] font-medium text-ink">系统决策透视</p>
+              <p className="text-[11.5px] text-muted">每条回复可展开本轮系统决策记录（演示/调试用）</p>
+            </div>
+          </div>
+          <Toggle checked={settings.pipelineInsight} onChange={() => toggle("pipelineInsight")} />
+        </div>
       </Surface>
 
       {/* 数据管理(仅登录用户) */}

@@ -1168,6 +1168,46 @@ async def test_recall_memory_no_results(tmp_path) -> None:
     assert "没有找到" in out
 
 
+def test_recall_memory_reserves_dietary_guardrails_for_composite_query(tmp_path) -> None:
+    """回归:提醒等第二意图不能把香菜忌口或花生过敏挤出 Top-K。"""
+    from mybuddy.config import Config
+    from mybuddy.memory import LongTermMemory
+    from mybuddy.tools.context import reset, set_context
+    from mybuddy.tools.memory_tool import recall_memory
+
+    cfg = Config()
+    ltm = LongTermMemory(persist_dir=tmp_path / "dietary_recall")
+    ltm.add(
+        "点外卖或吃饭时不吃香菜,点餐要主动备注一根都不要。",
+        mem_type="anti_preference",
+        extra_meta={"keywords": "香菜,不吃,饮食,外卖,晚饭,踩雷"},
+    )
+    ltm.add(
+        "用户对花生过敏,点外卖、零食或聚餐建议必须避开花生。",
+        mem_type="profile",
+        extra_meta={"keywords": "花生,过敏,饮食,外卖,避雷"},
+    )
+    # 两条与复合请求后半句高度相关的干扰项。
+    ltm.add("明天下午四点要做项目彩排。", mem_type="open_thread")
+    ltm.add("喜欢少冰美式,下午四点后不喝咖啡。", mem_type="preference")
+
+    set_context(config=cfg, long_term=ltm)
+    try:
+        result = json.loads(
+            recall_memory(
+                "我准备点晚饭，你还记得我饮食上的两个雷区吗？"
+                "另外提醒我明天下午四点彩排。"
+            )
+        )
+    finally:
+        reset()
+
+    contents = " ".join(item["content"] for item in result)
+    assert len(result) <= cfg.memory.long_term_top_k
+    assert "香菜" in contents
+    assert "花生" in contents
+
+
 def test_relevant_profile_fields_always_keeps_stable_identity_facts() -> None:
     from mybuddy.memory.manager import _relevant_profile_fields
 

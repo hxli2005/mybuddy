@@ -2,6 +2,7 @@ import { ArrowUp, Heart, Link2, Mic, Shield, Sparkles, ThumbsDown, ThumbsUp } fr
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   FormEvent,
+  Fragment,
   KeyboardEvent,
   useEffect,
   useLayoutEffect,
@@ -14,7 +15,10 @@ import { useAuth } from "../lib/auth";
 import { Chip, EmptyState, TypingDots } from "../components/ui";
 import { ChatCbtPrompt } from "../components/ChatCbtPrompt";
 import { ChatCrisisBanner } from "../components/ChatCrisisBanner";
+import { ChatPipelinePanel } from "../components/ChatPipelinePanel";
 import { GuestBanner } from "../components/GuestBanner";
+import { loadMentalSettings } from "../components/SettingsSheet";
+import type { MentalHealthSettings } from "./settings/MentalHealthSection";
 import { cn } from "../lib/cn";
 import { useMediaRecorder } from "../lib/useMediaRecorder";
 import { queryKeys } from "../lib/queryKeys";
@@ -25,6 +29,7 @@ import type {
   EmotionalSupport,
   PendingMessage,
   SearchSource,
+  ToolCall,
 } from "../types/api";
 
 type CbtPromptData = {
@@ -44,6 +49,12 @@ type ChatMessage = {
   proactive?: string | null;
   cbtPrompt?: CbtPromptData | null;
   crisisAlert?: boolean;
+  createdAt?: string | null;
+  /* 系统决策透视面板数据(仅本次会话的实时回复携带) */
+  triggeredSkills?: string[];
+  toolCalls?: ToolCall[];
+  steps?: number | null;
+  finishReason?: string | null;
 };
 
 type ChatViewProps = {
@@ -65,8 +76,21 @@ export function ChatView({ onChatResult, onOpenCrisis }: ChatViewProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [pendingStatus, setPendingStatus] = useState(defaultPendingStatus);
   const [feedbackDone, setFeedbackDone] = useState<Record<string, string>>({});
+  const [pipelineInsight, setPipelineInsight] = useState<boolean>(
+    () => loadMentalSettings().pipelineInsight,
+  );
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // 设置里切换"系统决策透视"后即时生效(无需刷新)
+  useEffect(() => {
+    function onMentalSettings(e: Event) {
+      const detail = (e as CustomEvent<MentalHealthSettings>).detail;
+      setPipelineInsight(Boolean(detail?.pipelineInsight));
+    }
+    window.addEventListener("mybuddy:mental-settings", onMentalSettings);
+    return () => window.removeEventListener("mybuddy:mental-settings", onMentalSettings);
+  }, []);
 
   const { recording, supported: voiceSupported, start: startVoice, stop: stopVoice } = useMediaRecorder();
 
@@ -91,7 +115,11 @@ export function ChatView({ onChatResult, onOpenCrisis }: ChatViewProps) {
 
   const showCrisisBanner = messages.some((m) => m.crisisAlert);
 
-  const historyQuery = useQuery({ queryKey: queryKeys.messages, queryFn: () => fetchMessages(100) });
+  // 演示账号会保留完整的跨日故事线；后端单次最多支持 500 条。
+  const historyQuery = useQuery({ queryKey: queryKeys.messages, queryFn: () => fetchMessages(500) });
+  const historyCount = historyQuery.data?.messages.filter(
+    (item) => (item.role === "user" || item.role === "assistant") && item.content.trim(),
+  ).length ?? 0;
 
   // 访客模式:挂载时从 localStorage 恢复对话(刷新不丢)
   // authLoading 守卫:等 fetchCurrentUser 完成后再判断是否加载访客消息,
@@ -152,6 +180,10 @@ export function ChatView({ onChatResult, onOpenCrisis }: ChatViewProps) {
           turnId: data.turn_id || null,
           cbtPrompt: cbtPrompt || null,
           crisisAlert,
+          triggeredSkills: data.triggered_skills || [],
+          toolCalls: data.tool_calls || [],
+          steps: typeof data.steps === "number" ? data.steps : null,
+          finishReason: data.finish_reason || null,
         },
       ]);
       queryClient.invalidateQueries({ queryKey: queryKeys.messages });
@@ -216,6 +248,12 @@ export function ChatView({ onChatResult, onOpenCrisis }: ChatViewProps) {
     feedbackMutation.mutate({ label, turnId });
   }
 
+  function scrollToHistoryEdge(edge: "oldest" | "latest") {
+    const el = scrollRef.current;
+    if (!el) return;
+    el.scrollTo({ top: edge === "oldest" ? 0 : el.scrollHeight, behavior: "smooth" });
+  }
+
   const empty = messages.length === 0;
 
   return (
@@ -227,6 +265,27 @@ export function ChatView({ onChatResult, onOpenCrisis }: ChatViewProps) {
             empty && "min-h-full justify-center",
           )}
         >
+          {historyCount > 0 ? (
+            <div className="sticky top-2 z-10 self-center flex items-center gap-1 rounded-full border border-line bg-surface/95 px-2 py-1 text-[11.5px] text-muted shadow-soft backdrop-blur">
+              <span className="px-1">已加载全部 {historyCount} 条历史消息</span>
+              <button
+                type="button"
+                onClick={() => scrollToHistoryEdge("oldest")}
+                className="rounded-full px-2 py-1 font-medium text-accent transition-colors hover:bg-accent-soft"
+              >
+                最早
+              </button>
+              <span className="text-line-strong">·</span>
+              <button
+                type="button"
+                onClick={() => scrollToHistoryEdge("latest")}
+                className="rounded-full px-2 py-1 font-medium text-accent transition-colors hover:bg-accent-soft"
+              >
+                最新
+              </button>
+            </div>
+          ) : null}
+
           {showCrisisBanner ? (
             <ChatCrisisBanner onOpenCrisis={onOpenCrisis} />
           ) : null}
@@ -253,13 +312,22 @@ export function ChatView({ onChatResult, onOpenCrisis }: ChatViewProps) {
               }
             />
           ) : (
-            messages.map((m) => (
-              <MessageRow
-                key={m.id}
-                message={m}
-                feedbackLabel={m.turnId ? feedbackDone[m.turnId] : undefined}
-                onFeedback={onFeedback}
-              />
+            messages.map((m, index) => (
+              <Fragment key={m.id}>
+                {shouldShowDateDivider(m, messages[index - 1]) ? (
+                  <div className="my-1 flex items-center gap-3 text-[11px] text-faint" aria-label={formatChatDate(m.createdAt)}>
+                    <span className="h-px flex-1 bg-line" />
+                    <span>{formatChatDate(m.createdAt)}</span>
+                    <span className="h-px flex-1 bg-line" />
+                  </div>
+                ) : null}
+                <MessageRow
+                  message={m}
+                  feedbackLabel={m.turnId ? feedbackDone[m.turnId] : undefined}
+                  onFeedback={onFeedback}
+                  showPipeline={pipelineInsight}
+                />
+              </Fragment>
             ))
           )}
 
@@ -330,10 +398,12 @@ function MessageRow({
   message,
   feedbackLabel,
   onFeedback,
+  showPipeline,
 }: {
   message: ChatMessage;
   feedbackLabel?: string;
   onFeedback: (turnId: string, label: string) => void;
+  showPipeline?: boolean;
 }) {
   if (message.role === "system") {
     return (
@@ -379,6 +449,20 @@ function MessageRow({
       {!isUser && message.cbtPrompt ? <ChatCbtPrompt data={message.cbtPrompt} /> : null}
 
       {!isUser && message.support ? <SupportReveal support={message.support} /> : null}
+
+      {/* 系统决策透视:开关默认关闭;仅实时回复携带管线数据(历史消息无 turnId) */}
+      {!isUser && showPipeline && message.turnId ? (
+        <ChatPipelinePanel
+          crisisAlert={message.crisisAlert}
+          emotion={message.emotion}
+          cbtPrompt={message.cbtPrompt}
+          triggeredSkills={message.triggeredSkills}
+          toolCalls={message.toolCalls}
+          steps={message.steps}
+          finishReason={message.finishReason}
+          sourceCount={message.sources?.length}
+        />
+      ) : null}
 
       {!isUser && message.turnId ? (
         <div
@@ -506,8 +590,29 @@ function historyToChat(item: ChatLogMessage): ChatMessage[] {
       role: item.role,
       text: item.content,
       sources: normalizeSources(item.meta?.search_sources),
+      createdAt: item.created_at,
     },
   ];
+}
+
+function shouldShowDateDivider(current: ChatMessage, previous?: ChatMessage): boolean {
+  if (!current.createdAt) return false;
+  if (!previous?.createdAt) return true;
+  return current.createdAt.slice(0, 10) !== previous.createdAt.slice(0, 10);
+}
+
+function formatChatDate(value?: string | null): string {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value.slice(0, 10);
+  const today = new Date();
+  const sameYear = date.getFullYear() === today.getFullYear();
+  return new Intl.DateTimeFormat("zh-CN", {
+    year: sameYear ? undefined : "numeric",
+    month: "long",
+    day: "numeric",
+    weekday: "short",
+  }).format(date);
 }
 
 function normalizeSources(value: unknown): SearchSource[] {

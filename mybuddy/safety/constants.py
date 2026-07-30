@@ -20,8 +20,21 @@ class ModerationCategory(str, Enum):
     REPLACING_PROFESSIONAL = "replacing_professional"
 
 
-# 危机关键词分级(正则)
-CRISIS_KEYWORDS: dict[CrisisLevel, list[str]] = {
+# ---------------------------------------------------------------------------
+# 危机关键词分层(v2 架构)
+#
+# HINT 层(提示级信号):v1 的全部歧义子串("想死""不想活了"等)。
+#   - cascade(v1)模式下仍按原等级直接定级(classify_crisis_level 兼容不变);
+#   - fusion(v2)模式下降级为提示信号:等级判断交给语言层(情绪+风险合并调用),
+#     命中仅提供保底 LOW(警戒窗口内上浮一级),LLM 不可用时退化为按原等级判级(=v1)。
+#
+# HARD_FLOOR 层(硬底线):只收录"子串即语义"的无歧义表达——方法索取、明确计划/
+#   即刻意图(含"结束自己的生命"变体)、割腕/吞药等已遂或进行中的行为陈述、
+#   跳楼/烧炭/遗书/轻生等委婉语的无歧义形态。命中即确定性直返、跳过一切 LLM。
+#   纪律:需要上下文解读的表达一律归 HINT 层,不进硬底线。英文一律加 \b 词边界。
+# ---------------------------------------------------------------------------
+
+HINT_KEYWORDS: dict[CrisisLevel, list[str]] = {
     CrisisLevel.CRITICAL: [
         "我想死", "我要去死", "不想活了", "结束生命", "自杀",
         "怎么死", "想死", "去死", "活不下去", "我想自杀",
@@ -50,6 +63,9 @@ CRISIS_KEYWORDS: dict[CrisisLevel, list[str]] = {
     ],
 }
 
+# v1 兼容别名:cascade 模式与既有调用方继续使用这个名字
+CRISIS_KEYWORDS: dict[CrisisLevel, list[str]] = HINT_KEYWORDS
+
 # 编译各等级的正则(忽略大小写)
 _CRISIS_PATTERNS: dict[CrisisLevel, re.Pattern] = {}
 for _level, _keywords in CRISIS_KEYWORDS.items():
@@ -59,10 +75,96 @@ for _level, _keywords in CRISIS_KEYWORDS.items():
 
 
 def classify_crisis_level(text: str) -> CrisisLevel:
-    """基于关键词匹配快速判断危机等级(零 LLM 调用)。"""
+    """基于关键词匹配快速判断危机等级(零 LLM 调用)。v1 行为,保持兼容。"""
     for level in [CrisisLevel.CRITICAL, CrisisLevel.HIGH, CrisisLevel.MEDIUM, CrisisLevel.LOW]:
         if _CRISIS_PATTERNS[level].search(text):
             return level
+    return CrisisLevel.NONE
+
+
+def classify_hint_level(text: str) -> CrisisLevel:
+    """HINT 层命中等级(= v1 等级),fusion 模式下仅作提示信号与退化判级依据。"""
+    return classify_crisis_level(text)
+
+
+# --- 硬底线正则 -------------------------------------------------------------
+
+# 第一人称先导:我 + 有限间隔。间隔里排除断句、否定与指向他人的字,
+# 防"我不想割腕""我朋友割腕了""我看到有人跳楼"误触硬底线。
+# 前置排除"得/让/叫/使",防"气得我想跳楼"这类口语夸张。
+_FP = r"(?<![得让叫使])我[^。,,!!??、;;::\n不没别勿他她它人们朋妈爸哥姐弟妹叔]{0,8}?"
+
+# 无歧义自伤/自杀行为核心(已遂/进行中/计划陈述通吃)
+_ACT_CORE = (
+    r"(?:割腕|割手腕|把手腕割|跳楼(?!价)|烧炭(?!取暖)|上吊|自缢|喝农药"
+    r"|吞(?:了|下)?[^。,,!!??\n]{0,4}?安眠药"
+    r"|(?:吞|吃)(?:了|下)?(?:一整瓶|整瓶|一瓶|一把|大量|好多|几十片)[^。,,!!??\n]{0,4}?药"
+    r"|把[^。,,!!??\n]{0,4}?安眠药[^。,,!!??\n]{0,4}?(?:吞|吃))"
+)
+
+HARD_FLOOR_PATTERNS: dict[CrisisLevel, list[re.Pattern]] = {
+    CrisisLevel.CRITICAL: [
+        # 已遂/进行中/计划的无歧义行为陈述(第一人称锚定)
+        re.compile(_FP + _ACT_CORE),
+        # 明确计划/即刻意图:我 + 计划动词 + 自杀/了结
+        re.compile(
+            r"我[^。,,!!??、;;\n不没别勿他她人]{0,4}?"
+            r"(?:要|打算|准备|决定|就要?)(?:去)?"
+            r"[^。,,!!??\n不没别他她人]{0,6}?自杀"
+        ),
+        # "结束自己的生命"这类变体
+        re.compile(r"结束(?:我|我自己|自己)的生命"),
+        re.compile(r"(?:想|要|打算|准备)[^。,,!!??\n]{0,4}?了结(?:了)?(?:自己|我自己|这条命|一切)"),
+        # 遗书:已写好/正在写/打算写
+        re.compile(r"遗书[^。,,!!??\n]{0,6}?(?:写好|写完|留好|准备好)"),
+        re.compile(r"(?:写好|写完|留)了?[^。,,!!??\n]{0,4}?遗书"),
+        re.compile(r"(?:想|要|打算|准备|开始)[^。,,!!??\n]{0,3}?写遗书"),
+        re.compile(r"在写遗书"),
+        # 英文直白表达(\b 词边界,消英文子串误触)
+        re.compile(r"\bi\s+want\s+to\s+die\b", re.IGNORECASE),
+        re.compile(
+            r"\bi(?:\s+am|'m)?\s+(?:want\s+to|plan\s+to|going\s+to|about\s+to|gonna)\s+"
+            r"(?:kill\s+myself|end\s+my\s+life)\b",
+            re.IGNORECASE,
+        ),
+        re.compile(r"\bkms\b", re.IGNORECASE),
+        re.compile(
+            r"\b(?:how\s+to|ways\s+to|best\s+way\s+to)\s+"
+            r"(?:kill\s+myself|commit\s+suicide|end\s+my\s+life)\b",
+            re.IGNORECASE,
+        ),
+        re.compile(r"\bi\s+(?:cut|slit)\s+my\s+wrists?\b", re.IGNORECASE),
+        re.compile(
+            r"\bi\s+(?:took|swallowed)\s+(?:a\s+)?(?:whole\s+)?bottle\s+of\s+"
+            r"(?:pills|sleeping\s+pills)\b",
+            re.IGNORECASE,
+        ),
+    ],
+    CrisisLevel.HIGH: [
+        # 轻生:排除"减轻生活/生存压力"类连读
+        re.compile(r"轻生(?!活|存)的?念头"),
+        re.compile(r"(?:想|要|打算|准备|有)[^。,,!!??\n]{0,3}?轻生(?!活|存)"),
+    ],
+}
+
+# 方法索取也是硬底线(与输入审核共用同一组正则,归 CRITICAL)
+_HARD_FLOOR_ORDER = [CrisisLevel.CRITICAL, CrisisLevel.HIGH]
+
+
+def classify_hard_floor(text: str) -> CrisisLevel:
+    """硬底线判级:只匹配无歧义表达,命中即 ≥HIGH,未命中返回 NONE。
+
+    确定性、零 LLM——模型挂掉或被注入时这条线仍然成立。
+    """
+    if not text:
+        return CrisisLevel.NONE
+    for pat in HARMFUL_REQUEST_PATTERNS:
+        if pat.search(text):
+            return CrisisLevel.CRITICAL
+    for level in _HARD_FLOOR_ORDER:
+        for pat in HARD_FLOOR_PATTERNS[level]:
+            if pat.search(text):
+                return level
     return CrisisLevel.NONE
 
 

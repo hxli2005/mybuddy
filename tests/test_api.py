@@ -4,7 +4,6 @@ import json
 from datetime import datetime
 
 import pytest
-import yaml
 
 from mybuddy.api import (
     AppState,
@@ -13,7 +12,7 @@ from mybuddy.api import (
     _integrate_pending_messages,
     _run_deterministic_demo_tools,
 )
-from mybuddy.config import Config, PersonaConfig, load_config
+from mybuddy.config import Config
 from mybuddy.learning import SkillRegistry
 from mybuddy.memory import LongTermMemory, UserProfile
 from mybuddy.storage import (
@@ -21,6 +20,7 @@ from mybuddy.storage import (
     Note,
     ProfileField,
     Reminder,
+    bind_external_account,
     enqueue,
     increment_usage,
     init_db,
@@ -73,48 +73,6 @@ def test_append_weather_summary() -> None:
     )
 
     assert "北京当前晴" in text
-
-
-def test_update_persona_payload_persists_only_persona_section(tmp_path) -> None:
-    config_path = tmp_path / "config.yaml"
-    config_path.write_text(
-        """# demo config
-llm:
-  provider: openrouter
-  model: test-model
-  api_key: ${OPENROUTER_API_KEY}
-
-# ============ 人设 ============
-persona:
-  name: "旧名字"
-  style: "旧风格"
-  language: "中文"
-
-# ============ 记忆系统 ============
-memory:
-  short_term_size: 12
-""",
-        encoding="utf-8",
-    )
-    state = AppState(config_path=str(config_path))
-    state.cfg = load_config(config_path)
-
-    payload = state.update_persona_payload(
-        {
-            "name": "新名字",
-            "relationship": "像长期合作的项目伙伴",
-            "response_habits": ["先确认目标", "", "给一个下一步"],
-        }
-    )
-
-    assert payload["persona"]["name"] == "新名字"
-    assert payload["persona"]["response_habits"] == ["先确认目标", "给一个下一步"]
-    saved = config_path.read_text(encoding="utf-8")
-    assert "${OPENROUTER_API_KEY}" in saved
-    assert "# ============ 记忆系统 ============" in saved
-    raw = yaml.safe_load(saved)
-    assert raw["llm"]["api_key"] == "${OPENROUTER_API_KEY}"
-    assert raw["persona"]["relationship"] == "像长期合作的项目伙伴"
 
 
 def test_notes_payload_create_and_list_syncs_archive(tmp_path) -> None:
@@ -250,12 +208,15 @@ def test_users_payload_create_bind_update_and_usage(tmp_path) -> None:
     assert created["user"]["status"] == "active"
     assert created["user"]["daily_message_limit"] == 12
 
-    bound = state.bind_user_qq_payload(
-        user_id,
+    # AppState 已不再提供 bind_user_qq_payload,绑定走 storage 层。
+    bind_external_account(
+        engine,
+        user_id=user_id,
+        provider="qq",
         external_id="qq-openid",
         display_name="QQ名",
     )
-    assert bound["user"]["external_accounts"] == [
+    assert state.users_payload()["users"][0]["external_accounts"] == [
         {
             "provider": "qq",
             "external_id": "qq-openid",
@@ -283,40 +244,6 @@ def test_user_update_rejects_invalid_status(tmp_path) -> None:
 
     with pytest.raises(RuntimeError, match="active 或 disabled"):
         state.update_user_payload(created["user"]["id"], status="pending")
-
-
-def test_user_persona_payload_update_and_reset(tmp_path) -> None:
-    engine = init_db(str(tmp_path / "user_persona.db"))
-    state = AppState(config_path="config.yaml")
-    state.engine = engine
-    state.cfg = Config(persona=PersonaConfig(name="默认小布", style="默认风格"))
-    created = state.create_user_payload(display_name="测试用户")
-    user_id = created["user"]["id"]
-
-    inherited = state.user_persona_payload(user_id)
-
-    assert inherited["inherits_default"] is True
-    assert inherited["persona"]["name"] == "默认小布"
-
-    updated = state.update_user_persona_payload(
-        user_id,
-        {
-            "name": "用户专属",
-            "style": "更简洁",
-            "response_habits": ["先给结论"],
-        },
-    )
-
-    assert updated["inherits_default"] is False
-    assert updated["persona"]["name"] == "用户专属"
-    assert updated["persona"]["response_habits"] == ["先给结论"]
-    assert state.users_payload()["users"][0]["has_custom_persona"] is True
-
-    reset = state.delete_user_persona_payload(user_id)
-
-    assert reset["inherits_default"] is True
-    assert reset["persona"]["name"] == "默认小布"
-    assert state.users_payload()["users"][0]["has_custom_persona"] is False
 
 
 def test_integrate_pending_nudge_as_assistant_message(tmp_path) -> None:
