@@ -207,7 +207,13 @@ class ChatService:
                     from mybuddy.mood import MoodTracker
 
                     MoodTracker(runtime.engine).record_from_emotion(user.id, result.emotion)
-                await _try_assessment_scoring(runtime, user.id, clean)
+                # 后台执行评分,不阻塞回复(同步等待每条消息多挂一次小模型往返,
+                # 实测 5-15s,危机直返也被拖慢);强引用防 GC(同 agent/core.py)。
+                scoring_task = asyncio.create_task(
+                    _try_assessment_scoring(runtime, user.id, clean)
+                )
+                _BG_SCORING_TASKS.add(scoring_task)
+                scoring_task.add_done_callback(_BG_SCORING_TASKS.discard)
                 pending_after = _integrate_pending_messages(
                     runtime.engine,
                     session_id=runtime.agent.session_id,
@@ -392,6 +398,9 @@ class ChatService:
 
 
 CONVERSATIONAL_PENDING_SOURCES = {"nudge", "dynamic", "greeting"}
+
+# 后台评分 task 的强引用池(create_task 仅被事件循环弱引用)
+_BG_SCORING_TASKS: set[asyncio.Task] = set()
 
 
 async def _try_assessment_scoring(runtime: UserRuntime, user_id: int, user_message: str) -> None:

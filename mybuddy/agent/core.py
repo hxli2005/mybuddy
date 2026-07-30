@@ -512,7 +512,10 @@ class Agent:
             triggered_skills=triggered_skills,
             search_sources=search_sources,
             cbt_prompt=cbt_prompt_payload,
-            crisis_alert=crisis_level != CrisisLevel.NONE,
+            # LOW 是内部信号(情感支持加权/警戒窗口),不触发用户可见的危机横幅——
+            # 否则 fusion 语言层对普通负面消息给 low 时,轻度情绪也会闪热线面板。
+            crisis_alert=crisis_level
+            in (CrisisLevel.MEDIUM, CrisisLevel.HIGH, CrisisLevel.CRITICAL),
         )
 
     # -----------------------------------------------------------------

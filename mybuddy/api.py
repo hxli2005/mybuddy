@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from collections.abc import Callable
@@ -150,6 +151,8 @@ class AppState:
     agent: Agent | None = None
     feedback_bus: FeedbackBus | None = None
     auth: AuthManager | None = None
+    # 后台评分 task 强引用(create_task 弱引用,无强引用会被 GC 提前回收)
+    _bg_tasks: set = field(default_factory=set)
     transcriber: Transcriber | None = None
     last_turn_id: str | None = None
     last_triggered_skills: list[str] = field(default_factory=list)
@@ -472,9 +475,15 @@ class AppState:
                 from mybuddy.mood import MoodTracker
                 MoodTracker(engine).record_from_emotion(user_id, result.emotion)
 
-            # 无感化评估:检查是否有待评分维度并尝试评分(访客同样参与,结果仅在内存)
+            # 无感化评估:检查是否有待评分维度并尝试评分(访客同样参与,结果仅在内存)。
+            # 后台执行,不阻塞用户可见回复——同步等待会让每条消息(含危机直返)多挂
+            # 一次小模型往返(实测 5-15s)。强引用防 GC 提前回收(同 agent/core.py)。
             if self.provider is not None:
-                await self._try_assessment_scoring(user_id, message.strip())
+                task = asyncio.create_task(
+                    self._try_assessment_scoring(user_id, message.strip())
+                )
+                self._bg_tasks.add(task)
+                task.add_done_callback(self._bg_tasks.discard)
 
             result_text = result.text
             tool_calls = list(result.tool_calls)

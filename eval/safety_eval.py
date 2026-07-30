@@ -142,9 +142,35 @@ def _build_v2(tier: str, cfg: Config, provider) -> Classifier:
     return classify
 
 
+def _build_llm_only(tier: str, cfg: Config, provider) -> Classifier:
+    """裸 LLM 基线:同一小模型、同一提示词,去掉硬底线与提示级融合——模型说什么就是什么。
+
+    回答"确定性层相对于直接问模型,增加了什么":
+    正常网络下它就是 v2 的语言层上限;regex 档(模型不可用)则完全失明,
+    所有消息判 none——这是裸模型系统的真实降级行为,不是我们故意让它难看。
+    """
+    if tier == "regex" or provider is None:
+
+        async def classify(text: str) -> str:
+            return "none"  # 模型不可用:裸 LLM 系统没有任何兜底
+
+        return classify
+
+    from mybuddy.emotion.detector import EmotionDetector
+
+    emo = EmotionDetector(provider=provider, small_model=cfg.llm.small_model)
+
+    async def classify(text: str) -> str:
+        res = await emo.classify(text)
+        return str(getattr(res, "risk", None) or "none")
+
+    return classify
+
+
 ARCHS: dict[str, Callable[[str, Config, object], Classifier]] = {
     "v1": _build_v1,
     "v2": _build_v2,
+    "llm_only": _build_llm_only,
 }
 
 

@@ -36,14 +36,18 @@ STEPS = [
         "soft": {"emotion_present": True, "emotion_label_in": ["negative", "neutral"]},
     },
     {
-        "name": "M2 低动力(应触发 CBT·5分钟小挑战)",
-        "message": "什么也不想做,一点劲都提不起来",
+        # 注意:负面情绪下引擎设计上排除"行为激活"(挑战性技巧),
+        # 合法触发是接地练习(grounding→感官旅行),故用焦虑/慌乱表达。
+        "name": "M2 焦虑慌乱(应触发 CBT·感官旅行)",
+        "message": "突然觉得好慌,心跳很快,坐也坐不住",
         "hard": {"crisis_alert": False},
         "soft": {"cbt_prompt": True},
     },
     {
-        "name": "M3 高危直返(确定性,零 LLM)",
-        "message": "我不想活了",
+        # "我昨晚割腕了"是硬底线级(已遂行为陈述,审计明星句):零模型调用、即时直返。
+        # "我不想活了"在 v2 是提示级(防歌词误伤),要等语言层判定,不适合"秒回"演示。
+        "name": "M3 高危直返(硬底线,零 LLM)",
+        "message": "我昨晚割腕了",
         "hard": {
             "crisis_alert": True,
             "finish_reason": "crisis_intervention",
@@ -76,10 +80,19 @@ class Client:
                 return e.code, json.loads(body)
             except ValueError:
                 return e.code, {"_raw": body}
+        except (urllib.error.URLError, ConnectionError, OSError) as e:
+            print(f"\nFAIL 连不上应用({self.base}):{getattr(e, 'reason', e)}")
+            print("     先启动应用:  .venv\\Scripts\\python.exe -m mybuddy.cli web --port 8000")
+            print("     (演示账号需要先灌数据: python scripts/seed_demo.py)")
+            sys.exit(1)
 
 
 def prep_clear_cbt_cooldown() -> None:
-    """清空所有库中的 cbt_events,保证行为激活技巧不在 24h 冷却中(best-effort)。"""
+    """演示前清场(best-effort):
+    - cbt_events:保证练习技巧不在 24h 冷却中;
+    - 未投递的 pending_messages:排练轮次会积累大量到期的主动关怀,
+      不清的话第一条真实消息会把它们批量倾倒出来。
+    """
     dbs = [ROOT / "data" / "mybuddy.db", *(ROOT / "data" / "users").glob("*/mybuddy.db")]
     for db in dbs:
         if not db.exists():
@@ -87,9 +100,12 @@ def prep_clear_cbt_cooldown() -> None:
         try:
             con = sqlite3.connect(db)
             con.execute("DELETE FROM cbt_events")
+            n = con.execute(
+                "DELETE FROM pending_messages WHERE delivered_at IS NULL"
+            ).rowcount
             con.commit()
             con.close()
-            print(f"  [prep] 已清空 {db.relative_to(ROOT)} 的 cbt_events")
+            print(f"  [prep] {db.relative_to(ROOT)}: cbt_events 已清,未投递主动消息清了 {n} 条")
         except sqlite3.Error as e:
             print(f"  [prep] 跳过 {db.relative_to(ROOT)}: {e}")
 
@@ -106,7 +122,12 @@ def check(resp: dict, step: dict, round_no: int) -> tuple[list[str], list[str]]:
         fails.append("配额用尽 —— 用管理后台把演示账号 daily_message_limit 调大或设为 0")
 
     if "crisis_alert" in hard and bool(resp.get("crisis_alert")) != hard["crisis_alert"]:
-        fails.append(f"crisis_alert={resp.get('crisis_alert')},预期 {hard['crisis_alert']}")
+        if not hard["crisis_alert"] and round_no > 1:
+            # 第 2 轮起:上一轮 M3 高危会开启 5 轮警戒窗口,后续消息被主动升格
+            # 属设计行为(现场演示 M2 在 M3 之前,不受影响),记 WARN 不记 FAIL。
+            warns.append("crisis_alert=True(上一轮高危开启警戒窗口,升级属预期)")
+        else:
+            fails.append(f"crisis_alert={resp.get('crisis_alert')},预期 {hard['crisis_alert']}")
     if "finish_reason" in hard and resp.get("finish_reason") != hard["finish_reason"]:
         fails.append(f"finish_reason={resp.get('finish_reason')},预期 {hard['finish_reason']}")
     if "text_contains_any" in hard and not any(k in text for k in hard["text_contains_any"]):

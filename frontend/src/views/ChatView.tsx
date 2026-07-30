@@ -222,6 +222,35 @@ export function ChatView({ onChatResult, onOpenCrisis }: ChatViewProps) {
     el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
   }, [message]);
 
+  /* 演示自动驾驶:透视开关打开时可见,逐条发送与排练脚本一致的消息,
+     走与手动输入完全相同的提交路径(气泡/决策面板/CBT 卡片渲染不变)。 */
+  const DEMO_SCRIPT = [
+    "最近赶大作业，天天熬夜，进度还是落后，有点烦",
+    "突然觉得好慌，心跳很快，坐也坐不住",
+    "我昨晚割腕了",
+  ];
+  const [demoStep, setDemoStep] = useState(0);
+  const [demoTyping, setDemoTyping] = useState(false);
+
+  function playDemoStep() {
+    if (demoTyping || chatMutation.isPending || demoStep >= DEMO_SCRIPT.length) return;
+    const text = DEMO_SCRIPT[demoStep];
+    setDemoTyping(true);
+    let i = 0;
+    const timer = window.setInterval(() => {
+      i += 1;
+      setMessage(text.slice(0, i));
+      if (i >= text.length) {
+        window.clearInterval(timer);
+        window.setTimeout(() => {
+          setDemoTyping(false);
+          setDemoStep((s) => s + 1);
+          submitMessage(text);
+        }, 300);
+      }
+    }, 45);
+  }
+
   function submitMessage(next = message) {
     const clean = next.trim();
     if (!clean || chatMutation.isPending) return;
@@ -343,6 +372,20 @@ export function ChatView({ onChatResult, onOpenCrisis }: ChatViewProps) {
       </div>
 
       <div className="shrink-0 glass border-t border-line">
+        {pipelineInsight ? (
+          <div className="mx-auto w-full max-w-2xl px-4 sm:px-5 pt-2 flex justify-end">
+            <button
+              type="button"
+              onClick={demoStep >= DEMO_SCRIPT.length ? () => setDemoStep(0) : playDemoStep}
+              disabled={demoTyping || chatMutation.isPending}
+              className="text-xs px-3 py-1.5 rounded-full border border-line bg-surface-2 text-muted hover:text-ink transition-colors disabled:opacity-40"
+            >
+              {demoStep >= DEMO_SCRIPT.length
+                ? "重置演示"
+                : `▶ 演示 ${demoStep + 1}/${DEMO_SCRIPT.length}`}
+            </button>
+          </div>
+        ) : null}
         {!isLoggedIn ? <GuestBanner /> : null}
         <form onSubmit={onSubmit} className="composer-area mx-auto w-full max-w-2xl px-4 sm:px-5 py-3">
           <div className="flex items-end gap-2 rounded-3xl bg-surface border border-line shadow-card focus-within:border-accent/40 transition-colors p-1.5 pl-4">

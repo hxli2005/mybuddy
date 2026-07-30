@@ -493,7 +493,8 @@ async def test_fusion_no_window_same_message_stays_low(tmp_path) -> None:
     result = await agent.run("唉,想死")
 
     assert result.finish_reason == "stop"
-    assert result.crisis_alert is True  # LOW 仍标记
+    # LOW 是内部信号(情感支持加权/警戒窗口),不触发用户可见的危机横幅
+    assert result.crisis_alert is False
     with session_scope(engine) as s:
         assert s.query(SafetyEvent).count() == 0
 
