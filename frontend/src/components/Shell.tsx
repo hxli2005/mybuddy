@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from "react";
-import { MessageCircle, User as UserIcon, Moon, Sun, Shield, Settings2 } from "lucide-react";
+import { MessageCircle, User as UserIcon, ClipboardList, Moon, Sun, Shield, Settings2 } from "lucide-react";
 import { Avatar, IconButton } from "./ui";
 import { SettingsSheet } from "./SettingsSheet";
 import { UserMenu } from "./UserMenu";
@@ -44,6 +44,7 @@ const presenceDot: Record<Presence, string> = {
 
 const tabs: Array<{ page: Page; icon: typeof MessageCircle; label: string }> = [
   { page: "chat", icon: MessageCircle, label: "聊天" },
+  { page: "assessment", icon: ClipboardList, label: "评估" },
   { page: "mood", icon: UserIcon, label: "我的" },
 ];
 
