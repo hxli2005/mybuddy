@@ -217,7 +217,7 @@ const CHART = {
     </p>
   </div>
   <p class="small" style="font-family:var(--mono);color:var(--faint);border-top:1px solid var(--hair);padding-top:1.4vh">
-    86 files&ensp;·&ensp;+8,500 lines&ensp;·&ensp;16 tables&ensp;·&ensp;~40 API endpoints</p>
+    李昊翔 · 沈熠凯&ensp;|&ensp;86 files&ensp;·&ensp;+8,500 lines&ensp;·&ensp;16 tables&ensp;·&ensp;~40 API endpoints</p>
   <aside class="notes"><b>开场 30 秒:</b>先讲人和问题,再讲技术。"接下来 10 分钟:这个空白层为什么存在、为什么难补 → 我们的三组设计 → 每组设计的实测数据 → 现场演示。"</aside>
 </section>
 
@@ -565,26 +565,31 @@ const CHART = {
   <aside class="notes">60 秒。两点:(1) 确定性组件是骨架,LLM 是可替换填充;(2) 换掉底层模型系统照常成立——"设计不在 API 里,在 API 外面"。</aside>
 </section>
 
-<!-- ========= S4b 完成度全景 ========= -->
+<!-- ========= S4b 分工与贡献 ========= -->
 <section class="slide">
-  <div class="kicker"><span><span class="no">08c</span>&nbsp; 完成度全景</span><span>MyBuddy</span></div>
-  <h2>项目完成度:八个模块全部可运行</h2>
-  <p class="sub">刚才细讲的三个设计之外,系统的其余部分;演示和仓库里都能看到</p>
-  <div class="featgrid">
-    <div class="feat"><b>对话智能</b><span>ReAct 循环(≤6 步) · 8 个工具:天气 / 联网搜索 / 中文自然语言提醒 / 翻译 / 笔记 / 记忆检索 / 技能 / 检索预取</span></div>
-    <div class="feat"><b>记忆系统</b><span>三层长期记忆 · 词法+语义混合检索(RRF 融合) · 每 3 轮事实抽取 · 夜间 Dream Job 记忆整理</span></div>
-    <div class="feat"><b>心理健康核心</b><span>三道安全门 × 五级危机分级 · 16 维评估状态机 · 5 种 CBT 技术 · 15 类情绪判定 · 零输入心情日记</span></div>
-    <div class="feat"><b>主动性调度</b><span>每日问候 · 30 分钟延迟关怀 · 沉默回访 · 静默时段与频控 · 全部持久化跨重启</span></div>
-    <div class="feat"><b>自学习</b><span>轨迹复盘自动抽象技能 · Laplace 平滑置信度 · 👍👎 反馈闭环驱动技能升降</span></div>
-    <div class="feat"><b>语音与隐私</b><span>本地 Whisper 离线转写 · 每用户独立 SQLite / 向量库 / 调度器 · 日志密钥脱敏</span></div>
-    <div class="feat"><b>多用户与账户</b><span>注册登录(bcrypt + HMAC Cookie) · 访客模式与数据迁移 · 数据全量导出 / 清除 / 注销</span></div>
-    <div class="feat"><b>管理后台</b><span>用户管理 · 配额(锁内复检防并发穿透) · 运行时配置 · 使用统计</span></div>
+  <div class="kicker"><span><span class="no">08c</span>&nbsp; 分工与贡献</span><span>MyBuddy</span></div>
+  <h2>分工与贡献度</h2>
+  <p class="sub">● 主导&ensp;○ 参与;八个模块全部可运行,均可在演示与仓库中查验</p>
+  <div class="grow">
+    <table>
+      <tr><th>工作项</th><th>具体内容</th><th class="num">李昊翔</th><th class="num">沈熠凯</th></tr>
+      <tr><td>对话 Agent 与工具编排</td><td>ReAct 循环、8 个工具、提示体系</td><td class="num">●</td><td class="num"></td></tr>
+      <tr><td>安全门控</td><td>五级危机分级、硬底线+模型融合、输入/输出审核</td><td class="num">●</td><td class="num"></td></tr>
+      <tr><td>情绪判定与 CBT 门控</td><td>15 类情绪判定、练习游戏化与冷却控制</td><td class="num">●</td><td class="num"></td></tr>
+      <tr><td>无感化评估 · 机制设计</td><td>量表拆条目嵌入日常对话的方案设计</td><td class="num"></td><td class="num">●</td></tr>
+      <tr><td>无感化评估 · 实现</td><td>16 维状态机、LLM 评分与白名单</td><td class="num">●</td><td class="num"></td></tr>
+      <tr><td>记忆 · 调度 · 自学习</td><td>三层长期记忆、延迟关怀、技能自动抽象</td><td class="num">●</td><td class="num"></td></tr>
+      <tr><td>评测体系</td><td>4 个数据集、评测脚本、结果报告</td><td class="num">●</td><td class="num">○</td></tr>
+      <tr><td>Web 前端</td><td>聊天 / 评估 / 心情 / 决策透视等界面</td><td class="num">○</td><td class="num">●</td></tr>
+      <tr><td>服务端与运营</td><td>API、多用户认证、存储、管理后台、语音接入</td><td class="num"></td><td class="num">●</td></tr>
+    </table>
+    <p class="small" style="margin-top:1.6vh"><b>建议登记贡献度:李昊翔 50% · 沈熠凯 50%</b></p>
   </div>
   <div class="statrow">
-    <span><b>16</b> 张数据表</span><span><b>~40</b> 个 API 端点</span><span><b>238</b> 个测试用例</span>
+    <span><b>16</b> 张数据表</span><span><b>~40</b> 个 API 端点</span><span><b>328</b> 个测试用例</span>
     <span><b>4</b> 个评测数据集</span><span><b>2</b> 端(Web + 管理台)</span>
   </div>
-  <aside class="notes">35 秒,只念左列四个组名+一句"其余的演示里都能看到",不逐条读。这页的作用是让完成度可见,深度留给后面三组设计。</aside>
+  <aside class="notes">30 秒。逐列扫一遍即可:AI 编排、安全与评测线是李昊翔;评估机制设计、前端和服务端是沈熠凯;建议各 50%。演示里看得到的界面多为沈,看不到的编排层多为李——正好互补。</aside>
 </section>
 
 <!-- ========= S13 边界 ========= -->
