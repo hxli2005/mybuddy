@@ -573,16 +573,16 @@ const CHART = {
   <div class="grow">
     <table>
       <tr><th>工作项</th><th>具体内容</th><th class="num">李昊翔</th><th class="num">沈熠凯</th></tr>
-      <tr><td>对话 Agent 与工具编排</td><td>ReAct 循环、8 个工具、提示体系</td><td class="num">●</td><td class="num"></td></tr>
-      <tr><td>安全门控</td><td>五级危机分级、硬底线+模型融合、输入/输出审核</td><td class="num"></td><td class="num">●</td></tr>
-      <tr><td>情绪判定</td><td>15 类情绪判定与四条下游链路</td><td class="num">●</td><td class="num"></td></tr>
-      <tr><td>CBT 门控</td><td>练习游戏化、机会窗口与冷却控制</td><td class="num"></td><td class="num">●</td></tr>
-      <tr><td>无感化评估 · 机制设计</td><td>量表拆条目嵌入日常对话的方案设计</td><td class="num"></td><td class="num">●</td></tr>
-      <tr><td>无感化评估 · 实现</td><td>16 维状态机、LLM 评分与白名单</td><td class="num">●</td><td class="num"></td></tr>
+      <tr><td>对话 Agent 与工具编排</td><td>ReAct 循环、8 个工具、情绪/评分的模型调用链路</td><td class="num">●</td><td class="num"></td></tr>
       <tr><td>记忆 · 调度 · 自学习</td><td>三层长期记忆、延迟关怀、技能自动抽象</td><td class="num">●</td><td class="num"></td></tr>
       <tr><td>评测体系</td><td>4 个数据集、评测脚本、结果报告</td><td class="num">●</td><td class="num">○</td></tr>
+      <tr><td>安全门控机制</td><td>五级危机分级、硬底线+模型融合、输入/输出审核</td><td class="num"></td><td class="num">●</td></tr>
+      <tr><td>无感化评估机制</td><td>量表拆条目方案、16 维状态机、投放节流</td><td class="num"></td><td class="num">●</td></tr>
+      <tr><td>CBT 门控机制</td><td>练习游戏化、机会窗口与冷却</td><td class="num"></td><td class="num">●</td></tr>
+      <tr><td>心情追踪</td><td>每轮自动记分、趋势与统计</td><td class="num"></td><td class="num">●</td></tr>
+      <tr><td>数据库与存储</td><td>16 张表设计、每用户隔离存储、持久化</td><td class="num"></td><td class="num">●</td></tr>
       <tr><td>Web 前端</td><td>聊天 / 评估 / 心情 / 决策透视等界面</td><td class="num">○</td><td class="num">●</td></tr>
-      <tr><td>服务端与运营</td><td>API、多用户认证、存储、管理后台、语音接入</td><td class="num"></td><td class="num">●</td></tr>
+      <tr><td>服务端与运营</td><td>API、多用户认证、管理后台、语音接入</td><td class="num"></td><td class="num">●</td></tr>
     </table>
     <p class="small" style="margin-top:1.6vh"><b>建议登记贡献度:李昊翔 50% · 沈熠凯 50%</b></p>
   </div>
@@ -590,7 +590,7 @@ const CHART = {
     <span><b>16</b> 张数据表</span><span><b>~40</b> 个 API 端点</span><span><b>328</b> 个测试用例</span>
     <span><b>4</b> 个评测数据集</span><span><b>2</b> 端(Web + 管理台)</span>
   </div>
-  <aside class="notes">30 秒。逐列扫:对话编排、情绪判定、评估实现、记忆与评测是李昊翔;安全门控、CBT、评估机制设计、前端与服务端是沈熠凯;各主导 5 项,建议各 50%。</aside>
+  <aside class="notes">30 秒。逐列扫:对话编排、记忆调度自学习、评测体系是李昊翔;心理健康各机制(安全/评估/CBT/心情)、数据库与存储、前端与服务端是沈熠凯;建议各 50%(工作项数量不等于工作量)。</aside>
 </section>
 
 <!-- ========= S13 边界 ========= -->
