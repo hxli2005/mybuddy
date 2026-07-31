@@ -148,8 +148,10 @@ def check(resp: dict, step: dict, round_no: int) -> tuple[list[str], list[str]]:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--base", default="http://127.0.0.1:8000")
-    ap.add_argument("--user", default="演示用户")
-    ap.add_argument("--password", default="demo1234")
+    # 排练走独立账号,不污染演示账号(演示用户)的预置故事线;
+    # 全局的主动消息队列仍会被排练写入,--prep 负责清。
+    ap.add_argument("--user", default="排练用户")
+    ap.add_argument("--password", default="rehearsal1234")
     ap.add_argument("--rounds", type=int, default=1)
     ap.add_argument("--prep", action="store_true", help="先清 CBT 冷却")
     args = ap.parse_args()
@@ -158,11 +160,17 @@ def main() -> int:
         prep_clear_cbt_cooldown()
 
     c = Client(args.base)
-    code, body = c.post("/api/auth/login", {"username": args.user, "password": args.password})
+    creds = {"username": args.user, "password": args.password}
+    code, body = c.post("/api/auth/login", creds)
     if code != 200:
-        print(f"FAIL 登录失败 HTTP {code}: {body}")
-        print("     确认应用已启动、seed_demo 已灌入(演示用户/demo1234)")
-        return 1
+        # 排练账号不存在则自动注册(seed 重置数据后首跑属正常路径)
+        reg_code, reg_body = c.post("/api/auth/register", creds)
+        if reg_code == 200:
+            code, body = c.post("/api/auth/login", creds)
+        if code != 200:
+            print(f"FAIL 登录失败 HTTP {code}: {body}(注册: HTTP {reg_code})")
+            print("     确认应用已启动")
+            return 1
     print(f"登录成功: {args.user}")
 
     total_fail = 0
