@@ -165,9 +165,9 @@ const APP_URL = "http://127.0.0.1:8000";
 const RUNNER_URL = location.protocol === "file:" ? "http://127.0.0.1:8765" : "";
 
 const DATA = {
-  // —— 问题页统计(必须核实来源后再填;建议:WHO 抑郁症概况 / 中国国民心理健康发展报告)——
-  stat_prevalence: null,       // 如 "全球超 2.8 亿人受抑郁症影响(WHO)"
-  stat_gap: null,              // 如 "每 10 万人精神科医师数远低于高收入国家(来源:…)"
+  // —— 问题页统计(来源已核实 2026-07-31)——
+  stat_prevalence: "全球约 2.8 亿人患抑郁症(WHO 抑郁症概况)",
+  stat_gap: "我国抑郁障碍患者中仅 9.5% 接受过治疗(中国精神卫生调查,Lancet Psychiatry 2021)",
   // —— 测试套件(2026-07-30 夜终值)——
   tests_passed: "328", tests_total: "328", tests_seconds: "12",
   // —— 危机检测(eval/RESULTS_SAFETY.md, 2026-07-30 实测;v2 双跑取保守值)——
@@ -236,7 +236,7 @@ const CHART = {
   </div>
   <div style="margin:2vh 0">
     <p class="small muted" style="font-family:var(--mono)">
-      <span data-slot="stat_prevalence"></span>&ensp;·&ensp;<span data-slot="stat_gap"></span>&ensp;(数字须核实来源后填入,宁缺毋滥)</p>
+      <span data-slot="stat_prevalence"></span>&ensp;·&ensp;<span data-slot="stat_gap"></span></p>
   </div>
   <p class="payoff"><b>我们的定位:</b>不诊断、不开药、不替代治疗;做倾诉、筛查、自助练习和危机转介的中间层。</p>
   <aside class="notes">60 秒。此页回答"解决什么问题":让"还没准备好求助的人"有一个安全的落脚点,并在需要时把他推向专业资源。统计槽建议来源:WHO Depression fact sheet;《中国国民心理健康发展报告》——今晚核实后填,核实不了就删掉该行。</aside>
