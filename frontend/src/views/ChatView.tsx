@@ -385,7 +385,18 @@ export function ChatView({ onChatResult, onOpenCrisis }: ChatViewProps) {
 
       <div className="shrink-0 glass border-t border-line">
         {pipelineInsight ? (
-          <div className="mx-auto w-full max-w-2xl px-4 sm:px-5 pt-2 flex justify-end">
+          <div className="mx-auto w-full max-w-2xl px-4 sm:px-5 pt-2 flex justify-end gap-1.5">
+            {demoStep > 0 ? (
+              <button
+                type="button"
+                onClick={() => setDemoStep(0)}
+                disabled={demoTyping || chatMutation.isPending}
+                title="重置演示进度(任意进度可点)"
+                className="text-xs px-2.5 py-1.5 rounded-full border border-line bg-surface-2 text-muted hover:text-ink transition-colors disabled:opacity-40"
+              >
+                ↺
+              </button>
+            ) : null}
             <button
               type="button"
               onClick={demoStep >= DEMO_SCRIPT.length ? () => setDemoStep(0) : playDemoStep}
