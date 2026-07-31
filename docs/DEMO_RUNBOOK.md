@@ -61,7 +61,14 @@ python scripts/demo_rehearsal.py --prep --rounds 0
 python scripts/demo_rehearsal.py --prep --rounds 3
 ```
 
-若演示数据仍被手动测试弄脏:停应用 → `.venv\Scripts\python.exe scripts/seed_demo.py` → 重启应用(admin 自动重建)。
+**演示数据被弄脏(点过按钮/手动聊过)后,一键完整重置**:
+
+```bash
+python scripts/demo_reset.py
+```
+
+自动完成 杀应用 → 重灌 220 条故事线 → 新窗口重启应用;之后浏览器**刷新 deck + 点 ↺**。
+注意区分:↺ 只归零按钮序号;聊天记录、冷却、警戒窗口这些要靠 demo_reset。
 
 ## 六、禁语(现场自由说话避开)
 
