@@ -380,10 +380,34 @@ const CHART = {
     </table>
     <p class="small muted" style="margin-top:1.8vh">
       <b style="color:var(--ink)">测试方法:</b>每条消息独立送入分类器,输出与标准答案比对,得到混淆矩阵与各项比率;比例数字带 95% 置信区间。
-      标准答案由团队标注、分歧条目讨论定标,未经临床专家审核(列入局限)。
-      另外两个数据集同理:评估集是 12 个预设量表总分的虚拟人物、口语化回答 384 条;情绪集是 15 类 × 20 条,含反话和克制表达等难例。</p>
+      标准答案由团队标注、分歧条目讨论定标,未经临床专家审核(列入局限)。</p>
   </div>
   <aside class="notes">45 秒。指两三行例句讲:"陷阱题"不是随便编的,每一类对应我们审计时发现的一种真实失效方式——"我想死你了"和"我昨晚割腕了"就是当时发现问题的原句。</aside>
+</section>
+
+<!-- ========= S8c 测试集构造(二) ========= -->
+<section class="slide">
+  <div class="kicker"><span><span class="no">06c</span>&nbsp; 测试集明细</span><span>MyBuddy</span></div>
+  <h2>评估与情绪测试集的构造</h2>
+  <p class="sub">例句均为数据集中的原文</p>
+  <div class="grow">
+    <h3>评估集(409 次评分调用)</h3>
+    <table>
+      <tr><th>构成</th><th class="num">数量</th><th>例子</th><th>用途</th></tr>
+      <tr><td>虚拟人物(预设真值)</td><td class="num">12 人</td><td>"赵天磊":PHQ-9 真值 21 分(重度)</td><td>总分覆盖极轻微到重度四档</td></tr>
+      <tr><td>条目口语回答</td><td class="num">384 条</td><td>睡眠条目:"经常整宿睡不着,一周得有四五天,安眠药都不太管用"</td><td>翻译成 0–3 分,与真值比对(图 2)</td></tr>
+      <tr><td>闲聊对照</td><td class="num">20 条</td><td>"今天路过那家新开的面馆,排队排到马路上了"</td><td>应零记分,测误记</td></tr>
+      <tr><td>白名单探针</td><td class="num">5 条</td><td>回答的不是当前待评条目</td><td>应被拒绝记分</td></tr>
+    </table>
+    <h3 style="margin-top:2vh">情绪集(300 条)</h3>
+    <table>
+      <tr><th>构成</th><th class="num">数量</th><th>例子</th><th>用途</th></tr>
+      <tr><td>均衡正例</td><td class="num">15 类 × 14 条</td><td>"体检报告出来了还没敢点开,越想越慌"(焦虑)</td><td>判正负性与细分类别</td></tr>
+      <tr><td>难例</td><td class="num">15 类 × 6 条</td><td>"没事,就是这几天心里有点不踏实。"(字面说没事,标注为焦虑)</td><td>测语境理解,不靠字面词</td></tr>
+    </table>
+    <p class="small muted" style="margin-top:1.6vh">记忆检索不自建评测口径:直接复跑公开基准 LoCoMo(Snap Research);自建 37 卡集仅用于检索消融。</p>
+  </div>
+  <aside class="notes">35 秒。评估集讲"先造人再造答案":真值由构造给定,回答刻意口语化;指一下重度人物的睡眠回答。情绪集指难例一行:字面与标注相反,考语境。</aside>
 </section>
 
 <!-- ========= S9 数据总墙 ========= -->
