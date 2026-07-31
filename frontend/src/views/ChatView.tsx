@@ -229,7 +229,19 @@ export function ChatView({ onChatResult, onOpenCrisis }: ChatViewProps) {
     "突然觉得好慌，心跳很快，坐也坐不住",
     "我昨晚割腕了",
   ];
-  const [demoStep, setDemoStep] = useState(0);
+  // demoStep 持久化:演示页在 deck 中有多个 iframe 实例(每个设计页旁一个),
+  // 序号需跨实例延续,否则每页都从 ▶1 开始。
+  const [demoStep, setDemoStepRaw] = useState(() => {
+    const v = parseInt(localStorage.getItem("mybuddy-demo-step") || "0", 10);
+    return Number.isFinite(v) ? v : 0;
+  });
+  const setDemoStep = (updater: number | ((s: number) => number)) => {
+    setDemoStepRaw((prev) => {
+      const next = typeof updater === "function" ? updater(prev) : updater;
+      localStorage.setItem("mybuddy-demo-step", String(next));
+      return next;
+    });
+  };
   const [demoTyping, setDemoTyping] = useState(false);
 
   function playDemoStep() {

@@ -249,45 +249,23 @@ const CHART = {
   <p class="sub">第一个已用测试验证;后三个来自领域特性</p>
   <div class="cards">
     <div class="card"><div class="n">问题 01</div><div class="q">危机识别不能只靠关键词</div>
-      <div class="a">实测:"我想死你了"被判成最高危,"我昨晚割腕了"却判无风险——误伤和漏判同时存在 → 设计一</div></div>
+      <div class="a">实测:"我想死你了"被判成最高危,"我昨晚割腕了"却判无风险——误伤和漏判同时存在 → 安全设计</div></div>
     <div class="card"><div class="n">问题 02</div><div class="q">筛查需要数据,但"被评估感"会让人不再倾诉</div>
-      <div class="a">心理测量中的反应性:发问卷,倾诉就变成测评 → 设计二:把量表拆进对话</div></div>
+      <div class="a">心理测量中的反应性:发问卷,倾诉就变成测评 → 评估设计:把量表拆进对话</div></div>
     <div class="card"><div class="n">问题 03</div><div class="q">自助练习一旦带上"治疗感",用户就不配合</div>
-      <div class="a">→ 设计三:练习换成游戏化名字和形式,并控制出现频率</div></div>
+      <div class="a">→ 陪伴设计:练习换成游戏化名字和形式,并控制出现频率</div></div>
     <div class="card"><div class="n">问题 04</div><div class="q">陪伴应该是持续的,而请求-响应架构只在用户发消息时运行</div>
       <div class="a">→ 定时任务负责延迟关心、沉默回访和夜间记忆整理(完成度页)</div></div>
   </div>
   <aside class="notes">每条 20 秒:先念矛盾让评委点头"确实难",再一句答案。技术细节留给后面三页。</aside>
 </section>
 
-<!-- ========= S5 设计一:安全 ========= -->
-<section class="slide">
-  <div class="kicker"><span><span class="no">03</span>&nbsp; 设计一 · 安全</span><span>MyBuddy</span></div>
-  <h2>设计一 · 安全门控:按风险分层</h2>
-  <p class="payoff"><b>目标:</b>高危消息不漏接,日常和求助消息不误拦。</p>
-  <div class="cols grow">
-    <div class="col">
-      <ul class="tight">
-        <li><b>硬底线</b>:没有歧义的高危表达,固定回复直返热线,不经过模型——模型宕机也拦得住</li>
-        <li><b>语言层</b>:其余交给带上下文的小模型判断,处理否定、反讽、第三人称这类正则做不到的情况</li>
-        <li><b>融合规则</b>:模型可以纠正正则的误伤,但不能推翻硬底线;模型不可用时退化为纯正则</li>
-        <li><b>警戒窗口</b>:出现高危信号后的 5 轮内提高敏感度</li>
-      </ul>
-    </div>
-    <div class="col">
-      <h3>关键词方案 vs 本系统 × 同一批 305 条测试消息</h3>
-      <div class="chart" id="crisisChart" style="max-height:36vh"></div>
-      <p class="small muted" style="margin-top:1.2vh">危机直返延迟:硬底线命中即时返回;纯模型方案平均 6 秒、最慢 13 秒。</p>
-    </div>
-  </div>
-  <aside class="notes"><b>金句:</b>"我们对模型的信任是随风险递减的函数。"追问"为什么不训练分类器":安全场景要求可审计的确定性兜底;百级标注下零样本小模型强于自训;蒸馏本地分类器列为下一步——落在您的领域。</aside>
-</section>
-
 <!-- ========= S6 设计二:评估 ========= -->
 <section class="slide">
-  <div class="kicker"><span><span class="no">04</span>&nbsp; 设计二 · 筛查</span><span>MyBuddy</span></div>
-  <h2>设计二 · 评估:把量表拆进日常对话</h2>
+  <div class="kicker"><span><span class="no">03</span>&nbsp; 设计 · 评估</span><span>MyBuddy</span></div>
+  <h2>设计 · 评估:把量表拆进日常对话</h2>
   <p class="payoff"><b>目标:</b>两周日常聊天完成一次 16 条目的标准筛查,用户不用填任何表。</p>
+  <p class="small" style="font-family:var(--mono);color:var(--acc);margin-bottom:1.2vh">▶ 现场:下一页看评估页 16 条目进度与"依据你说过的…"证据(预置数据)</p>
   <div class="cols grow">
     <div class="col">
       <ul class="tight">
@@ -306,11 +284,20 @@ const CHART = {
   <aside class="notes">追问"LLM 打分凭什么可信"→ 指右表。PHQ-9/GAD-7 信效度由临床文献确立,我们只验证自己的翻译层——正确的验证边界。</aside>
 </section>
 
+<!-- ========= LIVE 演示 · 评估 ========= -->
+<section class="slide" data-live="app">
+  <div class="kicker"><span><span class="no">演示</span>&nbsp; 评估页与心情日记</span><span>MyBuddy</span></div>
+  <h2 style="font-size:3vh;margin-bottom:1.2vh">演示:16 条目进度、"依据你说过的…"证据、心情曲线(预置数据)</h2>
+  <div class="livewrap"><iframe class="appframe" title="MyBuddy live"></iframe></div>
+  <aside class="notes">应用内点导航切到 评估 / 心情日记;口径必须说:这两页是预置演示数据,与实测表格分开。约 30 秒。</aside>
+</section>
+
 <!-- ========= S7 设计三 ========= -->
 <section class="slide">
-  <div class="kicker"><span><span class="no">05</span>&nbsp; 设计三 · 陪伴</span><span>MyBuddy</span></div>
-  <h2>设计三 · 陪伴:情绪判定和主动关心</h2>
+  <div class="kicker"><span><span class="no">04</span>&nbsp; 设计 · 陪伴</span><span>MyBuddy</span></div>
+  <h2>设计 · 陪伴:情绪判定和主动关心</h2>
   <p class="payoff"><b>目标:</b>让用户有被记住、被关心的感觉;练习不带"治疗感"。</p>
+  <p class="small" style="font-family:var(--mono);color:var(--acc);margin-bottom:1.2vh">▶ 现场:①「最近赶大作业,天天熬夜,进度还是落后,有点烦」看系统决策 ②「突然觉得好慌,心跳很快,坐也坐不住」出"感官旅行"卡</p>
   <div class="cols grow">
     <div class="col">
       <ul class="tight">
@@ -335,6 +322,46 @@ const CHART = {
     </div>
   </div>
   <aside class="notes">15 类准确率对照人类标注一致性(kappa)解读,不对照 100%。</aside>
+</section>
+
+<!-- ========= LIVE 演示 · 陪伴 ========= -->
+<section class="slide" data-live="app">
+  <div class="kicker"><span><span class="no">演示</span>&nbsp; 决策记录与自助练习</span><span>MyBuddy</span></div>
+  <h2 style="font-size:3vh;margin-bottom:1.2vh">演示:▶1 日常消息看"系统决策" · ▶2 焦虑消息出"感官旅行"卡</h2>
+  <div class="livewrap"><iframe class="appframe" title="MyBuddy live"></iframe></div>
+  <aside class="notes">点▶1「最近赶大作业…」等回复时预告右侧决策记录;展开讲情绪/门/记忆。点▶2「突然觉得好慌…」预告"应触发练习而非拦截";出卡后讲界面无术语。约 80 秒。</aside>
+</section>
+
+<!-- ========= S5 设计一:安全 ========= -->
+<section class="slide">
+  <div class="kicker"><span><span class="no">05</span>&nbsp; 设计 · 安全</span><span>MyBuddy</span></div>
+  <h2>设计 · 安全门控:按风险分层</h2>
+  <p class="payoff"><b>目标:</b>高危消息不漏接,日常和求助消息不误拦。</p>
+  <p class="small" style="font-family:var(--mono);color:var(--acc);margin-bottom:1.2vh">▶ 现场:③「我昨晚割腕了」即时直返 · 模型调用 0(可断网重发) → 切后台看安全事件</p>
+  <div class="cols grow">
+    <div class="col">
+      <ul class="tight">
+        <li><b>硬底线</b>:没有歧义的高危表达,固定回复直返热线,不经过模型——模型宕机也拦得住</li>
+        <li><b>语言层</b>:其余交给带上下文的小模型判断,处理否定、反讽、第三人称这类正则做不到的情况</li>
+        <li><b>融合规则</b>:模型可以纠正正则的误伤,但不能推翻硬底线;模型不可用时退化为纯正则</li>
+        <li><b>警戒窗口</b>:出现高危信号后的 5 轮内提高敏感度</li>
+      </ul>
+    </div>
+    <div class="col">
+      <h3>关键词方案 vs 本系统 × 同一批 305 条测试消息</h3>
+      <div class="chart" id="crisisChart" style="max-height:36vh"></div>
+      <p class="small muted" style="margin-top:1.2vh">危机直返延迟:硬底线命中即时返回;纯模型方案平均 6 秒、最慢 13 秒。</p>
+    </div>
+  </div>
+  <aside class="notes"><b>金句:</b>"我们对模型的信任是随风险递减的函数。"追问"为什么不训练分类器":安全场景要求可审计的确定性兜底;百级标注下零样本小模型强于自训;蒸馏本地分类器列为下一步——落在您的领域。</aside>
+</section>
+
+<!-- ========= LIVE 演示 · 安全 ========= -->
+<section class="slide" data-live="app">
+  <div class="kicker"><span><span class="no">演示</span>&nbsp; 硬底线即时直返</span><span>MyBuddy</span></div>
+  <h2 style="font-size:3vh;margin-bottom:1.2vh">演示:▶3「我昨晚割腕了」即时直返 · 模型调用 0(可断网重发)</h2>
+  <div class="livewrap"><iframe class="appframe" title="MyBuddy live"></iframe></div>
+  <aside class="notes">点▶3,强调即时与调用数为零;时间允许:断网重发同句。之后切管理后台标签看安全事件。约 40 秒。</aside>
 </section>
 
 <!-- ========= S8 评测方法论 ========= -->
@@ -434,7 +461,7 @@ const CHART = {
 <!-- ========= S4 系统架构 ========= -->
 <section class="slide">
   <div class="kicker"><span><span class="no">08</span>&nbsp; 系统架构</span><span>MyBuddy</span></div>
-  <h2>把这些设计拼回全景:系统架构</h2>
+  <h2>系统整体:五层结构</h2>
   <p class="sub"><span style="color:var(--det)">绿 = 不依赖模型(离线可用、行为可审计)</span>&ensp;·&ensp;<span style="color:var(--llm)">紫 = 依赖语言模型</span>&ensp;·&ensp;无色 = 通用组件</p>
   <div class="chart" style="flex:1;min-height:0">
     <div class="figwrap" style="width:100%;height:100%">
@@ -560,69 +587,6 @@ const CHART = {
   <aside class="notes">35 秒,只念左列四个组名+一句"其余的演示里都能看到",不逐条读。这页的作用是让完成度可见,深度留给后面三组设计。</aside>
 </section>
 
-<!-- ========= S10 演示动线 ========= -->
-<section class="slide">
-  <div class="kicker"><span><span class="no">09</span>&nbsp; 现场演示</span><span>MyBuddy</span></div>
-  <h2>现场演示安排<span class="muted" style="font-size:2.2vh;font-weight:400">&ensp;约 5 分钟,内容都嵌在后两页,每步有兜底</span></h2>
-  <div class="grow">
-    <ol class="demo">
-      <li><b>跑测试套件</b>:328 个用例现场实跑,十几秒出结果
-        <span class="fb">这些用例覆盖安全、评估、CBT、记忆等全部子系统;兜底:预录输出</span></li>
-      <li><b>真实对话 + 决策记录</b>:发一条日常消息,展开回复旁的"系统决策"看各环节实际判定
-        <span class="fb">说明:这是管线各环节的判定记录,不是模型生成的解释文字</span></li>
-      <li><b>记忆演示</b>:问一句「我对什么过敏来着?」——系统从长期记忆里答出"花生"
-        <span class="fb">演示"记得住":这是预置画像中的信息,检索是实时的</span></li>
-      <li><b>触发自助练习</b>:发一条焦虑慌乱的消息,回复带出"感官旅行"卡片
-        <span class="fb">这是接地练习(CBT 技术),界面无术语;低落情绪下系统会刻意不给挑战性练习</span></li>
-      <li><b>高危消息直返</b>:发危机表达,即时返回热线文案,决策记录显示模型调用为零
-        <span class="fb">可选:断网后重发同一条仍被拦住(这层不走网络);需提前排练</span></li>
-      <li><b>心情日记 + 评估页</b>:自动积累的曲线与 16 条目进度
-        <span class="fb">说明:这两页是预置演示数据,与实测表格分开</span></li>
-      <li><b>管理后台</b>:管理员账号登录,看用户列表、配额管理与使用统计
-        <span class="fb">多用户与运营侧的完成度;顺带展示安全事件在后台可见</span></li>
-      <li><b>离线记忆评测收尾</b>:不联网跑出检索指标
-        <span class="fb">网络故障时的保底环节</span></li>
-    </ol>
-  </div>
-  <aside class="notes">顺序刻意把"确定性"放最前最后。断网演示今晚先排练(关 WiFi 后本页内嵌应用会断,先讲完内嵌部分再断网)。</aside>
-</section>
-
-<!-- ========= S11 LIVE 终端 ========= -->
-<section class="slide" data-live="term">
-  <div class="kicker"><span><span class="no">09</span>&nbsp; LIVE · 终端实跑</span><span>MyBuddy</span></div>
-  <h2>内嵌实跑:测试与离线评测</h2>
-  <div class="livewrap">
-    <div class="livebar">
-      <button class="btn acc" id="btnTests">▶ pytest 全量</button>
-      <button class="btn acc" id="btnMem">▶ 离线记忆评测</button>
-      <span class="status" id="runnerStatus">检测演示助手…</span>
-    </div>
-    <pre class="term" id="term">待执行。
-
-准备(答辩前一次性):
-  1. python scripts/demo_runner.py        ← 启动演示助手
-  2. 用 http://127.0.0.1:8765/ 打开本 deck (同源,最稳)
-
-点上方按钮,命令在本机真实执行,输出实时流入此窗口。</pre>
-  </div>
-  <aside class="notes">跑 pytest 的十几秒空档讲:"这两条命令,评委可在任何装有本仓库的机器上复现——我们的所有数字都是这样产生的。"</aside>
-</section>
-
-<!-- ========= S12 LIVE 应用 ========= -->
-<section class="slide" data-live="app">
-  <div class="kicker"><span><span class="no">09</span>&nbsp; LIVE · 系统实况</span><span>MyBuddy</span></div>
-  <h2>内嵌实况:对话 · 决策透视 · 心情 · 评估</h2>
-  <div class="livewrap">
-    <div class="livebar">
-      <button class="btn" id="appReload">⟳ 重载</button>
-      <a class="btn" id="appOpen" target="_blank" rel="noopener">在新标签打开</a>
-      <span class="status">应用 <span id="appUrlLabel"></span> · 点入框内后按键翻页失效——点框外或用右下角 ‹ › 按钮</span>
-    </div>
-    <iframe class="appframe" id="appFrame" title="MyBuddy live"></iframe>
-  </div>
-  <aside class="notes">框内完成:真实对话+透视面板 → 高危直返 → 心情/评估页。应用需已启动:.venv\Scripts\python.exe -m mybuddy.cli web --port 8000;演示账号 演示用户/demo1234。讲完点框外恢复键盘。</aside>
-</section>
-
 <!-- ========= S13 边界 ========= -->
 <section class="slide">
   <div class="kicker"><span><span class="no">10</span>&nbsp; 边界</span><span>MyBuddy</span></div>
@@ -663,6 +627,27 @@ const CHART = {
   <aside class="notes"><b>预设追问速查:</b>①"和直接调 API 区别?"→ 消融:关掉门控/状态机剩什么 ②"数据自己造的可信?"→ S8 三层对冲 ③"为什么不训练模型?"→ S5 ④"打分可信?"→ S6 效度表 ⑤"几百条够?"→ 三分法则与扩集路线 ⑥"风险等级给用户看合适吗?"→ 透视面板默认关闭,评委/调试视角。</aside>
 </section>
 
+
+<!-- ========= S11 LIVE 终端 ========= -->
+<section class="slide" data-live="term">
+  <div class="kicker"><span><span class="no">附</span>&nbsp; 备用 · 现场实跑</span><span>MyBuddy</span></div>
+  <h2>备用页:被要求时当场跑</h2>
+  <div class="livewrap">
+    <div class="livebar">
+      <button class="btn acc" id="btnTests">▶ pytest 全量</button>
+      <button class="btn acc" id="btnMem">▶ 离线记忆评测</button>
+      <span class="status" id="runnerStatus">检测演示助手…</span>
+    </div>
+    <pre class="term" id="term">待执行。
+
+准备(答辩前一次性):
+  1. python scripts/demo_runner.py        ← 启动演示助手
+  2. 用 http://127.0.0.1:8765/ 打开本 deck (同源,最稳)
+
+点上方按钮,命令在本机真实执行,输出实时流入此窗口。</pre>
+  </div>
+  <aside class="notes">跑 pytest 的十几秒空档讲:"这两条命令,评委可在任何装有本仓库的机器上复现——我们的所有数字都是这样产生的。"</aside>
+</section>
 
 <div class="bar" id="bar"></div>
 <div class="hud"><span>MyBuddy — Mental Health Companion</span><span class="ct" id="ct"></span>
@@ -797,7 +782,10 @@ const CHART = {
     $('bar').style.width = ((i+1)/slides.length*100) + '%';
     location.hash = i+1;
     const live = slides[i].dataset.live;
-    if (live === 'app' && !$('appFrame').getAttribute('src')) $('appFrame').src = APP_URL;
+    if (live === 'app') {
+      const f = slides[i].querySelector('iframe');
+      if (f && !f.getAttribute('src')) f.src = APP_URL;
+    }
     if (live === 'term') pingRunner();
   }
   addEventListener('keydown', e => {
@@ -842,9 +830,6 @@ const CHART = {
   }
   $('btnTests').onclick = () => runCmd('tests');
   $('btnMem').onclick   = () => runCmd('memory');
-  $('appReload').onclick = () => { $('appFrame').src = APP_URL; };
-  $('appOpen').href = APP_URL;
-  $('appUrlLabel').textContent = APP_URL;
 
   show(parseInt(location.hash.slice(1)||'1',10)-1);
 </script>
